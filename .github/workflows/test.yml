@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
 
 jobs:
   test:
@@ -33,18 +34,19 @@ jobs:
           git config --global user.name "ZettelDB CI"
 
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
-
-      - name: Build
-        run: cargo build --workspace
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Test
         run: cargo test --workspace
 
       - name: Smoke test (Unix)
         if: runner.os != 'Windows'
+        env:
+          ZDB_BIN: target/debug/zdb
         run: ./tests/smoke.sh
 
       - name: Smoke test (Windows)
         if: runner.os == 'Windows'
+        env:
+          ZDB_BIN: target/debug/zdb.exe
         run: pwsh -File tests/smoke.ps1

@@ -2,13 +2,19 @@
 # Windows smoke test — PowerShell port of tests/smoke.sh
 $ErrorActionPreference = "Stop"
 
-# Build and lint
-cargo clippy --workspace --quiet
-cargo build --quiet
-cargo bench --no-run --quiet 2>$null
+# Build and lint (skip if ZDB_BIN is set, e.g. in CI where build already ran)
+if (-not $env:ZDB_BIN) {
+    cargo clippy --workspace --quiet
+    cargo build --quiet
+    cargo bench --no-run --quiet 2>$null
+}
 
-$meta = cargo metadata --format-version=1 --no-deps | ConvertFrom-Json
-$ZDB = Join-Path $meta.target_directory "debug" "zdb.exe"
+if ($env:ZDB_BIN) {
+    $ZDB = $env:ZDB_BIN
+} else {
+    $meta = cargo metadata --format-version=1 --no-deps | ConvertFrom-Json
+    $ZDB = Join-Path $meta.target_directory "debug" "zdb.exe"
+}
 
 # Work in temp directories, clean up on exit
 function New-TempDir {

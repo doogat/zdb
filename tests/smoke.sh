@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build and lint
-cargo clippy --workspace --quiet
-cargo build --quiet
-cargo bench --no-run --quiet 2>/dev/null
-ZDB="$(cargo metadata --format-version=1 --no-deps | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')/debug/zdb"
+# Build and lint (skip if ZDB_BIN is set, e.g. in CI where build already ran)
+if [ -z "${ZDB_BIN:-}" ]; then
+  cargo clippy --workspace --quiet
+  cargo build --quiet
+  cargo bench --no-run --quiet 2>/dev/null
+fi
+ZDB="${ZDB_BIN:-$(cargo metadata --format-version=1 --no-deps | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')/debug/zdb}"
 
 # Work in temp directories, clean up on exit
 TMPDIR="$(mktemp -d)"
