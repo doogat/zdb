@@ -1,0 +1,75 @@
+# Doogat ZettelDB
+
+Hybrid Git-CRDT based Zettelkasten Decentralized Database
+
+## Development
+
+### Prerequisites
+
+- [Rust](https://rustup.rs/) (stable toolchain)
+- C compiler + pkg-config (for `git2`, `openssl` native deps)
+- Optional: `psql` for PgWire smoke tests
+
+### Build
+
+```bash
+cargo build                # debug build
+cargo build --release      # release build
+```
+
+### Test
+
+```bash
+cargo test                 # unit + e2e tests
+cargo clippy --workspace   # lint
+./tests/smoke.sh           # full CLI + server + sync smoke test
+```
+
+### Benchmarks
+
+```bash
+cargo bench                # run criterion benchmarks (CRUD + search)
+```
+
+### Install locally
+
+```bash
+dev/bin/release local      # cargo install from source
+```
+
+### Release
+
+```bash
+dev/bin/release --dry-run patch   # preview version bump
+dev/bin/release patch             # bump patch, tag, push
+dev/bin/release minor             # bump minor
+dev/bin/release major             # bump major
+dev/bin/release --pre rc.1 minor  # pre-release: v0.2.0-rc.1
+```
+
+### Platform packaging (UniFFI bindings)
+
+```bash
+dev/bin/build-xcframework  # iOS/macOS XCFramework (requires Xcode)
+dev/bin/build-android      # Android .aar (requires NDK, cargo-ndk, kotlinc)
+```
+
+## Documentation
+
+### Book (architecture, technical design, user guide)
+
+Requires [mdbook](https://rust-lang.github.io/mdBook/guide/installation.html):
+
+```bash
+cd docs && mdbook serve --open
+```
+
+Builds to `docs/book/`.
+
+### API Reference (rustdoc)
+
+```bash
+cargo doc --no-deps --open
+```
+
+Builds to `target/doc/`.

@@ -1,0 +1,106 @@
+# Git Operations
+
+**Source**: `zdb-core/src/git_ops.rs` (454 lines)
+
+Wraps libgit2 (`git2` crate) for all Git repository interactions. `GitRepo` is the central handle.
+
+## GitRepo
+
+```rust
+pub struct GitRepo {
+    pub repo: Repository,  // git2::Repository
+    pub path: PathBuf,
+}
+```
+
+## Initialization
+
+`GitRepo::init(path) -> Result<Self>`
+
+Creates a new Git repository with the standard directory structure:
+
+| Directory | Purpose |
+|-----------|---------|
+| `zettelkasten/` | Zettel Markdown files |
+| `reference/` | Binary/asset files |
+| `.nodes/` | Node registry (TOML configs) |
+| `.crdt/temp/` | Temporary CRDT files |
+
+Each directory gets a `.gitkeep` file. A `.gitignore` is created/updated to exclude `.zdb/` (the local SQLite index directory). A `.zetteldb-version` file is written with the current format version (currently `1`). An initial commit is made with all scaffolding.
+
+## Format Versioning
+
+The `.zetteldb-version` file at the repository root tracks the on-disk format version (currently `1`).
+
+- **On init**: written with `CURRENT_FORMAT_VERSION`
+- **On open**: read and checked:
+  - Repo version > driver version → `VersionMismatch` error (upgrade zdb)
+  - Repo version < driver version → auto-migrate (e.g. v0→v1 writes the version file)
+  - Missing file → treated as v0, auto-upgraded
+
+Future format changes increment `CURRENT_FORMAT_VERSION` and add a migration step in `migrate_format()`.
+
+## File Operations
+
+| Method | Purpose |
+|--------|---------|
+| `commit_file(rel_path, content, msg)` | Write, stage, and commit a single file |
+| `commit_files(files, msg)` | Write, stage, and commit multiple files atomically |
+| `commit_merge(files, msg, theirs_oid)` | Write files and create a merge commit with two parents |
+| `read_file(rel_path)` | Read file content from HEAD tree (not working directory) |
+| `list_zettels()` | Walk HEAD tree, return all `zettelkasten/*.md` paths |
+| `head_oid()` | Get current HEAD commit OID |
+
+Note: `read_file` reads from the Git tree, not the filesystem. This ensures consistency with the committed state.
+
+All commit methods (`commit_files`, `commit_merge`, `delete_file`) and successful merge paths (`merge_remote`) write the commit-graph file via `git commit-graph write --reachable`. This accelerates `merge_base()` and log traversal. Best-effort: silently ignored if `git` CLI unavailable.
+
+## Remote Operations
+
+| Method | Purpose |
+|--------|---------|
+| `add_remote(name, url)` | Register a named remote |
+| `fetch(remote, branch)` | Fetch from remote |
+| `push(remote, branch)` | Push to remote |
+
+Remote URLs can be local filesystem paths, SSH URLs, or any Git-compatible transport.
+
+## Merge
+
+`merge_remote(remote, branch) -> Result<MergeResult>`
+
+### Algorithm
+
+1. Find the remote branch ref (`refs/remotes/{remote}/{branch}`)
+2. Run `merge_analysis()` to determine the merge type:
+   - **Up-to-date**: nothing to do
+   - **Fast-forward**: update ref and checkout
+   - **Normal merge**: perform 3-way merge
+3. For normal merges, call `merge_commits(ours, theirs)` to get a merge index
+4. If the index has conflicts:
+   - Extract each conflict's ancestor/ours/theirs blob content
+   - Return `MergeResult::Conflicts(vec, theirs_oid)`
+   - Clean up merge state
+5. If clean: write the merge tree, create a merge commit with two parents, checkout
+
+### Conflict Extraction
+
+`extract_conflicts(index) -> Result<Vec<ConflictFile>>`
+
+For each conflict entry in the merge index, reads the blob content for ancestor (if present), ours, and theirs. Returns `ConflictFile` structs ready for CRDT resolution.
+
+## Signature
+
+Uses the repository's configured `user.name` and `user.email`. Falls back to `"zdb"` / `"zdb@local"` if not configured.
+
+## Test Coverage
+
+8+ tests:
+- Init creates directory structure and `.gitignore`
+- Open existing repo
+- Commit and read file round-trip
+- Multi-file commits
+- List zettels (filters to `zettelkasten/*.md`)
+- Push/fetch cycle between two repos
+- Merge already-up-to-date
+- Merge conflict detection with blob extraction

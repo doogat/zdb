@@ -1,0 +1,537 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Build and lint
+cargo clippy --workspace --quiet
+cargo build --quiet
+cargo bench --no-run --quiet 2>/dev/null
+ZDB="$(cargo metadata --format-version=1 --no-deps | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')/debug/zdb"
+
+# Work in temp directories, clean up on exit
+TMPDIR="$(mktemp -d)"
+REMOTE_DIR="$(mktemp -d)"
+NODE1_DIR="$(mktemp -d)"
+NODE2_DIR="$(mktemp -d)"
+NODE3_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR" "$REMOTE_DIR" "$NODE1_DIR" "$NODE2_DIR" "$NODE3_DIR"' EXIT
+cd "$TMPDIR"
+
+pass() { printf '  ✓ %s\n' "$1"; }
+
+echo "=== smoke test ==="
+
+pass "clippy + bench compile"
+
+# 1. init
+$ZDB init . >/dev/null
+pass "init"
+
+# 2. create zettels (no sleeps — tests cross-process ID uniqueness)
+ID1=$($ZDB create --title "First note" --tags "test,smoke" --body "Hello world")
+ID2=$($ZDB create --title "Links to first" --body "See [[$ID1]]")
+ID3=$($ZDB create --title "Project Alpha" --type project --tags "active" --body "A project zettel")
+[ "$ID1" != "$ID2" ] && [ "$ID2" != "$ID3" ] && [ "$ID1" != "$ID3" ]
+pass "create (3 unique IDs: $ID1 $ID2 $ID3)"
+
+# 3. read
+OUTPUT=$($ZDB read "$ID1")
+echo "$OUTPUT" | grep -q "First note"
+pass "read"
+
+# 4. update
+$ZDB update "$ID1" --title "First note (edited)" --tags "test,smoke,updated"
+$ZDB read "$ID1" | grep -q "First note (edited)"
+pass "update"
+
+# 5. delete
+$ZDB delete "$ID3"
+! $ZDB read "$ID3" 2>/dev/null
+! $ZDB delete "99999999999999" 2>/dev/null
+pass "delete"
+
+# 6. status
+$ZDB status | grep -q "^head:"
+pass "status"
+
+# 7. reindex
+$ZDB reindex | grep -q "indexed 2 zettels"
+pass "reindex"
+
+# 8. full-text search
+$ZDB search "Hello" | grep -q "$ID1"
+pass "search"
+
+# 8b. paginated search
+$ZDB search "Hello" --limit 1 --offset 0 | grep -q "Showing 1-1 of"
+pass "paginated search"
+
+# 9. SQL queries
+$ZDB query "SELECT id, title FROM zettels" | grep -q "First note (edited)"
+$ZDB query "SELECT z.id, z.title FROM zettels z JOIN _zdb_tags t ON t.zettel_id = z.id WHERE t.tag LIKE '%smoke%'" | grep -q "$ID1"
+pass "sql queries"
+
+# 10. wikilinks
+$ZDB query "SELECT * FROM _zdb_links" | grep -q "$ID1"
+pass "wikilinks"
+
+# 10b. rename with backlink rewrite
+RENAME_TARGET=$($ZDB create --title "Rename Target" --body "I will move.")
+$ZDB create --title "Rename Linker" --body "See [[$RENAME_TARGET|Target]]." >/dev/null
+$ZDB reindex >/dev/null
+$ZDB rename "$RENAME_TARGET" "zettelkasten/contact/${RENAME_TARGET}.md" | grep -q "1 backlinks updated"
+[ -f "zettelkasten/contact/${RENAME_TARGET}.md" ]
+pass "rename with backlink rewrite"
+
+# 11. SQL DDL/DML
+$ZDB query "CREATE TABLE foo (bar TEXT, baz INTEGER)" | grep -q "table foo created"
+FOO_ID=$($ZDB query "INSERT INTO foo (title, bar, baz) VALUES ('test row', 'hello', 42)")
+echo "$FOO_ID" | grep -qE "^[0-9]{14}$"
+$ZDB query "SELECT bar, baz FROM foo" | grep -q "hello"
+$ZDB query "UPDATE foo SET baz = 99 WHERE id = '$FOO_ID'" | grep -q "1 row(s) affected"
+$ZDB query "SELECT baz FROM foo WHERE id = '$FOO_ID'" | grep -q "99"
+$ZDB query "DELETE FROM foo WHERE id = '$FOO_ID'" | grep -q "1 row(s) affected"
+pass "sql ddl/dml"
+
+# 12. install bundled type
+$ZDB type install contact | grep -q "installed type"
+pass "type install"
+
+# 13. type suggest
+$ZDB query "INSERT INTO foo (title, bar, baz) VALUES ('for suggest', 'val', 1)" >/dev/null
+$ZDB type suggest foo | grep -q "bar"
+pass "type suggest"
+
+# 14. register node + compact
+$ZDB register-node "smoke-test-laptop" | grep -q "registered node"
+$ZDB status | grep -q "registered nodes: 1"
+$ZDB compact | grep -q "gc: ok"
+pass "register-node + compact"
+
+# 15. node list + retire
+$ZDB node list | grep -q "smoke-test-laptop"
+NODE_UUID=$($ZDB node list | grep "smoke-test-laptop" | awk '{print $1}')
+$ZDB node retire "$NODE_UUID" | grep -q "retired node"
+pass "node list + retire"
+
+# 16. compact --dry-run
+$ZDB compact --dry-run | grep -q "dry run"
+pass "compact --dry-run"
+
+# 17. GraphQL server
+SERVER_PORT=$((19200 + (RANDOM % 800)))
+PG_PORT=$((SERVER_PORT + 1))
+$ZDB serve --port "$SERVER_PORT" --pg-port "$PG_PORT" &
+SERVER_PID=$!
+# Wait for server to start
+for i in $(seq 1 20); do
+  if curl -sf "http://127.0.0.1:$SERVER_PORT/graphql" \
+    -H "Authorization: Bearer $(cat ~/.config/zetteldb/token 2>/dev/null || echo '')" \
+    -H "Content-Type: application/json" \
+    -d '{"query":"{ typeDefs { name } }"}' >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.2
+done
+TOKEN=$(cat ~/.config/zetteldb/token 2>/dev/null || echo '')
+GQL_URL="http://127.0.0.1:$SERVER_PORT/graphql"
+REST_URL="http://127.0.0.1:$SERVER_PORT/rest"
+gql() {
+  curl -sf "$GQL_URL" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    -d "$1"
+}
+rest() {
+  curl -sf "$REST_URL$1" \
+    -H "Authorization: Bearer $TOKEN" \
+    -H "Content-Type: application/json" \
+    "${@:2}"
+}
+
+# Test auth
+HTTP_CODE=$(curl -so /dev/null -w "%{http_code}" "$GQL_URL" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"{ typeDefs { name } }"}')
+[ "$HTTP_CODE" = "401" ]
+pass "serve: auth rejects missing token"
+
+# Test query
+RESULT=$(gql '{"query":"{ typeDefs { name } }"}')
+echo "$RESULT" | grep -q '"typeDefs"'
+pass "serve: graphql query"
+
+# Test mutation — create
+RESULT=$(gql '{"query":"mutation { createZettel(input: { title: \"Smoke Server\" }) { id title } }"}')
+echo "$RESULT" | grep -q '"Smoke Server"'
+GQL_ID=$(echo "$RESULT" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+pass "serve: graphql create"
+
+# 18. expanded GraphQL operations
+RESULT=$(gql "{\"query\":\"mutation { updateZettel(input: { id: \\\"$GQL_ID\\\", title: \\\"Smoke Updated\\\" }) { id title } }\"}")
+echo "$RESULT" | grep -q '"Smoke Updated"'
+pass "serve: graphql update"
+
+RESULT=$(gql '{"query":"{ search(query: \"Smoke\") { totalCount hits { id title } } }"}')
+echo "$RESULT" | grep -q '"search"'
+pass "serve: graphql search"
+
+RESULT=$(gql '{"query":"{ zettels { id title } }"}')
+echo "$RESULT" | grep -q '"zettels"'
+pass "serve: graphql zettels"
+
+RESULT=$(gql "{\"query\":\"mutation { deleteZettel(id: \\\"$GQL_ID\\\") }\"}")
+echo "$RESULT" | grep -q "true"
+pass "serve: graphql delete"
+
+# 19. REST API CRUD
+HTTP_CODE=$(curl -so /dev/null -w "%{http_code}" "$REST_URL/zettels" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"REST No Auth"}')
+[ "$HTTP_CODE" = "401" ]
+pass "rest: auth rejects missing token"
+
+RESULT=$(curl -sf -w "\n%{http_code}" "$REST_URL/zettels" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"REST Smoke","body":"rest body","tags":["rest"]}')
+HTTP_CODE=$(echo "$RESULT" | tail -1)
+BODY=$(echo "$RESULT" | sed '$d')
+[ "$HTTP_CODE" = "201" ]
+REST_ID=$(echo "$BODY" | sed -n 's/.*"id":"\([^"]*\)".*/\1/p')
+pass "rest: create"
+
+RESULT=$(rest "/zettels/$REST_ID")
+echo "$RESULT" | grep -q "REST Smoke"
+pass "rest: get"
+
+rest "/zettels/$REST_ID" -X PUT -d '{"title":"REST Updated"}' | grep -q "REST Updated"
+pass "rest: update"
+
+RESULT=$(rest "/zettels?tag=rest")
+echo "$RESULT" | grep -q "$REST_ID"
+pass "rest: list with filter"
+
+HTTP_CODE=$(curl -so /dev/null -w "%{http_code}" "$REST_URL/zettels/$REST_ID" \
+  -H "Authorization: Bearer $TOKEN" -X DELETE)
+[ "$HTTP_CODE" = "204" ]
+pass "rest: delete"
+
+HTTP_CODE=$(curl -so /dev/null -w "%{http_code}" "$REST_URL/zettels/$REST_ID" \
+  -H "Authorization: Bearer $TOKEN")
+[ "$HTTP_CODE" = "404" ]
+pass "rest: get after delete returns 404"
+
+# 20. PgWire basic query
+if command -v psql >/dev/null 2>&1; then
+  PGPASSWORD="$TOKEN" psql -h 127.0.0.1 -p "$PG_PORT" -U zdb -d zdb -t -c "SELECT id, title FROM zettels" | grep -q "First note"
+  pass "pgwire: select"
+
+  ! PGPASSWORD="wrong" psql -h 127.0.0.1 -p "$PG_PORT" -U zdb -d zdb -c "SELECT 1" 2>/dev/null
+  pass "pgwire: auth rejection"
+else
+  pass "pgwire: skipped (no psql)"
+fi
+
+# NoSQL server endpoints
+NOSQL_URL="http://127.0.0.1:$SERVER_PORT/nosql"
+nosql() {
+  curl -sf "$NOSQL_URL$1" \
+    -H "Authorization: Bearer $TOKEN"
+}
+
+nosql "/$ID1" | grep -q "First note"
+pass "nosql-api: get by id"
+
+nosql "?tag=smoke" | grep -q "$ID1"
+pass "nosql-api: scan by tag"
+
+HTTP_CODE=$(curl -so /dev/null -w "%{http_code}" "$NOSQL_URL?type=project&tag=test" \
+  -H "Authorization: Bearer $TOKEN")
+[ "$HTTP_CODE" = "400" ]
+pass "nosql-api: rejects both type and tag"
+
+HTTP_CODE=$(curl -so /dev/null -w "%{http_code}" "$NOSQL_URL/$ID1" \
+  -H "Content-Type: application/json")
+[ "$HTTP_CODE" = "401" ]
+pass "nosql-api: auth rejects missing token"
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+pass "serve: clean shutdown"
+
+echo "=== sync conflict scenarios ==="
+
+# --- Two-node setup ---
+# bare remote
+git init --bare "$REMOTE_DIR" >/dev/null 2>&1
+
+# node1: init + push
+cd "$NODE1_DIR"
+$ZDB init . >/dev/null
+git remote add origin "$REMOTE_DIR"
+$ZDB register-node "Laptop" >/dev/null
+
+# 21. fast-forward sync
+SYNC_ID=$($ZDB create --title "Shared note" --tags "shared" --body "Original body")
+git push -u origin master >/dev/null 2>&1
+
+# clone to node2
+git clone "$REMOTE_DIR" "$NODE2_DIR" >/dev/null 2>&1
+cd "$NODE2_DIR"
+# init zdb index without reinitializing git
+$ZDB reindex >/dev/null
+$ZDB register-node "Desktop" >/dev/null
+
+$ZDB read "$SYNC_ID" | grep -q "Shared note"
+pass "fast-forward sync"
+
+# 22. non-overlapping edits (clean git merge, no CRDT)
+cd "$NODE1_DIR"
+$ZDB update "$SYNC_ID" --title "Updated Title" --tags "shared,laptop"
+
+cd "$NODE2_DIR"
+$ZDB update "$SYNC_ID" --body "Modified body"
+
+cd "$NODE1_DIR"
+$ZDB sync origin master >/dev/null
+
+cd "$NODE2_DIR"
+SYNC_OUT=$($ZDB sync origin master)
+echo "$SYNC_OUT" | grep -q "conflicts resolved: 0"
+
+$ZDB read "$SYNC_ID" | grep -q "Updated Title"
+$ZDB read "$SYNC_ID" | grep -q "Modified body"
+pass "non-overlapping edits (clean merge)"
+
+# 23. frontmatter scalar conflict (title) — CRDT resolves
+cd "$NODE1_DIR"
+$ZDB sync origin master >/dev/null
+$ZDB update "$SYNC_ID" --title "Laptop Title"
+
+cd "$NODE2_DIR"
+$ZDB update "$SYNC_ID" --title "Desktop Title"
+
+cd "$NODE1_DIR"
+$ZDB sync origin master >/dev/null
+
+cd "$NODE2_DIR"
+SYNC_OUT=$($ZDB sync origin master)
+echo "$SYNC_OUT" | grep -q "conflicts resolved: 1"
+
+TITLE=$($ZDB read "$SYNC_ID" | grep "^title:")
+echo "$TITLE" | grep -qE "(Laptop Title|Desktop Title)"
+pass "frontmatter scalar conflict (CRDT)"
+
+# 24. frontmatter list conflict (tags) — CRDT set-union
+cd "$NODE1_DIR"
+$ZDB sync origin master >/dev/null
+$ZDB update "$SYNC_ID" --tags "base,alpha"
+
+cd "$NODE2_DIR"
+$ZDB update "$SYNC_ID" --tags "base,beta"
+
+cd "$NODE1_DIR"
+$ZDB sync origin master >/dev/null
+
+cd "$NODE2_DIR"
+$ZDB sync origin master >/dev/null
+
+READ_OUT=$($ZDB read "$SYNC_ID")
+echo "$READ_OUT" | grep -q "alpha"
+echo "$READ_OUT" | grep -q "beta"
+pass "frontmatter list conflict (tag union)"
+
+# 25. body conflict — Automerge Text CRDT
+cd "$NODE1_DIR"
+$ZDB sync origin master >/dev/null
+$ZDB update "$SYNC_ID" --body $'Line one LAPTOP.\nLine two.\nLine three.'
+
+cd "$NODE2_DIR"
+$ZDB update "$SYNC_ID" --body $'Line one.\nLine two DESKTOP.\nLine three.'
+
+cd "$NODE1_DIR"
+$ZDB sync origin master >/dev/null
+
+cd "$NODE2_DIR"
+SYNC_OUT=$($ZDB sync origin master)
+echo "$SYNC_OUT" | grep -q "conflicts resolved: 1"
+
+READ_OUT=$($ZDB read "$SYNC_ID")
+echo "$READ_OUT" | grep -q "LAPTOP"
+echo "$READ_OUT" | grep -q "DESKTOP"
+pass "body conflict (CRDT text merge)"
+
+# 26. reference section conflict — write files directly, CRDT union
+cd "$NODE1_DIR"
+$ZDB sync origin master >/dev/null
+
+ZETTEL_FILE="zettelkasten/${SYNC_ID}.md"
+
+# node1: append reference section with laptop-specific field
+CONTENT=$(cat "$ZETTEL_FILE")
+printf '%s\n---\n- laptop note:: Added from laptop\n' "$CONTENT" > "$ZETTEL_FILE"
+git add "$ZETTEL_FILE" && git commit -m "node1 add reference" >/dev/null 2>&1
+git push origin master >/dev/null 2>&1
+
+# node2: append different reference field (from its pre-push version)
+cd "$NODE2_DIR"
+CONTENT=$(cat "$ZETTEL_FILE")
+printf '%s\n---\n- desktop note:: Added from desktop\n' "$CONTENT" > "$ZETTEL_FILE"
+git add "$ZETTEL_FILE" && git commit -m "node2 add reference" >/dev/null 2>&1
+
+SYNC_OUT=$($ZDB sync origin master)
+echo "$SYNC_OUT" | grep -q "conflicts resolved: 1"
+
+READ_OUT=$($ZDB read "$SYNC_ID")
+echo "$READ_OUT" | grep -q "laptop note"
+echo "$READ_OUT" | grep -q "desktop note"
+pass "reference section conflict (CRDT union)"
+
+# 27b. delete-vs-edit conflict — edit wins, zettel resurrected
+cd "$NODE1_DIR"
+$ZDB sync origin master >/dev/null
+DEL_ID=$($ZDB create --title "To be deleted" --body "Original content")
+$ZDB sync origin master >/dev/null
+
+cd "$NODE2_DIR"
+$ZDB sync origin master >/dev/null
+$ZDB read "$DEL_ID" | grep -q "To be deleted"
+
+# node1 deletes, node2 edits
+cd "$NODE1_DIR"
+$ZDB delete "$DEL_ID"
+
+cd "$NODE2_DIR"
+$ZDB update "$DEL_ID" --body "Edited on desktop"
+
+cd "$NODE1_DIR"
+$ZDB sync origin master >/dev/null
+
+cd "$NODE2_DIR"
+$ZDB sync origin master >/dev/null
+
+# Edit wins: zettel exists and is marked resurrected
+$ZDB read "$DEL_ID" | grep -q "Edited on desktop"
+$ZDB status | grep -q "resurrected"
+pass "delete-vs-edit conflict (edit wins, resurrected)"
+
+echo "=== bundle sync ==="
+
+# 27. bundle export --full + import
+cd "$NODE1_DIR"
+$ZDB sync origin master >/dev/null
+$ZDB bundle export --full --output "$TMPDIR/full-bundle.tar"
+echo "$TMPDIR/full-bundle.tar" | grep -q "full-bundle.tar"
+
+cd "$NODE3_DIR"
+$ZDB init . >/dev/null
+$ZDB register-node "Tablet" >/dev/null
+$ZDB bundle import "$TMPDIR/full-bundle.tar" | grep -q "imported"
+$ZDB read "$SYNC_ID" | grep -q "laptop note"
+pass "bundle export --full + import"
+
+# 28. delta bundle export + import
+cd "$NODE1_DIR"
+DELTA_ID=$($ZDB create --title "Delta note" --body "only in delta")
+
+NODE2_UUID=$(cd "$NODE2_DIR" && cat .git/zdb-node)
+$ZDB bundle export --target "$NODE2_UUID" --output "$TMPDIR/delta-bundle.tar"
+
+cd "$NODE2_DIR"
+$ZDB bundle import "$TMPDIR/delta-bundle.tar" | grep -q "imported"
+$ZDB read "$DELTA_ID" | grep -q "Delta note"
+pass "delta bundle export + import"
+
+# 29. update-bin help
+$ZDB update-bin --help | grep -q "Update zdb"
+pass "update-bin --help"
+
+# 30. ALTER TABLE + DROP TABLE + bulk UPDATE/DELETE
+cd "$TMPDIR"
+$ZDB query "CREATE TABLE smokealt (name TEXT, score INTEGER)" | grep -q "table smokealt created"
+$ZDB query "INSERT INTO smokealt (name, score) VALUES ('a', 1)" >/dev/null
+sleep 1
+$ZDB query "INSERT INTO smokealt (name, score) VALUES ('b', 2)" >/dev/null
+$ZDB query "ALTER TABLE smokealt ADD COLUMN tag TEXT" | grep -q "altered"
+$ZDB query "SELECT name, tag FROM smokealt" | grep -q "NULL"
+$ZDB query "ALTER TABLE smokealt RENAME COLUMN tag TO label" | grep -q "renamed"
+$ZDB query "SELECT name, label FROM smokealt" | grep -q "a"
+$ZDB query "UPDATE smokealt SET score = 99 WHERE name = 'a'" | grep -q "1 row(s) affected"
+$ZDB query "DELETE FROM smokealt WHERE name = 'b'" | grep -q "1 row(s) affected"
+$ZDB query "DROP TABLE smokealt CASCADE" | grep -q "dropped"
+pass "alter/drop table + bulk ops"
+
+# 31. file attachments
+cd "$TMPDIR"
+echo "hello attachment" > $TMPDIR/zdb-smoke-attach.txt
+$ZDB attach "$ID1" $TMPDIR/zdb-smoke-attach.txt | grep -q "attached"
+$ZDB attachments "$ID1" | grep -q "zdb-smoke-attach.txt"
+$ZDB attachments "$ID1" | grep -q "text/plain"
+$ZDB query "SELECT name, mime FROM _zdb_attachments WHERE zettel_id = '$ID1'" | grep -q "zdb-smoke-attach.txt"
+$ZDB detach "$ID1" "zdb-smoke-attach.txt" | grep -q "detached"
+$ZDB attachments "$ID1" | grep -q "no attachments"
+rm -f $TMPDIR/zdb-smoke-attach.txt
+pass "file attachments (attach/list/query/detach)"
+
+# 32. NoSQL CLI commands
+cd "$TMPDIR"
+$ZDB get "$ID1" | grep -q "First note (edited)"
+pass "nosql: get"
+
+$ZDB scan --tag test | grep -q "$ID1"
+pass "nosql: scan --tag"
+
+$ZDB scan --type foo | grep -qE "^[0-9]{14}$"
+pass "nosql: scan --type"
+
+$ZDB backlinks "$ID1" | grep -q "$ID2"
+pass "nosql: backlinks"
+
+# 33. stale node resync after compaction
+echo "=== stale node resync ==="
+STALE_REMOTE="$(mktemp -d)"
+STALE_N1="$(mktemp -d)"
+STALE_N2="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR" "$REMOTE_DIR" "$NODE1_DIR" "$NODE2_DIR" "$NODE3_DIR" "$STALE_REMOTE" "$STALE_N1" "$STALE_N2"' EXIT
+
+git init --bare "$STALE_REMOTE" >/dev/null 2>&1
+
+cd "$STALE_N1"
+$ZDB init . >/dev/null
+git remote add origin "$STALE_REMOTE"
+$ZDB register-node "StaleNode1" >/dev/null
+STALE_ID=$($ZDB create --title "Stale shared" --body "original content")
+git push -u origin master >/dev/null 2>&1
+
+git clone "$STALE_REMOTE" "$STALE_N2" >/dev/null 2>&1
+cd "$STALE_N2"
+$ZDB reindex >/dev/null
+$ZDB register-node "StaleNode2" >/dev/null
+
+# Both nodes edit the same zettel → conflict
+cd "$STALE_N1"
+$ZDB update "$STALE_ID" --body "body from node1"
+git push origin master >/dev/null 2>&1
+
+cd "$STALE_N2"
+$ZDB update "$STALE_ID" --body "body from node2"
+$ZDB sync origin master >/dev/null
+
+# Compact to remove CRDT temp files
+$ZDB compact --force >/dev/null
+
+# Create another conflict without CRDT state
+cd "$STALE_N1"
+$ZDB sync origin master >/dev/null
+$ZDB update "$STALE_ID" --body "second edit node1"
+git push origin master >/dev/null 2>&1
+
+cd "$STALE_N2"
+$ZDB update "$STALE_ID" --body "second edit node2"
+$ZDB sync origin master >/dev/null
+
+# Verify zettel is readable and valid
+$ZDB read "$STALE_ID" | grep -q "title:"
+pass "stale node resync after compaction"
+
+echo "=== all passed ==="

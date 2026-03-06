@@ -1,0 +1,35 @@
+# Cargo build output
+target/
+**/*.rs.bk
+*.pdb
+
+# Test/coverage tooling
+**/mutants.out*/
+*.profraw
+lcov.info
+tarpaulin-report.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+
+# Environment/secrets
+.env*
+
+# Logs
+*.log
+
+# Local development
+.local/
+
+# Build output
+out/
+docs/book/
+
+# AI
+.claude/
+.serena/

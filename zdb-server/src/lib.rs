@@ -1,0 +1,170 @@
+pub mod actor;
+pub mod auth;
+pub mod config;
+pub mod error;
+pub mod events;
+pub mod filter;
+pub mod maintenance;
+pub mod nosql_api;
+pub mod pgwire;
+pub mod reload;
+pub mod rest;
+pub mod schema;
+pub mod ws;
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use arc_swap::ArcSwap;
+use axum::{middleware, Extension, Router};
+use async_graphql::dynamic::Schema;
+use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
+
+use actor::ActorHandle;
+use auth::AuthToken;
+use config::ServerConfig;
+use events::EventBus;
+
+/// Run the GraphQL server.
+pub async fn run(
+    repo_path: PathBuf,
+    port: Option<u16>,
+    pg_port: Option<u16>,
+    bind: Option<&str>,
+    playground: bool,
+) -> std::io::Result<()> {
+    let cfg = ServerConfig::load(port, pg_port, bind);
+
+    // Auth
+    let token = auth::load_or_create_token(&cfg.token_file)?;
+    eprintln!("auth token: {}", cfg.token_file.display());
+
+    // Attachment file serving
+    let attachment_root = repo_path.join("reference");
+
+    // Actor
+    let event_bus = EventBus::new();
+    let actor = ActorHandle::spawn(repo_path, event_bus).map_err(|e| {
+        std::io::Error::other(e.to_string())
+    })?;
+
+    // Fetch type schemas for dynamic schema generation
+    let type_schemas = actor.get_type_schemas().await.unwrap_or_default();
+    let type_count = type_schemas.len();
+
+    // Build GraphQL schema with hot-reload support (two-phase init)
+    let rest_actor = actor.clone();
+    let (reloader, shared_schema) = reload::SchemaReloader::new(actor.clone());
+    let gql_schema = match schema::build_schema(actor, type_schemas, Some(reloader.clone())) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("failed to build initial GraphQL schema: {e}");
+            return Err(std::io::Error::other(e));
+        }
+    };
+    reloader.store_initial(gql_schema);
+
+    // Router
+    let mut app = Router::new()
+        .route("/graphql", axum::routing::post(graphql_handler))
+        .route("/ws", axum::routing::get(ws::ws_handler))
+        .route("/attachments/{zettel_id}/{filename}", axum::routing::get(serve_attachment))
+        .nest("/rest", rest::router())
+        .nest("/nosql", nosql_api::router())
+        .layer(Extension(attachment_root));
+
+    if playground {
+        let playground_token = token.clone();
+        app = app.route(
+            "/graphql",
+            axum::routing::get(move || {
+                let t = playground_token.clone();
+                async move {
+                    axum::response::Html(async_graphql::http::playground_source(
+                        async_graphql::http::GraphQLPlaygroundConfig::new("/graphql")
+                            .with_header("Authorization", &format!("Bearer {t}")),
+                    ))
+                }
+            }),
+        );
+    }
+
+    // Background maintenance
+    if cfg.maintenance_enabled {
+        let maint_actor = rest_actor.clone();
+        let interval = cfg.maintenance_interval_secs;
+        tokio::spawn(async move {
+            maintenance::maintenance_loop(maint_actor, interval).await;
+        });
+        eprintln!("maintenance: enabled (interval {}s)", cfg.maintenance_interval_secs);
+    }
+
+    let pg_actor = rest_actor.clone();
+    let pg_token = token.clone();
+    let pg_reloader = reloader.clone();
+
+    let app = app
+        .layer(middleware::from_fn(auth::require_auth))
+        .layer(Extension(AuthToken(token)))
+        .layer(Extension(rest_actor))
+        .layer(Extension(shared_schema));
+
+    let addr = format!("{}:{}", cfg.bind, cfg.port);
+    eprintln!("listening on {addr}");
+    eprintln!("{type_count} type schema(s) loaded");
+
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+
+    let pg = pgwire::start(
+        pg_actor,
+        pg_token,
+        pg_reloader,
+        &cfg.bind,
+        cfg.pg_port,
+    );
+
+    tokio::select! {
+        r = axum::serve(listener, app) => r?,
+        r = pg => r?,
+    };
+    Ok(())
+}
+
+async fn graphql_handler(
+    Extension(schema): Extension<Arc<ArcSwap<Schema>>>,
+    req: GraphQLRequest,
+) -> GraphQLResponse {
+    let schema = schema.load();
+    schema.execute(req.into_inner()).await.into()
+}
+
+async fn serve_attachment(
+    Extension(attachment_root): Extension<PathBuf>,
+    axum::extract::Path((zettel_id, filename)): axum::extract::Path<(String, String)>,
+) -> axum::response::Response {
+    use axum::http::{header, StatusCode};
+    use axum::response::IntoResponse;
+
+    // Prevent path traversal: zettel_id must be 14 digits, filename must be clean
+    let id_ok = zettel_id.len() == 14 && zettel_id.chars().all(|c| c.is_ascii_digit());
+    let name_ok = !filename.is_empty()
+        && !filename.contains("..")
+        && !filename.contains('/')
+        && !filename.contains('\\');
+    if !id_ok || !name_ok {
+        return (StatusCode::BAD_REQUEST, "invalid path").into_response();
+    }
+
+    let file_path = attachment_root.join(&zettel_id).join(&filename);
+    match tokio::fs::read(&file_path).await {
+        Ok(bytes) => {
+            let mime = zdb_core::types::AttachmentInfo::mime_from_filename(&filename);
+            (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, mime)],
+                bytes,
+            ).into_response()
+        }
+        Err(_) => (StatusCode::NOT_FOUND, "attachment not found").into_response(),
+    }
+}

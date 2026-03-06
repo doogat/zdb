@@ -1,0 +1,144 @@
+# Multi-Device Sync
+
+ZettelDB syncs across devices using Git remotes. No server or cloud required — any Git remote works (bare repo, SSH, local path).
+
+## Setup
+
+### 1. Create a Bare Remote
+
+On a shared location (NAS, USB drive, SSH server):
+
+```bash
+git init --bare /path/to/zdb-remote.git
+```
+
+### 2. Add the Remote
+
+On each device:
+
+```bash
+cd ~/my-zettelkasten
+git remote add origin /path/to/zdb-remote.git
+# or: git remote add origin ssh://user@host/path/to/repo.git
+```
+
+### 3. Register Each Device
+
+On each device:
+
+```bash
+zdb register-node "Laptop"
+```
+
+This:
+- Generates a UUID for this device
+- Creates `.nodes/{uuid}.toml` in the repository
+- Stores the UUID locally in `.git/zdb-node`
+
+Each device needs a unique name. The node registry is Git-tracked, so all devices learn about each other through sync.
+
+### 4. Initial Push
+
+From the first device:
+
+```bash
+git push -u origin master
+```
+
+## Syncing
+
+```bash
+zdb sync [remote] [branch]
+```
+
+Defaults: `origin` remote, `master` branch.
+
+The sync cycle:
+1. Fetches from remote
+2. Merges (fast-forward, clean merge, or conflict resolution)
+3. Pushes resolved state
+4. Updates node sync state
+5. Rebuilds search index
+
+### Output
+
+```text
+sync: bidirectional | commits: 1 | conflicts resolved: 0
+```
+
+## Conflict Resolution
+
+When both devices edit the same zettel between syncs, ZettelDB resolves conflicts automatically:
+
+- **Frontmatter**: Each field is merged independently. Different fields → both kept. Same field changed on both sides → CRDT picks one deterministically.
+- **Body**: Character-level merge. Non-overlapping edits → both applied. Overlapping edits → CRDT merges at character granularity.
+- **Reference section**: Set union. Both sides add fields → both kept. Same field changed on both sides → local version wins.
+
+No manual conflict resolution is ever needed.
+
+### Example Scenario
+
+Device A changes the title; Device B adds a reference field:
+
+```text
+# Ancestor
+---
+title: Original
+---
+Body text.
+---
+- source:: Wikipedia
+
+# Device A (changed title)
+---
+title: Renamed Note
+---
+Body text.
+---
+- source:: Wikipedia
+
+# Device B (added field)
+---
+title: Original
+---
+Body text.
+---
+- source:: Wikipedia
+- author:: Bob
+
+# After sync (both changes merged)
+---
+title: Renamed Note
+---
+Body text.
+---
+- author:: Bob
+- source:: Wikipedia
+```
+
+## Compaction
+
+Over time, the Git repository accumulates objects. Run compaction periodically:
+
+```bash
+zdb compact
+```
+
+This:
+1. Computes the shared head (the latest commit all devices have synced)
+2. Removes temporary CRDT files
+3. Runs `git gc` for pack consolidation
+
+Output:
+
+```text
+files removed: 0 | gc: ok
+```
+
+## Checking Status
+
+```bash
+zdb status
+```
+
+Shows the current HEAD, node registration, index staleness, and number of registered nodes.

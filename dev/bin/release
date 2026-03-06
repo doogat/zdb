@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "Usage: dev/release [--dry-run] [--pre <suffix>] [patch|minor|major|local]"
+  exit 1
+}
+
+DRY_RUN=false
+PRE=""
+BUMP=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=true; shift ;;
+    --pre)     PRE="$2"; shift 2 ;;
+    patch|minor|major|local) BUMP="$1"; shift ;;
+    *) usage ;;
+  esac
+done
+
+[[ -z "$BUMP" ]] && usage
+
+CARGO_FILES=(
+  zdb-core/Cargo.toml
+  zdb-cli/Cargo.toml
+  zdb-server/Cargo.toml
+  tests/Cargo.toml
+)
+
+# --- local install mode ---
+if [[ "$BUMP" == "local" ]]; then
+  cargo install --path zdb-cli
+  echo "installed: $(zdb --version 2>/dev/null || echo 'zdb (version unknown)')"
+  exit 0
+fi
+
+# --- read current version ---
+CURRENT=$(sed -n 's/^version = "\(.*\)"/\1/p' zdb-core/Cargo.toml | head -1)
+IFS='.' read -r MAJOR MINOR PATCH <<< "${CURRENT%%-*}"
+
+# --- compute new version ---
+case "$BUMP" in
+  patch) PATCH=$((PATCH + 1)) ;;
+  minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+  major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+esac
+
+NEW="${MAJOR}.${MINOR}.${PATCH}"
+[[ -n "$PRE" ]] && NEW="${NEW}-${PRE}"
+TAG="v${NEW}"
+
+# --- dry run ---
+if $DRY_RUN; then
+  echo "${CURRENT} -> ${NEW} (tag: ${TAG})"
+  exit 0
+fi
+
+# --- preflight checks ---
+git pull --ff-only
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "error: working tree not clean" >&2
+  exit 1
+fi
+if git rev-parse "$TAG" >/dev/null 2>&1; then
+  echo "error: tag ${TAG} already exists" >&2
+  exit 1
+fi
+
+# --- bump versions ---
+for f in "${CARGO_FILES[@]}"; do
+  sed -i.bak "s/^version = \".*\"/version = \"${NEW}\"/" "$f"
+  rm -f "${f}.bak"
+done
+
+# --- update lockfile ---
+cargo check --workspace --quiet
+
+# --- commit, tag, push ---
+git add "${CARGO_FILES[@]}" Cargo.lock
+git commit -m "build(zdb): bump to ${TAG}"
+git tag "$TAG"
+git push origin HEAD --tags
+
+echo "released ${TAG}"

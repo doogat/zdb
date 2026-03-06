@@ -1,0 +1,147 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            use_cross: false
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            use_cross: true
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            use_cross: false
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            use_cross: false
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.use_cross
+        run: cargo install cross --locked
+
+      - name: Install system dependencies (native Linux)
+        if: runner.os == 'Linux' && !matrix.use_cross
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Build
+        run: ${{ matrix.use_cross && 'cross' || 'cargo' }} build --release --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          TARGET="${{ matrix.target }}"
+          STAGING="zdb-${TAG}-${TARGET}"
+          mkdir "$STAGING"
+
+          # Binary
+          cp "target/${TARGET}/release/zdb" "$STAGING/"
+
+          # cdylib
+          if [ -f "target/${TARGET}/release/libzdb_core.so" ]; then
+            cp "target/${TARGET}/release/libzdb_core.so" "$STAGING/"
+          elif [ -f "target/${TARGET}/release/libzdb_core.dylib" ]; then
+            cp "target/${TARGET}/release/libzdb_core.dylib" "$STAGING/"
+          fi
+
+          tar czf "${STAGING}.tar.gz" "$STAGING"
+          shasum -a 256 "${STAGING}.tar.gz" > "${STAGING}.tar.gz.sha256"
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $target = "${{ matrix.target }}"
+          $staging = "zdb-${tag}-${target}"
+          New-Item -ItemType Directory -Path $staging
+
+          Copy-Item "target\${target}\release\zdb.exe" $staging\
+          if (Test-Path "target\${target}\release\zdb_core.dll") {
+            Copy-Item "target\${target}\release\zdb_core.dll" $staging\
+          }
+
+          Compress-Archive -Path "${staging}\*" -DestinationPath "${staging}.zip"
+          $hash = (Get-FileHash "${staging}.zip" -Algorithm SHA256).Hash.ToLower()
+          "${hash}  ${staging}.zip" | Out-File -Encoding ascii "${staging}.zip.sha256"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: |
+            zdb-*.tar.gz
+            zdb-*.tar.gz.sha256
+            zdb-*.zip
+            zdb-*.zip.sha256
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate release notes
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          PREV_TAG=$(git tag --sort=-v:refname | grep '^v' | sed -n '2p')
+          {
+            if [ -n "$PREV_TAG" ]; then
+              echo "## Changes since ${PREV_TAG}"
+              echo ""
+              git log "${PREV_TAG}..${TAG}" --pretty=format:"- %s" --no-merges
+            else
+              echo "## Initial release"
+              echo ""
+              git log --pretty=format:"- %s" --no-merges -20
+            fi
+            echo ""
+            echo ""
+            echo "## Checksums"
+            echo ""
+            echo '```'
+            cat dist/*.sha256
+            echo '```'
+          } > release-notes.md
+
+      - name: Create release
+        uses: ncipollo/release-action@v1
+        with:
+          tag: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          bodyFile: release-notes.md
+          artifacts: "dist/*"

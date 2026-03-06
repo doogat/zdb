@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# Build ZettelDB .aar for Android.
+# Requires: cargo-ndk, Android NDK (via ANDROID_NDK_HOME), kotlinc (for classes.jar).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+OUT="$ROOT/out/kotlin"
+AAR_STAGE="$OUT/aar-stage"
+AAR_OUT="$OUT/zetteldb.aar"
+
+TARGETS=(
+    aarch64-linux-android
+    x86_64-linux-android
+)
+
+declare -A ABI_MAP=(
+    [aarch64-linux-android]=arm64-v8a
+    [x86_64-linux-android]=x86_64
+)
+
+# Check prerequisites
+command -v cargo-ndk >/dev/null 2>&1 || { echo "cargo-ndk not found — install with: cargo install cargo-ndk"; exit 1; }
+command -v kotlinc >/dev/null 2>&1 || { echo "kotlinc not found — install Kotlin compiler"; exit 1; }
+
+if [ -z "${ANDROID_NDK_HOME:-}" ]; then
+    echo "ANDROID_NDK_HOME not set"
+    echo "Set it to your Android NDK path, e.g.:"
+    echo "  export ANDROID_NDK_HOME=\$HOME/Library/Android/sdk/ndk/<version>"
+    exit 1
+fi
+
+for t in "${TARGETS[@]}"; do
+    if ! rustup target list --installed | grep -q "$t"; then
+        echo "Missing target: $t"
+        echo "Install with: rustup target add $t"
+        exit 1
+    fi
+done
+
+echo "==> Building for ${#TARGETS[@]} Android targets..."
+for t in "${TARGETS[@]}"; do
+    cargo ndk --target "$t" --platform 21 -- build -p zdb-core --release
+done
+
+echo "==> Generating Kotlin bindings..."
+cargo build -p zdb-core --release
+cargo run -p zdb-core --bin uniffi-bindgen -- generate \
+    --library "$ROOT/target/release/libzdb_core.dylib" \
+    --language kotlin \
+    --out-dir "$OUT"
+
+echo "==> Assembling .aar..."
+rm -rf "$AAR_STAGE" "$AAR_OUT"
+mkdir -p "$AAR_STAGE"
+
+# AndroidManifest.xml
+cat > "$AAR_STAGE/AndroidManifest.xml" <<'MANIFEST'
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.doogat.zetteldb" />
+MANIFEST
+
+# JNI shared libraries
+for t in "${TARGETS[@]}"; do
+    abi="${ABI_MAP[$t]}"
+    mkdir -p "$AAR_STAGE/jni/$abi"
+    cp "$ROOT/target/$t/release/libzdb_core.so" "$AAR_STAGE/jni/$abi/"
+done
+
+# Compile Kotlin bindings → classes.jar
+echo "==> Compiling Kotlin bindings..."
+KT_CLASSES="$AAR_STAGE/kt-classes"
+mkdir -p "$KT_CLASSES"
+# Find all generated .kt files
+KT_FILES=()
+while IFS= read -r -d '' f; do
+    KT_FILES+=("$f")
+done < <(find "$OUT" -name '*.kt' -print0)
+
+if [ ${#KT_FILES[@]} -gt 0 ]; then
+    kotlinc -no-stdlib "${KT_FILES[@]}" -d "$KT_CLASSES" 2>/dev/null || {
+        echo "   kotlinc failed — creating classes.jar from source only"
+        # Fall back: pack .kt source files so consumers can compile
+        mkdir -p "$KT_CLASSES"
+        for f in "${KT_FILES[@]}"; do
+            cp "$f" "$KT_CLASSES/"
+        done
+    }
+fi
+(cd "$KT_CLASSES" && jar cf "$AAR_STAGE/classes.jar" .)
+rm -rf "$KT_CLASSES"
+
+# Package .aar (just a zip)
+(cd "$AAR_STAGE" && zip -qr "$AAR_OUT" .)
+rm -rf "$AAR_STAGE"
+
+echo "==> Done: $AAR_OUT"
+echo "   Contains: AndroidManifest.xml, jni/{arm64-v8a,x86_64}, classes.jar"

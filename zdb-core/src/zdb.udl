@@ -1,0 +1,62 @@
+namespace zdb {};
+
+[Error]
+interface ZdbError {
+    Git(string msg);
+    Yaml(string msg);
+    Sql(string msg);
+    Automerge(string msg);
+    Io(string msg);
+    Parse(string msg);
+    NotFound(string msg);
+    Config(string msg);
+    Validation(string msg);
+    SqlEngine(string msg);
+    VersionMismatch(string msg);
+};
+
+dictionary SearchResult {
+    string id;
+    string title;
+    string path;
+    string snippet;
+    double rank;
+};
+
+dictionary RebuildReport {
+    u64 indexed;
+    u64 tables_materialized;
+    sequence<string> types_inferred;
+};
+
+interface ZettelDriver {
+    [Throws=ZdbError]
+    constructor(string repo_path);
+
+    [Throws=ZdbError]
+    string create_zettel(string content, string message);
+
+    [Throws=ZdbError]
+    string read_zettel(string id);
+
+    [Throws=ZdbError]
+    void update_zettel(string id, string content, string message);
+
+    [Throws=ZdbError]
+    void delete_zettel(string id, string message);
+
+    [Throws=ZdbError]
+    sequence<SearchResult> search(string query);
+
+    [Throws=ZdbError]
+    RebuildReport reindex();
+
+    [Throws=ZdbError]
+    void compact();
+
+    [Throws=ZdbError]
+    sequence<string> list_zettels();
+
+    [Throws=ZdbError]
+    string execute_sql(string sql);
+};

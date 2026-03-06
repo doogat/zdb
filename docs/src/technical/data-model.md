@@ -1,0 +1,332 @@
+# Data Model
+
+All types are defined in `zdb-core/src/types.rs`.
+
+## Repository Config
+
+Repository-level settings stored in `.zetteldb.toml`:
+
+```rust
+pub struct RepoConfig {
+    pub compaction: CompactionConfig,  // stale_ttl_days: 90, threshold_mb: 1
+    pub crdt: CrdtConfig,             // default_strategy: "preset:default"
+}
+```
+
+Written on `init()` with defaults. Loaded via `GitRepo::load_config()` with serde defaults for missing fields.
+
+## Identity
+
+### ZettelId
+
+```rust
+pub struct ZettelId(pub String);
+```
+
+A 14-digit timestamp string (`YYYYMMDDHHmmss`), e.g. `"20260226120000"`. Custom `Deserialize` implementation accepts both YAML integer and string representations for backward compatibility.
+
+## Zettel Structures
+
+### ZettelMeta
+
+Core metadata from YAML frontmatter:
+
+```rust
+pub struct ZettelMeta {
+    pub id: Option<ZettelId>,
+    pub title: Option<String>,
+    pub date: Option<String>,
+    pub zettel_type: Option<String>,  // serialized as "type"
+    pub tags: Vec<String>,
+    pub extra: BTreeMap<String, serde_yaml::Value>,  // arbitrary additional fields
+}
+```
+
+All fields are optional. The `extra` map captures any YAML fields not in the core schema, preserved through parse/serialize round-trips.
+
+#### Reserved extra fields
+
+The `attachments` key in `extra` is managed by the attachments module. It holds a list of `AttachmentInfo` records serialized as YAML maps:
+
+```yaml
+attachments:
+  - name: diagram.png
+    mime: image/png
+    size: 48210
+  - name: spec.pdf
+    mime: application/pdf
+    size: 102400
+```
+
+### AttachmentInfo
+
+```rust
+pub struct AttachmentInfo {
+    pub name: String,
+    pub mime: String,
+    pub size: u64,
+}
+```
+
+`mime_from_filename()` detects MIME type from extension (jpg, png, pdf, csv, md, html, etc.), falling back to `application/octet-stream`.
+
+### File Storage
+
+Attachment blobs live in the Git repository under `reference/{zettel_id}/`:
+
+```
+reference/
+  20260226120000/
+    diagram.png
+    spec.pdf
+```
+
+These are committed as binary files alongside the zettel's frontmatter update. The `reference/` directory is a peer of `zettelkasten/` in the repo root.
+
+### Zone
+
+Identifies which part of the zettel a piece of data comes from:
+
+```rust
+pub enum Zone {
+    Frontmatter,
+    Body,
+    Reference,
+}
+```
+
+### InlineField
+
+A Dataview-style `key:: value` field extracted from body or reference zones:
+
+```rust
+pub struct InlineField {
+    pub key: String,
+    pub value: String,
+    pub zone: Zone,
+}
+```
+
+### WikiLink
+
+An internal reference using `[[target|display]]` syntax:
+
+```rust
+pub struct WikiLink {
+    pub target: String,
+    pub display: Option<String>,
+    pub zone: Zone,
+}
+```
+
+### ParsedZettel
+
+Full parsed representation of a zettel:
+
+```rust
+pub struct ParsedZettel {
+    pub meta: ZettelMeta,
+    pub body: String,
+    pub reference_section: String,
+    pub inline_fields: Vec<InlineField>,
+    pub wikilinks: Vec<WikiLink>,
+    pub path: String,
+}
+```
+
+### Zettel
+
+Raw three-zone split before metadata extraction:
+
+```rust
+pub struct Zettel {
+    pub raw_frontmatter: String,
+    pub body: String,
+    pub reference_section: String,
+}
+```
+
+## Sync Types
+
+### NodeConfig
+
+Per-device registration stored in `.nodes/{uuid}.toml`:
+
+```rust
+pub struct NodeConfig {
+    pub uuid: String,
+    pub name: String,
+    pub known_heads: Vec<String>,  // Git commit OIDs this node has synced
+    pub last_sync: Option<String>, // RFC3339 timestamp
+}
+```
+
+### MergeResult
+
+Outcome of `git_ops::merge_remote()`:
+
+```rust
+pub enum MergeResult {
+    AlreadyUpToDate,
+    FastForward(Oid),
+    Clean(Oid),
+    Conflicts(Vec<ConflictFile>, Oid),  // conflicts + theirs OID
+}
+```
+
+### ConflictFile
+
+A file with merge conflicts, containing all three versions:
+
+```rust
+pub struct ConflictFile {
+    pub path: String,
+    pub ancestor: Option<String>,  // None if file is new
+    pub ours: String,
+    pub theirs: String,
+}
+```
+
+### ResolvedFile
+
+A conflict file after CRDT resolution:
+
+```rust
+pub struct ResolvedFile {
+    pub path: String,
+    pub content: String,
+}
+```
+
+## Type Definition Structures
+
+### ColumnDef
+
+A column in a typed table definition:
+
+```rust
+pub struct ColumnDef {
+    pub name: String,
+    pub data_type: String,          // INTEGER, REAL, BOOLEAN, TEXT
+    pub references: Option<String>, // FK target type name
+    pub zone: Option<Zone>,         // which zettel zone this maps to
+    pub required: bool,             // enforced during consistency checks
+    pub search_boost: Option<f64>,  // FTS boost weight (future)
+    pub allowed_values: Option<Vec<String>>, // enum constraint
+    pub default_value: Option<String>,       // default on INSERT
+}
+```
+
+#### Enum columns
+
+Columns with `allowed_values` emit a `CHECK(col IN (...))` constraint in materialized SQLite tables. The SQL engine validates values on INSERT and UPDATE, returning a `Validation` error on violation.
+
+If `default_value` is set, the SQL engine fills it for omitted columns during INSERT.
+
+YAML typedef example:
+
+```yaml
+columns:
+  - name: status
+    data_type: TEXT
+    zone: frontmatter
+    allowed_values:
+      - todo
+      - doing
+      - done
+    default_value: todo
+```
+
+### TableSchema
+
+Schema for a materialized SQLite table:
+
+```rust
+pub struct TableSchema {
+    pub table_name: String,
+    pub columns: Vec<ColumnDef>,
+    pub crdt_strategy: Option<String>,   // e.g. "preset:append-log"
+    pub template_sections: Vec<String>,  // expected body section headings
+}
+```
+
+### ConsistencyWarning
+
+Advisory warnings collected during rebuild:
+
+```rust
+pub enum ConsistencyWarning {
+    MalformedYaml { path: String, error: String },
+    CrossZoneDuplicate { path: String, key: String },
+    MissingRequired { path: String, type_name: String, field: String },
+}
+```
+
+## Report Types
+
+### RebuildReport
+
+```rust
+pub struct RebuildReport {
+    pub indexed: usize,
+    pub tables_materialized: usize,
+    pub types_inferred: Vec<String>,
+    pub warnings: Vec<ConsistencyWarning>,
+}
+```
+
+### SyncReport
+
+```rust
+pub struct SyncReport {
+    pub direction: String,          // "bidirectional", "up-to-date"
+    pub commits_transferred: usize,
+    pub conflicts_resolved: usize,
+}
+```
+
+### CompactionReport
+
+```rust
+pub struct CompactionReport {
+    pub files_removed: usize,
+    pub gc_success: bool,
+}
+```
+
+## SQLite Schema
+
+The search index (`indexer.rs`) uses these core tables:
+
+```sql
+-- Core zettel data
+zettels(id TEXT PK, title, date, type, path UNIQUE, body, updated_at)
+
+-- Tags (one row per tag per zettel)
+_zdb_tags(zettel_id FK, tag)
+
+-- Inline fields with zone tracking
+_zdb_fields(zettel_id FK, key, value, zone)
+
+-- Wikilinks with zone tracking
+_zdb_links(source_id FK, target_path, display, zone)
+
+-- Attachments (one row per file per zettel)
+_zdb_attachments(zettel_id FK, name, mime, size INTEGER, path)
+
+-- FTS5 full-text search (porter stemming, unicode61 tokenizer)
+_zdb_fts(title, body, tags)
+
+-- Staleness tracking
+_zdb_meta(key PK, value)  -- key="head", value=current Git HEAD OID
+```
+
+### Materialized Type Tables
+
+During rebuild, the indexer creates additional tables for each typed zettel collection. For a type named `project`, the materialized table is:
+
+```sql
+project(id TEXT PK, completed INTEGER, deliverable TEXT, parent TEXT, ...)
+```
+
+Column types are derived from `_typedef` zettels (explicit) or inferred from data. These tables are ephemeral — dropped and recreated on each rebuild.

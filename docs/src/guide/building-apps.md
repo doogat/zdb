@@ -1,0 +1,512 @@
+# Building Apps with ZettelDB
+
+ZettelDB works as a backend for personal productivity apps. Your data lives in Git-backed Markdown files with full version history, CRDT sync across devices, and SQL/GraphQL access for frontends.
+
+This guide covers data modeling, API access, and two worked examples.
+
+## When to use ZettelDB
+
+ZettelDB fits apps where:
+
+- **You are the sole user** — single-writer, personal data
+- **Data portability matters** — your data is Markdown in Git, readable by any tool
+- **Multi-device sync is needed** — laptop, phone, tablet, all conflict-free
+- **Write volume is moderate** — every mutation is a git commit; aim for ~100s of writes/day, not thousands
+
+Examples: link managers, personal CRMs, reading logs, project trackers, habit trackers, recipe collections, travel planners.
+
+## Architecture overview
+
+```
+Frontend (React, Swift, Kotlin, etc.)
+    │
+    ├─ GraphQL ─── zdb serve (HTTP, port 2891)
+    │                  │
+    │                  └── Actor thread
+    │                       ├── GitRepo (storage)
+    │                       ├── Index (SQLite FTS5)
+    │                       └── SqlEngine (DDL/DML)
+    │
+    └─ FFI ─────── ZettelDriver (UniFFI, embedded)
+                       └── same stack, no server
+```
+
+**Web/desktop apps**: talk to `zdb serve` over GraphQL.
+**Mobile apps**: embed `ZettelDriver` via UniFFI (Swift/Kotlin bindings) — no server needed.
+**CLI scripts**: use `zdb query` and `zdb create` directly.
+
+## Data modeling
+
+### Entities become tables
+
+Each entity in your app maps to a SQL table, which maps to a `_typedef` zettel, which auto-generates a GraphQL type.
+
+```
+SQL table ←→ _typedef zettel ←→ GraphQL type ←→ Markdown files
+```
+
+Define schemas with SQL:
+
+```sql
+CREATE TABLE bookmark (
+  title TEXT NOT NULL,
+  url TEXT NOT NULL,
+  category TEXT REFERENCES category(id)
+);
+```
+
+This single statement:
+1. Creates a `_typedef` zettel at `zettelkasten/_typedef/{id}.md`
+2. Creates a materialized SQLite table for queries
+3. Generates a `Bookmark` GraphQL type with a `bookmarks()` query
+
+### Zone mapping
+
+Each column maps to a zone in the zettel Markdown file:
+
+| Zone | Stored as | Best for |
+|------|-----------|----------|
+| `frontmatter` | YAML field | Scalars: numbers, booleans, dates, short strings |
+| `body` | `## Heading` section | Long-form text, notes, descriptions |
+| `reference` | `- key:: value` line | Links between entities (FK references, wikilinks) |
+
+Zone assignment rules:
+- Explicit `zone` in the typedef wins
+- `REFERENCES` columns default to `reference`
+- `INTEGER`, `REAL`, `BOOLEAN` default to `frontmatter`
+- `TEXT` defaults to `frontmatter` (use explicit zone for body/reference)
+
+### Relationships
+
+Foreign keys use `REFERENCES`:
+
+```sql
+CREATE TABLE category (
+  name TEXT NOT NULL,
+  panel TEXT REFERENCES panel(id)
+);
+```
+
+This stores the FK as a wikilink in the reference section:
+
+```markdown
+---
+- panel:: [[20260301120000]]
+```
+
+The SQL engine validates FK targets on INSERT. Backlinks are automatically indexed.
+
+### Constraints
+
+```sql
+CREATE TABLE task (
+  title TEXT NOT NULL,
+  status TEXT DEFAULT 'todo',
+  priority TEXT
+);
+```
+
+Use `_typedef` YAML for richer constraints:
+
+```yaml
+columns:
+  - name: status
+    data_type: TEXT
+    zone: frontmatter
+    allowed_values: [todo, doing, done]
+    default_value: todo
+  - name: priority
+    data_type: TEXT
+    zone: frontmatter
+    allowed_values: [low, medium, high]
+```
+
+`allowed_values` enforces enum constraints; `default_value` fills missing columns on INSERT.
+
+### Body sections for rich content
+
+Use `template_sections` to define expected body headings:
+
+```yaml
+template_sections:
+  - Description
+  - Notes
+```
+
+A zettel of this type will have:
+
+```markdown
+---
+id: 20260301120000
+title: My Record
+type: task
+status: todo
+---
+
+## Description
+
+Task description here.
+
+## Notes
+
+Additional notes.
+
+---
+- assignee:: [[20260101000000]]
+```
+
+Body sections are stored as `TEXT` columns in the body zone, queryable via SQL and exposed in GraphQL.
+
+## API access
+
+### GraphQL
+
+Start the server:
+
+```bash
+zdb serve                    # localhost:2891
+zdb serve --playground       # enables GraphQL Playground at GET /graphql
+```
+
+Authenticate with the bearer token (auto-generated at `~/.config/zetteldb/token`):
+
+```bash
+curl -H "Authorization: Bearer $(cat ~/.config/zetteldb/token)" \
+     -H "Content-Type: application/json" \
+     -d '{"query": "{ bookmarks { id, title, url } }"}' \
+     http://localhost:2891/graphql
+```
+
+#### Auto-generated queries
+
+For each type, the server generates a typed query:
+
+```graphql
+# From CREATE TABLE bookmark (...)
+query {
+  bookmarks(tag: String, limit: Int, offset: Int): [Bookmark!]!
+}
+
+type Bookmark {
+  id: ID!
+  title: String!
+  body: String!
+  tags: [String!]!
+  # ... typed fields from columns
+  bookmarkTitle: String    # frontmatter TEXT
+  url: String              # frontmatter TEXT
+  category: String         # reference FK
+}
+```
+
+#### Mutations
+
+Use the generic mutations or SQL passthrough:
+
+```graphql
+mutation {
+  # Generic zettel creation
+  createZettel(input: { title: "My Link", type: "bookmark", tags: ["dev"] }) {
+    id
+  }
+
+  # SQL for typed inserts (richer column control)
+  executeSql(sql: "INSERT INTO bookmark (title, url, category) VALUES ('Rust Book', 'https://doc.rust-lang.org/book/', '20260301120000')") {
+    message
+  }
+}
+```
+
+#### Complex queries via SQL passthrough
+
+```graphql
+query {
+  sql(query: "SELECT c.name, COUNT(b.id) as count FROM category c LEFT JOIN bookmark b ON b.category = c.id GROUP BY c.id ORDER BY count DESC") {
+    rows
+  }
+}
+```
+
+`rows` returns each row as a JSON string.
+
+### CLI
+
+```bash
+# Define schema
+zdb query "CREATE TABLE bookmark (title TEXT NOT NULL, url TEXT NOT NULL)"
+
+# Insert data
+zdb query "INSERT INTO bookmark (title, url) VALUES ('Rust Book', 'https://doc.rust-lang.org/book/')"
+
+# Query
+zdb query "SELECT id, title, url FROM bookmark"
+
+# Full-text search across all zettels
+zdb search "rust programming"
+```
+
+### UniFFI (mobile)
+
+Embed ZettelDB directly in Swift or Kotlin:
+
+```swift
+let driver = try ZettelDriver(path: "/path/to/zettelkasten")
+let result = try driver.executeSql(
+    "INSERT INTO contact (name, email) VALUES ('Alice', 'alice@example.com')"
+)
+let contacts = try driver.executeSql("SELECT * FROM contact")
+```
+
+No server process needed. The app owns the git repo directly.
+
+## Worked example: link dashboard
+
+A personal link dashboard with panels, categories, and bookmarks.
+
+### Schema
+
+```sql
+CREATE TABLE panel (
+  name TEXT NOT NULL,
+  sort_order INTEGER DEFAULT 0
+);
+
+CREATE TABLE category (
+  name TEXT NOT NULL,
+  panel TEXT REFERENCES panel(id)
+);
+
+CREATE TABLE bookmark (
+  title TEXT NOT NULL,
+  url TEXT NOT NULL,
+  description TEXT,
+  category TEXT REFERENCES category(id)
+);
+```
+
+### Sample data
+
+```sql
+INSERT INTO panel (name, sort_order) VALUES ('Development', 0);
+INSERT INTO panel (name, sort_order) VALUES ('Research', 1);
+
+-- Assume panel IDs are 20260301120000 and 20260301120001
+INSERT INTO category (name, panel) VALUES ('Rust', '20260301120000');
+INSERT INTO category (name, panel) VALUES ('AI/ML', '20260301120001');
+
+-- Assume category IDs are 20260301120100 and 20260301120101
+INSERT INTO bookmark (title, url, category) VALUES ('Rust Book', 'https://doc.rust-lang.org/book/', '20260301120100');
+INSERT INTO bookmark (title, url, category) VALUES ('Tokio Tutorial', 'https://tokio.rs/tokio/tutorial', '20260301120100');
+```
+
+### Frontend queries
+
+```graphql
+# Load all panels with their categories and bookmarks
+query {
+  panels {
+    id, name, sortOrder
+  }
+  categories {
+    id, name, panel
+  }
+  bookmarks {
+    id, title, url, category
+  }
+}
+
+# Search across all bookmarks
+query {
+  search(query: "rust async") {
+    id, title, snippet, rank
+  }
+}
+
+# Add a bookmark
+mutation {
+  executeSql(sql: "INSERT INTO bookmark (title, url, category) VALUES ('Serde Docs', 'https://serde.rs', '20260301120100')") {
+    message
+  }
+}
+```
+
+### What each bookmark looks like on disk
+
+```markdown
+---
+id: 20260301120200
+title: Rust Book
+type: bookmark
+date: 2026-03-01
+url: https://doc.rust-lang.org/book/
+---
+
+---
+- category:: [[20260301120100]]
+```
+
+Editable in any text editor or Obsidian.
+
+## Worked example: personal CRM
+
+Track contacts, life events, and interactions.
+
+### Schema
+
+```sql
+CREATE TABLE contact (
+  name TEXT NOT NULL,
+  relationship TEXT,
+  email TEXT,
+  phone TEXT
+);
+
+CREATE TABLE life_event (
+  event_type TEXT NOT NULL,
+  event_date TEXT,
+  contact TEXT REFERENCES contact(id)
+);
+
+CREATE TABLE interaction (
+  interaction_date TEXT NOT NULL,
+  location TEXT,
+  contact TEXT REFERENCES contact(id)
+);
+```
+
+Enhance with enum constraints via `_typedef` YAML:
+
+```yaml
+# Relationship enum on contact type
+columns:
+  - name: relationship
+    data_type: TEXT
+    zone: frontmatter
+    allowed_values: [family, friend, colleague, business, acquaintance]
+  - name: email
+    data_type: TEXT
+    zone: frontmatter
+    search_boost: 1.5
+```
+
+Add body sections for rich notes:
+
+```yaml
+template_sections:
+  - Bio
+  - Notes
+```
+
+### Sample data
+
+```sql
+INSERT INTO contact (name, relationship, email) VALUES ('Alice Chen', 'friend', 'alice@example.com');
+INSERT INTO contact (name, relationship) VALUES ('Bob Smith', 'colleague');
+
+-- Assume contact IDs are 20260301130000 and 20260301130001
+INSERT INTO life_event (event_type, event_date, contact) VALUES ('birthday', '1990-05-15', '20260301130000');
+INSERT INTO life_event (event_type, event_date, contact) VALUES ('married', '2024-06-20', '20260301130000');
+
+INSERT INTO interaction (interaction_date, location, contact) VALUES ('2026-02-28', 'Coffee shop', '20260301130000');
+```
+
+### Frontend queries
+
+```graphql
+# All contacts
+query {
+  contacts(limit: 50) {
+    id, name, relationship, email, phone
+  }
+}
+
+# Contact's life events and interactions via SQL join
+query {
+  sql(query: "SELECT le.event_type, le.event_date FROM life_event le WHERE le.contact = '20260301130000' ORDER BY le.event_date") {
+    rows
+  }
+}
+
+# Recent interactions across all contacts
+query {
+  sql(query: "SELECT c.name, i.interaction_date, i.location FROM interaction i JOIN contact c ON i.contact = c.id ORDER BY i.interaction_date DESC LIMIT 20") {
+    rows
+  }
+}
+
+# Search across everything
+query {
+  search(query: "alice birthday") {
+    id, title, snippet, rank
+  }
+}
+```
+
+### What a contact looks like on disk
+
+```markdown
+---
+id: 20260301130000
+title: Alice Chen
+type: contact
+date: 2026-03-01
+relationship: friend
+email: alice@example.com
+---
+
+## Bio
+
+Met at RustConf 2024. Software engineer at Acme Corp.
+
+## Notes
+
+Interested in distributed systems and CRDT research.
+
+---
+- interaction:: [[20260301130100]]
+```
+
+### What an interaction looks like on disk
+
+```markdown
+---
+id: 20260301130100
+title: Coffee catch-up with Alice
+type: interaction
+date: 2026-02-28
+interaction_date: 2026-02-28
+location: Coffee shop
+---
+
+Talked about CRDT-based apps and the future of local-first software.
+She recommended the Ink & Switch essay on local-first.
+
+---
+- contact:: [[20260301130000]]
+```
+
+## Schema design checklist
+
+1. **One table per entity** — panels, categories, bookmarks, contacts, events
+2. **Use frontmatter for filterable fields** — dates, enums, booleans, numbers
+3. **Use body for rich text** — notes, descriptions, logs
+4. **Use references for relationships** — FK columns with `REFERENCES`
+5. **Use `allowed_values` for enums** — status, priority, relationship type
+6. **Use `default_value` for sensible defaults** — status starts as "todo"
+7. **Use `template_sections` for structured body** — consistent headings across records
+8. **Keep types small and focused** — more small tables beats fewer bloated ones
+9. **Use tags for cross-cutting labels** — tags work across all types
+10. **Use search for discovery** — FTS indexes titles, bodies, and tags
+
+## What you get for free
+
+| Feature | How |
+|---------|-----|
+| Version history | Every mutation is a git commit |
+| Offline-first | Works without network, syncs later |
+| Multi-device | CRDT resolves conflicts automatically |
+| Data portability | Markdown files in a git repo |
+| Full-text search | FTS5 with porter stemming |
+| Obsidian-compatible | Browse/edit data in any Markdown editor |
+| Backups | `git push` to any remote |
+| Audit trail | `git log` shows who changed what and when |

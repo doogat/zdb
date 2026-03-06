@@ -1,0 +1,117 @@
+# Architecture Overview
+
+ZettelDB is a modular monolith with 12 core library modules, a GraphQL server crate, a CLI binary, and UniFFI bindings for Swift/Kotlin. Each module has a single responsibility and clear dependency boundaries.
+
+## System Layers
+
+```text
+┌─────────────────────────────────────────────────────────┐
+│                     CLI (zdb-cli)                        │
+│                 clap-based command interface             │
+├─────────────────────────────────────────────────────────┤
+│               GraphQL Server (zdb-server)                │
+│     axum + async-graphql · actor bridge · Bearer auth    │
+├─────────────────────────────────────────────────────────┤
+│            FFI Bindings (ZettelDriver facade)            │
+│         uniffi proc-macro · Swift · Kotlin              │
+├─────────────────────────────────────────────────────────┤
+│                Core Library (zdb-core)                   │
+│  ┌────────────────────────────────────────────────────┐ │
+│  │  Orchestration: sync_manager, compaction           │ │
+│  ├────────────────────────────────────────────────────┤ │
+│  │  SQL: sql_engine, indexer (type inference + mat.)  │ │
+│  ├────────────────────────────────────────────────────┤ │
+│  │  Merge: crdt_resolver, git_ops                     │ │
+│  ├────────────────────────────────────────────────────┤ │
+│  │  Index: indexer (SQLite + FTS5)                    │ │
+│  ├────────────────────────────────────────────────────┤ │
+│  │  Storage: git_ops (libgit2)                        │ │
+│  ├────────────────────────────────────────────────────┤ │
+│  │  Parser: parser (three-zone Markdown)              │ │
+│  ├────────────────────────────────────────────────────┤ │
+│  │  Foundation: types, error, traits, hlc             │ │
+│  └────────────────────────────────────────────────────┘ │
+├─────────────────────────────────────────────────────────┤
+│               External Dependencies                     │
+│  git2 · automerge · rusqlite · serde_yaml · similar ·   │
+│  uniffi                                                 │
+└─────────────────────────────────────────────────────────┘
+```
+
+## Hybrid Git-CRDT Strategy
+
+Git handles >99% of merges (non-overlapping edits). When Git detects a conflict, ZettelDB falls back to Automerge CRDT with per-zone merge strategies:
+
+| Zone | Merge Strategy |
+|------|---------------|
+| Frontmatter (YAML) | Field-level Automerge Map CRDT |
+| Body (Markdown) | Character-level Automerge Text CRDT |
+| Reference section | Automerge List CRDT (sorted on export) |
+
+## Storage Model
+
+- **Source of truth**: Git repository (Markdown files)
+- **Read cache**: SQLite database with FTS5 (derived, always rebuildable from Git)
+- **Node registry**: TOML files in `.nodes/` (tracked by Git)
+- **Local state**: `.git/zdb-node` (node UUID, not tracked)
+
+## Project Structure
+
+```text
+zetteldb/
+├── Cargo.toml                  # Workspace root
+├── zdb-core/                   # Core library
+│   ├── src/
+│   │   ├── lib.rs              # Public re-exports + UniFFI scaffolding
+│   │   ├── error.rs            # Error types
+│   │   ├── types.rs            # Shared data structures
+│   │   ├── traits.rs           # Core trait abstractions
+│   │   ├── hlc.rs              # Hybrid Logical Clock
+│   │   ├── parser.rs           # Markdown parsing/serialization
+│   │   ├── git_ops.rs          # Git repository operations
+│   │   ├── crdt_resolver.rs    # Automerge conflict resolution
+│   │   ├── indexer.rs          # SQLite FTS5 index + type inference
+│   │   ├── sql_engine.rs       # SQL DDL/DML translation
+│   │   ├── bundled_types.rs    # Built-in type definitions
+│   │   ├── sync_manager.rs     # Multi-device sync
+│   │   ├── compaction.rs       # CRDT cleanup + git gc
+│   │   ├── ffi.rs              # UniFFI ZettelDriver facade
+│   │   └── zdb.udl             # UniFFI interface definition (docs)
+│   └── benches/
+│       ├── crud.rs             # CRUD benchmarks (1K zettels)
+│       └── search.rs           # Search/reindex benchmarks
+├── zdb-cli/                    # CLI binary
+│   └── src/
+│       └── main.rs             # clap command handlers
+├── zdb-server/                 # GraphQL server library
+│   └── src/
+│       ├── lib.rs              # Server entrypoint (axum)
+│       ├── actor.rs            # Thread-safe core bridge
+│       ├── schema.rs           # Dynamic GraphQL schema
+│       ├── auth.rs             # Bearer token auth
+│       ├── config.rs           # Server config
+│       └── error.rs            # Error mapping
+└── docs/                       # This documentation
+```
+
+## Runtime Directory Layout
+
+Created by `zdb init`:
+
+```text
+my-zettelkasten/
+├── .git/
+│   └── zdb-node                # Local node UUID (gitignored)
+├── zettelkasten/               # Zettel Markdown files
+│   ├── 20260226120000.md
+│   ├── _typedef/               # Type definition zettels
+│   │   └── 20260226143000.md
+│   └── ...
+├── reference/                  # Binary/asset files
+├── .nodes/                     # Node registry (git-tracked)
+│   └── {uuid}.toml
+├── .crdt/temp/                 # Temporary CRDT files
+├── .zdb/                       # Local-only (gitignored)
+│   └── index.db                # SQLite search index
+└── .gitignore                  # Ignores .zdb/
+```

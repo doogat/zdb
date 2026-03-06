@@ -1,0 +1,221 @@
+use crate::common::{TwoNodeSetup, ZdbTestRepo};
+use predicates::prelude::*;
+
+/// Helper: push node1's master to remote
+fn push_node1(setup: &TwoNodeSetup) {
+    std::process::Command::new("git")
+        .current_dir(setup.node1.path())
+        .args(["push", "-u", "origin", "master"])
+        .output()
+        .unwrap();
+}
+
+#[test]
+fn two_node_fast_forward_sync() {
+    let setup = TwoNodeSetup::new();
+
+    // Create note on node1, push
+    let out = setup.node1.zdb()
+        .args(["create", "--title", "Note One", "--body", "hello"])
+        .output().unwrap();
+    let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    push_node1(&setup);
+
+    // Clone node2, sync
+    let node2_path = setup.clone_node2();
+    ZdbTestRepo::zdb_at(&node2_path)
+        .arg("sync")
+        .assert()
+        .success();
+
+    // Node2 can read the note
+    ZdbTestRepo::zdb_at(&node2_path)
+        .args(["read", &id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Note One"))
+        .stdout(predicate::str::contains("hello"));
+}
+
+#[test]
+fn non_overlapping_edits_merge_cleanly() {
+    let setup = TwoNodeSetup::new();
+
+    // Shared note
+    let out = setup.node1.zdb()
+        .args(["create", "--title", "Original", "--tags", "a", "--body", "original body"])
+        .output().unwrap();
+    let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    push_node1(&setup);
+    let node2_path = setup.clone_node2();
+    ZdbTestRepo::zdb_at(&node2_path).arg("sync").assert().success();
+
+    // Node1: edit frontmatter (title + tags)
+    setup.node1.zdb()
+        .args(["update", &id, "--title", "Updated Title", "--tags", "a,b"])
+        .assert().success();
+
+    // Node2: edit body
+    ZdbTestRepo::zdb_at(&node2_path)
+        .args(["update", &id, "--body", "modified body"])
+        .assert().success();
+
+    // Node1 syncs first
+    setup.node1.zdb().arg("sync").assert().success();
+
+    // Node2 syncs — should merge without conflict
+    ZdbTestRepo::zdb_at(&node2_path)
+        .arg("sync")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("conflicts resolved: 0"));
+
+    // Merged result has both changes
+    ZdbTestRepo::zdb_at(&node2_path)
+        .args(["read", &id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Updated Title"))
+        .stdout(predicate::str::contains("- b"))
+        .stdout(predicate::str::contains("modified body"));
+}
+
+#[test]
+fn overlapping_body_edits_resolved_by_crdt() {
+    let setup = TwoNodeSetup::new();
+
+    let out = setup.node1.zdb()
+        .args(["create", "--title", "Doc", "--body", "Architecture overview.\nFrontend: React.\nBackend: Rust."])
+        .output().unwrap();
+    let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    push_node1(&setup);
+    let node2_path = setup.clone_node2();
+    ZdbTestRepo::zdb_at(&node2_path).arg("sync").assert().success();
+
+    // Both edit the same line
+    setup.node1.zdb()
+        .args(["update", &id, "--body", "Architecture overview — LAPTOP.\nFrontend: React.\nBackend: Rust."])
+        .assert().success();
+    ZdbTestRepo::zdb_at(&node2_path)
+        .args(["update", &id, "--body", "Architecture overview — DESKTOP.\nFrontend: React.\nBackend: Rust."])
+        .assert().success();
+
+    // Node1 pushes, node2 syncs
+    setup.node1.zdb().arg("sync").assert().success();
+    ZdbTestRepo::zdb_at(&node2_path)
+        .arg("sync")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("conflicts resolved: 1"));
+
+    // Both fragments present in merged result
+    let result = ZdbTestRepo::zdb_at(&node2_path)
+        .args(["read", &id])
+        .output().unwrap();
+    let body = String::from_utf8_lossy(&result.stdout);
+    assert!(body.contains("LAPTOP"), "merged body should contain LAPTOP");
+    assert!(body.contains("DESKTOP"), "merged body should contain DESKTOP");
+    assert!(body.contains("Frontend: React."), "unchanged lines preserved");
+}
+
+#[test]
+fn frontmatter_field_conflict_resolved_by_crdt() {
+    let setup = TwoNodeSetup::new();
+
+    let out = setup.node1.zdb()
+        .args(["create", "--title", "Shared", "--tags", "original"])
+        .output().unwrap();
+    let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    push_node1(&setup);
+    let node2_path = setup.clone_node2();
+    ZdbTestRepo::zdb_at(&node2_path).arg("sync").assert().success();
+
+    // Both change tags
+    setup.node1.zdb()
+        .args(["update", &id, "--tags", "laptop-tag"])
+        .assert().success();
+    ZdbTestRepo::zdb_at(&node2_path)
+        .args(["update", &id, "--tags", "desktop-tag"])
+        .assert().success();
+
+    setup.node1.zdb().arg("sync").assert().success();
+    ZdbTestRepo::zdb_at(&node2_path)
+        .arg("sync")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("conflicts resolved: 1"));
+
+    // Title and other fields preserved regardless of which tag wins
+    ZdbTestRepo::zdb_at(&node2_path)
+        .args(["read", &id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("title: Shared"));
+}
+
+#[test]
+fn nodes_converge_after_sync() {
+    let setup = TwoNodeSetup::new();
+
+    let out = setup.node1.zdb()
+        .args(["create", "--title", "Converge Test", "--body", "original"])
+        .output().unwrap();
+    let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    push_node1(&setup);
+    let node2_path = setup.clone_node2();
+    ZdbTestRepo::zdb_at(&node2_path).arg("sync").assert().success();
+
+    // Diverge
+    setup.node1.zdb()
+        .args(["update", &id, "--title", "From Laptop"])
+        .assert().success();
+    ZdbTestRepo::zdb_at(&node2_path)
+        .args(["update", &id, "--body", "desktop body"])
+        .assert().success();
+
+    // Sync both directions
+    setup.node1.zdb().arg("sync").assert().success();
+    ZdbTestRepo::zdb_at(&node2_path).arg("sync").assert().success();
+    setup.node1.zdb().arg("sync").assert().success();
+
+    // Both should return identical content
+    let r1 = setup.node1.zdb().args(["read", &id]).output().unwrap();
+    let r2 = ZdbTestRepo::zdb_at(&node2_path).args(["read", &id]).output().unwrap();
+    assert_eq!(r1.stdout, r2.stdout, "both nodes should converge");
+}
+
+#[test]
+fn concurrent_tag_additions_both_survive() {
+    let setup = TwoNodeSetup::new();
+
+    let out = setup.node1.zdb()
+        .args(["create", "--title", "TagTest", "--tags", "shared"])
+        .output().unwrap();
+    let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    push_node1(&setup);
+    let node2_path = setup.clone_node2();
+    ZdbTestRepo::zdb_at(&node2_path).arg("sync").assert().success();
+
+    // Node1 adds tag "laptop"
+    setup.node1.zdb()
+        .args(["update", &id, "--tags", "shared,laptop"])
+        .assert().success();
+
+    // Node2 adds tag "desktop"
+    ZdbTestRepo::zdb_at(&node2_path)
+        .args(["update", &id, "--tags", "shared,desktop"])
+        .assert().success();
+
+    // Sync
+    setup.node1.zdb().arg("sync").assert().success();
+    ZdbTestRepo::zdb_at(&node2_path).arg("sync").assert().success();
+
+    // Both tags should be present after merge
+    let result = ZdbTestRepo::zdb_at(&node2_path)
+        .args(["read", &id])
+        .output().unwrap();
+    let content = String::from_utf8_lossy(&result.stdout);
+    assert!(content.contains("shared"), "shared tag preserved");
+    assert!(content.contains("laptop"), "laptop tag from node1 present");
+    assert!(content.contains("desktop"), "desktop tag from node2 present");
+}

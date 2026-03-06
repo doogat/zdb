@@ -1,0 +1,2575 @@
+# ZettelDB Code Walkthrough
+
+*2026-03-03T12:56:13Z by Showboat 0.6.1*
+<!-- showboat-id: 6a329743-a932-4391-99be-fc73b1b13c90 -->
+
+ZettelDB is a hybrid Git-CRDT decentralized Zettelkasten database written in Rust. Git stores the source of truth — plain Markdown files — while a derived SQLite index provides fast full-text search and SQL queries. When two devices edit the same zettel offline, Automerge CRDTs resolve conflicts automatically at the zone level (frontmatter, body, references).
+
+The codebase is a Cargo workspace with three crates:
+
+```bash
+cat Cargo.toml
+```
+
+```rust
+[workspace]
+members = ["zdb-core", "zdb-cli", "zdb-server", "tests"]
+resolver = "2"
+```
+
+- **zdb-core** — the library crate with all domain logic (parser, git, CRDT, index, SQL, sync, compaction)
+- **zdb-cli** — the `zdb` binary (clap CLI)
+- **zdb-server** — async GraphQL + PostgreSQL wire-protocol server (axum, async-graphql, pgwire)
+- **tests** — e2e test harness (assert_cmd + reqwest)
+
+All public API surfaces live in zdb-core. The other crates are thin consumers.
+
+## 1. Library Root — `zdb-core/src/lib.rs`
+
+The library root declares all modules and sets up UniFFI scaffolding for generating Swift/Kotlin bindings:
+
+```bash
+cat zdb-core/src/lib.rs
+```
+
+```rust
+//! # zdb-core
+//!
+//! Core library for Doogat ZettelDB — a hybrid Git-CRDT decentralized Zettelkasten database.
+//!
+//! ## Modules
+//!
+//! - [`parser`] — Parse and serialize three-zone Markdown zettels
+//! - [`git_ops`] — Git repository operations (CRUD, merge, remote sync)
+//! - [`crdt_resolver`] — Automerge CRDT conflict resolution
+//! - [`indexer`] — SQLite FTS5 search index, type inference, materialization
+//! - [`sql_engine`] — SQL DDL/DML translation (tables as zettel types)
+//! - [`bundled_types`] — Built-in type definition templates (project, contact)
+//! - [`sync_manager`] — Multi-device sync orchestration
+//! - [`compaction`] — CRDT temp cleanup and git gc
+//! - [`types`] — Shared data structures
+//! - [`error`] — Error types and Result alias
+
+uniffi::setup_scaffolding!();
+
+pub mod bundle;
+pub mod bundled_types;
+pub mod compaction;
+pub mod crdt_resolver;
+pub mod error;
+pub mod ffi;
+pub mod git_ops;
+pub mod hlc;
+pub mod indexer;
+pub mod parser;
+pub mod sql_engine;
+pub mod sync_manager;
+pub mod traits;
+pub mod types;
+
+#[cfg(feature = "nosql")]
+pub mod nosql;
+```
+
+`uniffi::setup_scaffolding!()` generates the FFI glue needed for the Swift/Kotlin bindings. Everything else is module declarations — no logic lives here.
+
+## 2. Error Handling — `zdb-core/src/error.rs`
+
+A single `ZettelError` enum covers every failure mode across all modules. The `thiserror` crate derives `Display` and `Error`. A type alias `Result<T>` is used everywhere so modules never write `std::result::Result<T, ZettelError>` longhand:
+
+```bash
+cat zdb-core/src/error.rs
+```
+
+```rust
+use thiserror::Error;
+
+pub type Result<T> = std::result::Result<T, ZettelError>;
+
+#[derive(Debug, Error)]
+pub enum ZettelError {
+    #[error("git: {0}")]
+    Git(String),
+
+    #[error("yaml: {0}")]
+    Yaml(String),
+
+    #[error("sql: {0}")]
+    Sql(String),
+
+    #[error("automerge: {0}")]
+    Automerge(String),
+
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("toml: {0}")]
+    Toml(String),
+
+    #[error("parse: {0}")]
+    Parse(String),
+
+    #[error("not found: {0}")]
+    NotFound(String),
+
+    #[error("validation: {0}")]
+    Validation(String),
+
+    #[error("invalid path: {0}")]
+    InvalidPath(String),
+
+    #[error("sql engine: {0}")]
+    SqlEngine(String),
+
+    #[error("version mismatch: repo format v{repo}, driver supports up to v{driver}")]
+    VersionMismatch { repo: u32, driver: u32 },
+
+    #[cfg(feature = "nosql")]
+    #[error("redb: {0}")]
+    Redb(String),
+}
+```
+
+Each upstream library gets its own `From` impl in the module that uses it (e.g. `From<git2::Error>` in `git_ops.rs`, `From<rusqlite::Error>` in `indexer.rs`). The `VersionMismatch` variant handles the forward-compatibility check when opening repos created by newer ZettelDB versions. The `InvalidPath` variant is raised by `validate_path()` in `git_ops.rs` when a file path contains `..` traversal components or is a symlink.
+
+## 3. Domain Types — `zdb-core/src/types.rs`
+
+This file defines every data structure shared across modules. The key types form a clear hierarchy:
+
+```bash
+sed -n '108,194p' zdb-core/src/types.rs
+```
+
+```rust
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
+pub struct ZettelId(pub String);
+
+impl fmt::Display for ZettelId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl<'de> Deserialize<'de> for ZettelId {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ZettelIdVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for ZettelIdVisitor {
+            type Value = ZettelId;
+
+            fn expecting(&self, f: &mut fmt::Formatter) -> fmt::Result {
+                f.write_str("a string or integer zettel ID")
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> std::result::Result<ZettelId, E> {
+                Ok(ZettelId(v.to_string()))
+            }
+
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> std::result::Result<ZettelId, E> {
+                Ok(ZettelId(v.to_string()))
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> std::result::Result<ZettelId, E> {
+                Ok(ZettelId(v.to_owned()))
+            }
+
+            fn visit_string<E: serde::de::Error>(
+                self,
+                v: String,
+            ) -> std::result::Result<ZettelId, E> {
+                Ok(ZettelId(v))
+            }
+        }
+
+        deserializer.deserialize_any(ZettelIdVisitor)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Zone {
+    Frontmatter,
+    Body,
+    Reference,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+pub struct ZettelMeta {
+    pub id: Option<ZettelId>,
+    pub title: Option<String>,
+    pub date: Option<String>,
+    pub zettel_type: Option<String>,
+    pub tags: Vec<String>,
+    pub extra: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct InlineField {
+    pub key: String,
+    pub value: String,
+    pub zone: Zone,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WikiLink {
+    pub target: String,
+    pub display: Option<String>,
+    pub zone: Zone,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ParsedZettel {
+    pub meta: ZettelMeta,
+    pub body: String,
+    pub reference_section: String,
+    pub inline_fields: Vec<InlineField>,
+    pub wikilinks: Vec<WikiLink>,
+    pub path: String,
+}
+```
+
+**ZettelId** is a 14-digit timestamp string (YYYYMMDDHHmmss). The custom `Deserialize` impl handles YAML quirks where `20260226120000` might parse as an integer rather than a string.
+
+**Zone** enum tags which section of the markdown file something belongs to — critical for the per-zone CRDT merge strategy.
+
+**ZettelMeta** holds the structured frontmatter. Known fields (`id`, `title`, `date`, `type`, `tags`) are first-class; everything else lands in `extra` as a generic `Value` enum. This keeps the system extensible — users can add arbitrary YAML fields.
+
+**ParsedZettel** is the fully-parsed representation of a zettel file. It carries metadata, body text, reference section, extracted inline fields (Dataview-style `key:: value`), and wikilinks (`[[target|display]]`). This struct flows through the entire system — created by the parser, persisted via git, indexed in SQLite, served over GraphQL.
+
+The file also defines types for the sync and merge subsystems:
+
+```bash
+sed -n '196,290p' zdb-core/src/types.rs
+```
+
+```rust
+#[derive(Debug, Clone)]
+pub struct Zettel {
+    pub raw_frontmatter: String,
+    pub body: String,
+    pub reference_section: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NodeStatus {
+    #[default]
+    Active,
+    Stale,
+    Retired,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NodeConfig {
+    pub uuid: String,
+    pub name: String,
+    #[serde(default)]
+    pub known_heads: Vec<String>,
+    pub last_sync: Option<String>,
+    /// Last HLC timestamp (persisted for clock continuity across restarts).
+    #[serde(default)]
+    pub hlc: Option<String>,
+    /// Node lifecycle status.
+    #[serde(default)]
+    pub status: NodeStatus,
+    /// ISO 8601 timestamp when this node was first registered.
+    #[serde(default)]
+    pub created: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NodeInfo {
+    pub uuid: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SyncState {
+    pub known_heads: Vec<String>,
+    pub last_sync: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SyncReport {
+    pub direction: String,
+    pub commits_transferred: usize,
+    pub conflicts_resolved: usize,
+    pub resurrected: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ConflictFile {
+    pub path: String,
+    pub ancestor: Option<String>,
+    pub ours: String,
+    pub theirs: String,
+    /// HLC from the commit that produced "ours" content.
+    pub ours_hlc: Option<crate::hlc::Hlc>,
+    /// HLC from the commit that produced "theirs" content.
+    pub theirs_hlc: Option<crate::hlc::Hlc>,
+}
+
+/// Domain-level commit identifier, decoupled from git2::Oid.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitHash(pub String);
+
+impl fmt::Display for CommitHash {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug)]
+pub enum MergeResult {
+    AlreadyUpToDate,
+    FastForward(CommitHash),
+    Clean(CommitHash),
+    Conflicts(Vec<ConflictFile>, CommitHash),
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedFile {
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct CompactionReport {
+    pub files_removed: usize,
+    pub crdt_docs_compacted: usize,
+    pub gc_success: bool,
+}
+```
+
+**Zettel** is the raw three-zone split (before YAML parsing). **ConflictFile** carries both sides of a git merge conflict plus optional HLC timestamps for each side. **MergeResult** is the outcome of `git merge` — the `Conflicts` variant includes the list of conflicting files and the commit hash of "theirs".
+
+**NodeConfig** tracks a sync node (device). Each device gets a UUID, a human name, and lifecycle status (Active → Stale → Retired). The `known_heads` field records the last git commits this node has seen, enabling incremental sync.
+
+## 4. Trait Abstractions — `zdb-core/src/traits.rs`
+
+Four traits define the system's boundaries, enabling dependency inversion and testability:
+
+```bash
+sed -n '1,38p' zdb-core/src/traits.rs
+```
+
+```rust
+use crate::error::Result;
+use crate::types::{
+    CommitHash, ConflictFile, DiffKind, PaginatedSearchResult, ParsedZettel, ResolvedFile,
+    SearchResult,
+};
+
+/// Read-only access to zettel storage.
+pub trait ZettelSource {
+    fn list_zettels(&self) -> Result<Vec<String>>;
+    fn read_file(&self, path: &str) -> Result<String>;
+    fn head_oid(&self) -> Result<CommitHash>;
+    fn diff_paths(&self, old_oid: &str, new_oid: &str) -> Result<Vec<(DiffKind, String)>>;
+}
+
+/// Read-write access to zettel storage.
+pub trait ZettelStore: ZettelSource {
+    fn commit_file(&self, path: &str, content: &str, msg: &str) -> Result<CommitHash>;
+    fn commit_files(&self, files: &[(&str, &str)], msg: &str) -> Result<CommitHash>;
+    fn delete_file(&self, path: &str, msg: &str) -> Result<CommitHash>;
+}
+
+/// Query and mutation operations on the zettel index.
+pub trait ZettelIndex {
+    fn index_zettel(&self, zettel: &ParsedZettel) -> Result<()>;
+    fn remove_zettel(&self, id: &str) -> Result<()>;
+    fn search(&self, query: &str) -> Result<Vec<SearchResult>>;
+    fn search_paginated(&self, query: &str, limit: usize, offset: usize) -> Result<PaginatedSearchResult>;
+    fn resolve_path(&self, id: &str) -> Result<String>;
+    fn query_raw(&self, sql: &str) -> Result<Vec<Vec<String>>>;
+    fn find_typedef_path(&self, type_name: &str) -> Result<Option<String>>;
+    fn execute_sql(&self, sql: &str, params: &[&str]) -> Result<usize>;
+}
+
+/// CRDT-based conflict resolution strategy.
+pub trait ConflictResolver {
+    fn resolve_conflicts(
+        &self,
+        conflicts: Vec<ConflictFile>,
+        strategy: Option<&str>,
+    ) -> Result<Vec<ResolvedFile>>;
+}
+```
+
+**ZettelSource** provides read-only git access (list files, read content, get HEAD, diff between commits). `diff_paths` uses `git2::diff_tree_to_tree` to compute changed paths between two commits — this powers incremental reindex. **ZettelStore** extends it with write operations (commit, delete). This split lets the indexer rebuild from a read-only source while the SQL engine needs writes for INSERT/UPDATE/DELETE.
+
+**ZettelIndex** abstracts the SQLite layer — both the search index and the `_zdb_*` metadata tables.
+
+**ConflictResolver** is the strategy interface for CRDT merge. `GitRepo` implements `ZettelSource + ZettelStore`. `Index` implements `ZettelIndex`. `DefaultResolver` implements `ConflictResolver`. Unit tests use `MockSource` (also in `traits.rs`) for isolated testing without git.
+
+## 5. Three-Zone Markdown Parser — `zdb-core/src/parser.rs`
+
+Every zettel is a markdown file split into three zones separated by `---`:
+
+```
+---
+id: 20260226120000
+title: My Note
+tags:
+  - rust
+  - crdt
+---
+Body content with [[wikilinks]] and key:: inline fields
+---
+- source:: Wikipedia
+- related:: [[20260101000000]]
+```
+
+The parser's main entry point is `parse()`, which orchestrates the full pipeline:
+
+```bash
+sed -n '407,423p' zdb-core/src/parser.rs
+```
+
+```rust
+/// Parse a zettel Markdown file into a fully structured ParsedZettel.
+#[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
+pub fn parse(content: &str, path: &str) -> Result<crate::types::ParsedZettel> {
+    let zettel = split_zones(content)?;
+    let meta = parse_frontmatter(&zettel.raw_frontmatter, path)?;
+    let inline_fields = extract_inline_fields(&zettel.body, &zettel.reference_section)?;
+    let wikilinks = extract_wikilinks(&zettel.raw_frontmatter, &zettel.body, &zettel.reference_section);
+
+    Ok(crate::types::ParsedZettel {
+        meta,
+        body: zettel.body,
+        reference_section: zettel.reference_section,
+        inline_fields,
+        wikilinks,
+        path: path.to_string(),
+    })
+}
+```
+
+Four steps: `split_zones` → `parse_frontmatter` → `extract_inline_fields` → `extract_wikilinks`.
+
+### Zone Splitting
+
+`split_zones()` is the trickiest part. It finds the frontmatter `---` pair, then scans backward from the end looking for a valid reference boundary — a `---` where ALL non-empty lines below it match `- key:: value`:
+
+```bash
+sed -n '91,148p' zdb-core/src/parser.rs
+```
+
+```rust
+/// Split markdown content into three zones: frontmatter, body, reference section.
+///
+/// Heuristic for reference section: find last `---` on its own line (after frontmatter);
+/// if ALL non-empty lines after it match `- key:: value` pattern, that's the boundary.
+/// Backtracks if content after last `---` is empty/whitespace.
+#[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
+pub fn split_zones(content: &str) -> Result<Zettel> {
+    let lines: Vec<&str> = content.lines().collect();
+
+    // Find frontmatter boundaries (first `---` pair), tracking fenced code blocks
+    let (fm_start, fm_end) = find_frontmatter(&lines)?;
+
+    let frontmatter = lines[fm_start + 1..fm_end].join("\n");
+
+    // Collect all `---` positions after frontmatter, skipping those inside fenced code blocks
+    let separator_positions = find_separators_after(&lines, fm_end);
+
+    // Try separators from last to first, looking for valid reference boundary.
+    // When backtracking, check content between this separator and the next one (or EOF).
+    let mut ref_boundary = None;
+    let mut end_boundary = lines.len(); // exclusive upper bound for reference content
+    for &pos in separator_positions.iter().rev() {
+        let after = &lines[pos + 1..end_boundary];
+        if after.iter().all(|l| l.trim().is_empty()) {
+            // Empty/whitespace only → skip this separator and narrow the window
+            end_boundary = pos;
+            continue;
+        }
+        if after
+            .iter()
+            .filter(|l| !l.trim().is_empty())
+            .all(|l| is_reference_line(l))
+        {
+            ref_boundary = Some(pos);
+            break;
+        }
+        // Content doesn't match reference pattern → stop searching
+        break;
+    }
+
+    let (body, reference_section) = match ref_boundary {
+        Some(pos) => {
+            let body = lines[fm_end + 1..pos].join("\n");
+            let reference = lines[pos + 1..end_boundary].join("\n");
+            (body, reference)
+        }
+        None => {
+            let body = lines[fm_end + 1..].join("\n");
+            (body, String::new())
+        }
+    };
+
+    Ok(Zettel {
+        raw_frontmatter: frontmatter,
+        body,
+        reference_section,
+    })
+}
+```
+
+The backward scan is key. A `---` in the body might be a thematic break (markdown horizontal rule), not a reference boundary. The heuristic: scan `---` markers from last to first. If the content below a marker is all `- key:: value` lines, that's the reference section. If it's empty, backtrack to the previous marker. If it's normal prose, stop — there's no reference section.
+
+Fenced code blocks (``` or ~~~) are tracked to avoid false positives on `---` inside code.
+
+### Inline Fields and Wikilinks
+
+After zone splitting, the parser extracts two kinds of structured content:
+
+```bash
+sed -n '210,257p' zdb-core/src/parser.rs
+```
+
+```rust
+/// Extract Dataview-style inline fields from body and reference zones.
+/// Body fields: `key:: value` on a line. Reference fields: `- key:: value` (list-item).
+/// Cross-zone duplicate keys → validation error. Same-zone duplicates: first wins silently.
+pub fn extract_inline_fields(body: &str, reference: &str) -> crate::error::Result<Vec<InlineField>> {
+    use std::sync::OnceLock;
+    static BODY_RE: OnceLock<Regex> = OnceLock::new();
+    static REF_RE: OnceLock<Regex> = OnceLock::new();
+
+    static INLINE_CODE_RE: OnceLock<Regex> = OnceLock::new();
+    static FENCE_RE: OnceLock<Regex> = OnceLock::new();
+
+    let body_re = BODY_RE.get_or_init(|| Regex::new(r"^([\w][\w\s-]*):: (.+)$").expect("valid regex: body inline field"));
+    let ref_re = REF_RE.get_or_init(|| Regex::new(r"^- ([\w][\w\s-]*):: ?(.*)$").expect("valid regex: ref inline field"));
+    let inline_code_re = INLINE_CODE_RE.get_or_init(|| Regex::new(r"`[^`]+`").expect("valid regex: inline code"));
+    let fence_re = FENCE_RE.get_or_init(|| Regex::new(r"^(?:`{3,}|~{3,})").expect("valid regex: fence marker"));
+
+    let mut fields = Vec::new();
+    let mut seen: std::collections::HashMap<String, Zone> = std::collections::HashMap::new();
+    let mut in_fence = false;
+
+    for line in body.lines() {
+        if fence_re.is_match(line) {
+            in_fence = !in_fence;
+            continue;
+        }
+        if in_fence {
+            continue;
+        }
+        let stripped = inline_code_re.replace_all(line, "");
+        if let Some(caps) = body_re.captures(&stripped) {
+            let key = caps[1].trim().to_string();
+            match seen.get(&key) {
+                Some(Zone::Body) => {} // same-zone dup, first wins
+                Some(_) => {
+                    return Err(crate::error::ZettelError::Validation(format!(
+                        "duplicate inline field '{key}' across body and reference zones"
+                    )));
+                }
+                None => {
+                    seen.insert(key.clone(), Zone::Body);
+                    fields.push(InlineField {
+                        key,
+                        value: caps[2].to_string(),
+                        zone: Zone::Body,
+                    });
+                }
+            }
+        }
+```
+
+**Inline fields** use Dataview syntax (`key:: value` in body, `- key:: value` in references). The parser strips inline code before matching to avoid false positives on `key:: value` inside backticks. Cross-zone duplicate keys are an error; same-zone duplicates silently keep the first occurrence.
+
+**Wikilinks** (`[[target|display]]`) are extracted from all three zones with a single regex.
+
+### ID Generation
+
+ZettelDB uses 14-digit timestamp IDs with collision prevention:
+
+```bash
+sed -n '425,450p' zdb-core/src/parser.rs
+```
+
+```rust
+/// Generate a zettel ID from the current local timestamp (YYYYMMDDHHmmss).
+/// Generate a 14-digit timestamp ID (YYYYMMDDHHmmss).
+///
+/// Within a single process, consecutive calls in the same second will
+/// spin-wait until the clock advances, preventing collisions.
+pub fn generate_id() -> ZettelId {
+    generate_unique_id(|_| false)
+}
+
+/// Generate a unique 14-digit timestamp ID, spin-waiting if `exists`
+/// returns true for the candidate. Also deduplicates within-process.
+pub fn generate_unique_id(exists: impl Fn(&str) -> bool) -> ZettelId {
+    use std::sync::Mutex;
+    static LAST: Mutex<String> = Mutex::new(String::new());
+
+    let mut last = LAST.lock().unwrap();
+    loop {
+        let now = chrono::Local::now();
+        let candidate = now.format("%Y%m%d%H%M%S").to_string();
+        if candidate != *last && !exists(&candidate) {
+            *last = candidate.clone();
+            return ZettelId(candidate);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+```
+
+A `static Mutex<String>` tracks the last generated ID within the process. If the clock hasn't advanced (same second), it spin-waits 100ms. The `exists` callback lets callers check the filesystem for cross-process collisions. The CLI passes a closure that scans `zettelkasten/` and its subdirectories.
+
+## 6. Git Storage — `zdb-core/src/git_ops.rs`
+
+`GitRepo` wraps `git2::Repository` and provides the storage layer. Every mutation is a git commit:
+
+```bash
+sed -n '20,69p' zdb-core/src/git_ops.rs
+```
+
+```rust
+pub struct GitRepo {
+    pub repo: Repository,
+    pub path: PathBuf,
+}
+
+impl GitRepo {
+    /// Initialize a new zettelkasten Git repository.
+    pub fn init(path: &Path) -> Result<Self> {
+        let repo = Repository::init(path)?;
+        let git_repo = Self {
+            repo,
+            path: path.to_path_buf(),
+        };
+
+        // Create standard directories with .gitkeep
+        for dir in &["zettelkasten", "reference", ".nodes", ".crdt/temp"] {
+            let dir_path = path.join(dir);
+            std::fs::create_dir_all(&dir_path)?;
+            std::fs::write(dir_path.join(".gitkeep"), "")?;
+        }
+
+        // Add .zdb/ to .gitignore
+        let gitignore_path = path.join(".gitignore");
+        let existing = if gitignore_path.exists() {
+            std::fs::read_to_string(&gitignore_path)?
+        } else {
+            String::new()
+        };
+        if !existing.contains(".zdb/") {
+            let content = if existing.is_empty() {
+                ".zdb/\n".to_string()
+            } else {
+                format!("{existing}\n.zdb/\n")
+            };
+            std::fs::write(&gitignore_path, content)?;
+        }
+
+        // Write format version file
+        std::fs::write(path.join(VERSION_FILE), CURRENT_FORMAT_VERSION.to_string())?;
+
+        // Write default repo config
+        let default_config = RepoConfig::default();
+        let config_toml = toml::to_string_pretty(&default_config)
+            .map_err(|e| ZettelError::Toml(e.to_string()))?;
+        std::fs::write(path.join(CONFIG_FILE), &config_toml)?;
+
+        // Stage everything and create initial commit
+        git_repo.commit_all("init: zettelkasten repository")?;
+
+        Ok(git_repo)
+```
+
+`init()` creates the directory layout: `zettelkasten/` for zettels, `reference/` for attachments, `.nodes/` for sync node configs, `.crdt/temp/` for temporary Automerge documents. The `.zdb/` directory (SQLite index) is gitignored — it's a derived cache.
+
+A `.zetteldb-version` file tracks the on-disk format version. On `open()`, the driver checks this version: if the repo is newer, it rejects it; if older, it auto-migrates.
+
+### Commits and Reads
+
+Every mutation goes through `commit_files()` — write to disk, stage, commit:
+
+```bash
+sed -n '174,204p' zdb-core/src/git_ops.rs
+```
+
+```rust
+    /// Write a file, stage it, and commit.
+    pub fn commit_file(&self, rel_path: &str, content: &str, message: &str) -> Result<CommitHash> {
+        self.commit_files(&[(rel_path, content)], message)
+    }
+
+    /// Write multiple files, stage them, and commit.
+    #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
+    pub fn commit_files(&self, files: &[(&str, &str)], message: &str) -> Result<CommitHash> {
+        for (rel_path, content) in files {
+            let full_path = self.path.join(rel_path);
+            if let Some(parent) = full_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&full_path, content)?;
+        }
+
+        let mut index = self.repo.index()?;
+        for (rel_path, _) in files {
+            index.add_path(Path::new(rel_path))?;
+        }
+        index.write()?;
+        let tree_oid = index.write_tree()?;
+        let tree = self.repo.find_tree(tree_oid)?;
+        let sig = self.signature()?;
+
+        let parent = self.head_commit()
+            .ok_or_else(|| ZettelError::Git("repo has no initial commit".into()))?;
+        let oid = self.repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
+        self.write_commit_graph();
+        Ok(CommitHash(oid.to_string()))
+    }
+```
+
+After each commit, `write_commit_graph()` calls `git commit-graph write --reachable` to speed up future merge-base calculations. Reads always go through the HEAD tree (not the working directory), keeping the git object database as the single source of truth:
+
+```bash
+sed -n '445,457p' zdb-core/src/git_ops.rs
+```
+
+```rust
+    /// Read file content from HEAD tree.
+    #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
+    pub fn read_file(&self, rel_path: &str) -> Result<String> {
+        let head = self.repo.head()?.peel_to_commit()?;
+        let tree = head.tree()?;
+        let entry = tree.get_path(Path::new(rel_path))
+            .map_err(|_| ZettelError::NotFound(rel_path.to_string()))?;
+        let blob = self.repo.find_blob(entry.id())
+            .map_err(|_| ZettelError::NotFound(rel_path.to_string()))?;
+        let content = std::str::from_utf8(blob.content())
+            .map_err(|e| ZettelError::Parse(e.to_string()))?;
+        Ok(content.to_string())
+    }
+```
+
+### Path Validation
+
+All file I/O in `git_ops.rs` passes through `validate_path()` before touching the filesystem. This guards against three attack vectors: absolute paths (which would replace the base in `Path::join`), symlink dereferencing (a symlink under `zettelkasten/` pointing outside the repo), and path traversal (`../` components escaping the repo root).
+
+```bash
+sed -n '20,50p' zdb-core/src/git_ops.rs
+```
+
+```rust
+/// Reject symlinks, absolute paths, and paths that escape the repository root.
+///
+/// Works for both existing and not-yet-created paths:
+/// 1. Rejects absolute paths (which would replace the base in `Path::join`).
+/// 2. Component check catches `..` traversal regardless of file existence.
+/// 3. For paths that exist on disk, also rejects symlinks and verifies
+///    the canonical path stays within the repo root.
+fn validate_path(repo_root: &Path, relative: &str) -> Result<()> {
+    let rel = Path::new(relative);
+    if rel.is_absolute() {
+        return Err(ZettelError::InvalidPath(format!(
+            "absolute paths not allowed: {relative}"
+        )));
+    }
+    for component in rel.components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            return Err(ZettelError::InvalidPath(format!(
+                "path escapes repository root: {relative}"
+            )));
+        }
+    }
+
+    let full = repo_root.join(relative);
+    if let Ok(meta) = full.symlink_metadata() {
+        if meta.file_type().is_symlink() {
+            return Err(ZettelError::InvalidPath(format!(
+                "symlinks not allowed: {relative}"
+            )));
+        }
+        let canonical = full.canonicalize()?;
+        let root_canonical = repo_root.canonicalize()?;
+        if !canonical.starts_with(&root_canonical) {
+            return Err(ZettelError::InvalidPath(format!(
+                "path escapes repository root: {relative}"
+            )));
+        }
+    }
+
+    Ok(())
+}
+```
+
+The function has three layers of defense. First, it rejects absolute paths outright — in Rust, `Path::join` with an absolute path replaces the base entirely, which would bypass all subsequent checks. Second, a path-component scan rejects any `..` segments — this works even for paths that don't exist on disk yet (new file writes, git tree reads). Third, for paths that already exist on the filesystem, it checks `symlink_metadata()` to reject symlinks and `canonicalize()` to verify the resolved path stays under the repo root.
+
+Every public method that performs file I/O calls `validate_path` before proceeding: `read_file`, `commit_file`, `commit_files`, `commit_binary_file`, `commit_binary_and_text`, `commit_merge`, `commit_batch`, `delete_file`, and `delete_files`. The `InvalidPath` error variant surfaces through the FFI layer as a `Validation` error and through the REST/GraphQL layer as a `400 Bad Request`.
+
+### Merging
+
+The `merge_remote()` method handles three-way merges when syncing:
+
+```bash
+sed -n '285,343p' zdb-core/src/git_ops.rs
+```
+
+```rust
+    /// Merge a fetched remote branch, returning the merge result.
+    #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
+    pub fn merge_remote(&self, remote: &str, branch: &str) -> Result<MergeResult> {
+        let fetch_head_ref = format!("refs/remotes/{remote}/{branch}");
+        let reference = self.repo.find_reference(&fetch_head_ref)
+            .map_err(|_| ZettelError::NotFound(fetch_head_ref.clone()))?;
+        let annotated = self.repo.reference_to_annotated_commit(&reference)?;
+
+        let (analysis, _pref) = self.repo.merge_analysis(&[&annotated])?;
+
+        if analysis.is_up_to_date() {
+            return Ok(MergeResult::AlreadyUpToDate);
+        }
+
+        if analysis.is_fast_forward() {
+            let target_oid = annotated.id();
+            let mut reference = self.repo.find_reference("refs/heads/master")
+                .or_else(|_| self.repo.find_reference("HEAD"))?;
+            reference.set_target(target_oid, "fast-forward")?;
+            self.repo.set_head("refs/heads/master")?;
+            self.repo.checkout_head(Some(
+                git2::build::CheckoutBuilder::new().force(),
+            ))?;
+            self.write_commit_graph();
+            return Ok(MergeResult::FastForward(CommitHash(target_oid.to_string())));
+        }
+
+        // Normal merge
+        let their_commit = self.repo.find_commit(annotated.id())?;
+        let our_commit = self.head_commit().ok_or_else(|| ZettelError::Parse("no HEAD".into()))?;
+        let _ancestor = self.repo.merge_base(our_commit.id(), their_commit.id())?;
+
+        let mut merge_index = self.repo.merge_commits(&our_commit, &their_commit, None)?;
+
+        if merge_index.has_conflicts() {
+            let conflicts = self.extract_conflicts(&merge_index, &our_commit, &their_commit)?;
+            // Clean up merge state
+            self.repo.cleanup_state()?;
+            return Ok(MergeResult::Conflicts(conflicts, CommitHash(their_commit.id().to_string())));
+        }
+
+        // Clean merge — write tree and commit
+        let tree_oid = merge_index.write_tree_to(&self.repo)?;
+        let tree = self.repo.find_tree(tree_oid)?;
+        let sig = self.signature()?;
+        let oid = self.repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            &format!("merge {remote}/{branch}"),
+            &tree,
+            &[&our_commit, &their_commit],
+        )?;
+        self.repo.checkout_head(Some(
+            git2::build::CheckoutBuilder::new().force(),
+        ))?;
+        self.write_commit_graph();
+        Ok(MergeResult::Clean(CommitHash(oid.to_string())))
+    }
+```
+
+The merge follows standard git semantics: up-to-date → fast-forward → 3-way merge. Conflicts are extracted with full content for all three sides (ancestor, ours, theirs) and passed upstream to the CRDT resolver. Git merge state is cleaned up immediately after extracting conflicts — the CRDT layer handles resolution, not git.
+
+`extract_conflicts()` also populates each `ConflictFile`'s `ours_hlc` and `theirs_hlc` by calling `find_hlc_for_path()`, which walks commit ancestry to find the most recent commit touching each path and extracts the HLC trailer. This enables accurate LWW fallback when CRDT resolution fails.
+
+`find_hlc_for_path()` is hardened against bad commits: if `find_commit()`, `tree()`, or `diff_tree_to_tree()` fails mid-walk, the error is logged and the commit is skipped rather than aborting the search. A depth limit of 100 commits bounds the walk to prevent pathological slowdowns on large histories; when exceeded, `None` is returned with a warning.
+
+`GitRepo` implements both `ZettelSource` and `ZettelStore` traits, delegating directly to the inherent methods.
+
+## 7. Hybrid Logical Clock — `zdb-core/src/hlc.rs`
+
+The HLC provides causally-ordered timestamps across distributed nodes. It combines a wall clock, a logical counter, and a node ID:
+
+```bash
+sed -n '1,72p' zdb-core/src/hlc.rs
+```
+
+```rust
+use std::cmp::Ordering;
+use std::fmt;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::error::{Result, ZettelError};
+
+/// Hybrid Logical Clock — combines wall clock, logical counter, and node ID
+/// for causally-ordered, conflict-free timestamps across distributed nodes.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct Hlc {
+    pub wall_ms: u64,
+    pub counter: u32,
+    pub node: String, // first 8 chars of node UUID
+}
+
+impl Hlc {
+    /// Tick the clock for a local event.
+    pub fn now(node_id: &str, last: &Option<Hlc>) -> Hlc {
+        let wall = wall_clock_ms();
+        let node = truncate_node(node_id);
+
+        match last {
+            Some(prev) => {
+                if wall > prev.wall_ms {
+                    Hlc { wall_ms: wall, counter: 0, node }
+                } else {
+                    Hlc { wall_ms: prev.wall_ms, counter: prev.counter + 1, node }
+                }
+            }
+            None => Hlc { wall_ms: wall, counter: 0, node },
+        }
+    }
+
+    /// Merge on receive: take max(local, remote, wall) and bump counter if tied.
+    pub fn recv(node_id: &str, local_last: &Option<Hlc>, remote: &Hlc) -> Hlc {
+        let wall = wall_clock_ms();
+        let node = truncate_node(node_id);
+
+        let local_wall = local_last.as_ref().map(|h| h.wall_ms).unwrap_or(0);
+        let local_counter = local_last.as_ref().map(|h| h.counter).unwrap_or(0);
+
+        let max_wall = wall.max(local_wall).max(remote.wall_ms);
+
+        let counter = if max_wall == local_wall && max_wall == remote.wall_ms {
+            local_counter.max(remote.counter) + 1
+        } else if max_wall == local_wall {
+            local_counter + 1
+        } else if max_wall == remote.wall_ms {
+            remote.counter + 1
+        } else {
+            // wall clock is strictly ahead
+            0
+        };
+
+        Hlc { wall_ms: max_wall, counter, node }
+    }
+
+    /// Parse from sortable string format: `{wall_ms}-{counter:04}-{node}`.
+    pub fn parse(s: &str) -> Result<Hlc> {
+        let parts: Vec<&str> = s.splitn(3, '-').collect();
+        if parts.len() != 3 {
+            return Err(ZettelError::Parse(format!("invalid HLC: {s}")));
+        }
+        let wall_ms = parts[0]
+            .parse::<u64>()
+            .map_err(|e| ZettelError::Parse(format!("bad HLC wall_ms: {e}")))?;
+        let counter = parts[1]
+            .parse::<u32>()
+            .map_err(|e| ZettelError::Parse(format!("bad HLC counter: {e}")))?;
+        let node = parts[2].to_string();
+        Ok(Hlc { wall_ms, counter, node })
+    }
+```
+
+**`now()`** ticks for local events. If wall clock advanced, reset counter to 0. If not (multiple events within 1ms), increment the counter from the last HLC.
+
+**`recv()`** merges on receiving a remote HLC. Takes `max(wall_clock, local_last, remote)` and bumps the counter when wall times tie.
+
+**Ordering** is `wall_ms → counter → node`, giving total order. The string format (`1709000000000-0042-abcd1234`) is lexicographically sortable.
+
+HLC timestamps are embedded in git commit messages as trailers (`HLC: 1709000000000-0001-abcd1234`) and extracted during conflict resolution to enable the Last-Writer-Wins strategy.
+
+## 8. CRDT Conflict Resolution — `zdb-core/src/crdt_resolver.rs`
+
+This is the heart of the decentralized merge. Three strategies are available, each suited to different zettel types.
+
+### Strategy 1: Default (Automerge per-zone)
+
+The default strategy resolves each zone independently:
+
+```bash
+sed -n '16,81p' zdb-core/src/crdt_resolver.rs
+```
+
+```rust
+/// Resolve all conflict files using per-zone CRDT merge strategies.
+/// If `crdt_strategy` is set to something other than `preset:default`, a warning is logged
+/// since only the default strategy is currently implemented.
+#[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
+pub fn resolve_conflicts(
+    conflicts: Vec<ConflictFile>,
+    crdt_strategy: Option<&str>,
+) -> Result<Vec<ResolvedFile>> {
+    if let Some(strategy) = crdt_strategy {
+        match strategy {
+            "preset:default" => {}
+            "preset:last-writer-wins" => return resolve_lww(conflicts),
+            "preset:append-log" => return resolve_append_log(conflicts),
+            other => {
+                tracing::warn!(
+                    "crdt_strategy '{}' not recognized; using default",
+                    other
+                );
+            }
+        }
+    }
+
+    let mut resolved = Vec::new();
+
+    for conflict in conflicts {
+        let ancestor_content = conflict.ancestor.as_deref().unwrap_or("");
+
+        let ancestor = parse_zones(ancestor_content)?;
+        let ours = parse_zones(&conflict.ours)?;
+        let theirs = parse_zones(&conflict.theirs)?;
+
+        let merged_fm = merge_frontmatter(
+            &ancestor.raw_frontmatter,
+            &ours.raw_frontmatter,
+            &theirs.raw_frontmatter,
+        )?;
+        let merged_body = merge_body(&ancestor.body, &ours.body, &theirs.body)?;
+        let merged_ref = merge_reference(
+            &ancestor.reference_section,
+            &ours.reference_section,
+            &theirs.reference_section,
+        )?;
+
+        // Reassemble via parser
+        let meta = parser::parse_frontmatter(&merged_fm, &conflict.path)?;
+        let inline_fields = parser::extract_inline_fields(&merged_body, &merged_ref)?;
+        let wikilinks = parser::extract_wikilinks(&merged_fm, &merged_body, &merged_ref);
+
+        let parsed = crate::types::ParsedZettel {
+            meta,
+            body: merged_body,
+            reference_section: merged_ref,
+            inline_fields,
+            wikilinks,
+            path: conflict.path.clone(),
+        };
+
+        let content = parser::serialize(&parsed);
+        resolved.push(ResolvedFile {
+            path: conflict.path,
+            content,
+        });
+    }
+
+    Ok(resolved)
+}
+```
+
+Each conflict file is split into three zones, then each zone is merged independently:
+
+- **Frontmatter**: Scalar fields via Automerge Map CRDT (fork → diff → merge). List fields (like `tags`) via three-way set merge (ancestor + additions - removals).
+- **Body**: Automerge Text CRDT with character-level diffs using the `similar` crate.
+- **Reference**: Automerge List CRDT at line level, sorted and deduped on output.
+
+The three merged zones are reassembled into a valid `ParsedZettel` and serialized back to markdown.
+
+### Frontmatter merge detail:
+
+```bash
+sed -n '101,151p' zdb-core/src/crdt_resolver.rs
+```
+
+```rust
+/// Merge YAML frontmatter at field granularity.
+/// Scalar fields use Automerge Map CRDT. List fields (e.g. tags) use three-way set merge.
+#[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
+pub fn merge_frontmatter(ancestor: &str, ours: &str, theirs: &str) -> Result<String> {
+    let ancestor_map = yaml_to_map(ancestor)?;
+    let ours_map = yaml_to_map(ours)?;
+    let theirs_map = yaml_to_map(theirs)?;
+
+    // Partition into scalars and lists
+    let (ancestor_scalars, ancestor_lists) = partition_fm(&ancestor_map);
+    let (ours_scalars, ours_lists) = partition_fm(&ours_map);
+    let (theirs_scalars, theirs_lists) = partition_fm(&theirs_map);
+
+    // Merge scalars via Automerge Map CRDT
+    let mut doc = AutoCommit::new();
+    let map_id = doc.put_object(automerge::ROOT, "frontmatter", ObjType::Map)?;
+    for (k, v) in &ancestor_scalars {
+        doc.put(&map_id, k.as_str(), v.as_str())?;
+    }
+
+    let mut doc_ours = doc.fork();
+    let ours_map_id = doc_ours.get(&automerge::ROOT, "frontmatter")?
+        .map(|(_, id)| id)
+        .ok_or_else(|| ZettelError::Parse("missing frontmatter map".into()))?;
+    apply_scalar_diff(&mut doc_ours, &ours_map_id, &ancestor_scalars, &ours_scalars)?;
+
+    let mut doc_theirs = doc.fork();
+    let theirs_map_id = doc_theirs.get(&automerge::ROOT, "frontmatter")?
+        .map(|(_, id)| id)
+        .ok_or_else(|| ZettelError::Parse("missing frontmatter map".into()))?;
+    apply_scalar_diff(&mut doc_theirs, &theirs_map_id, &ancestor_scalars, &theirs_scalars)?;
+
+    doc_ours.merge(&mut doc_theirs)?;
+
+    let merged_map_id = doc_ours.get(&automerge::ROOT, "frontmatter")?
+        .map(|(_, id)| id)
+        .ok_or_else(|| ZettelError::Parse("missing frontmatter map after merge".into()))?;
+
+    let mut merged = BTreeMap::new();
+    for key in doc_ours.keys(&merged_map_id) {
+        if let Some((value, _)) = doc_ours.get(&merged_map_id, key.as_str())? {
+            merged.insert(key, FmValue::Scalar(value.to_string()));
+        }
+    }
+
+    // Merge lists via three-way set merge
+    for (k, v) in merge_list_fields(&ancestor_lists, &ours_lists, &theirs_lists) {
+        merged.insert(k, v);
+    }
+
+    Ok(map_to_yaml(&merged))
+```
+
+The Automerge pattern is fork → apply diffs → merge. Starting from the ancestor state, both "ours" and "theirs" diffs are applied to separate forks, then merged. Automerge handles the convergence deterministically.
+
+For list fields like `tags`, a custom three-way set merge preserves order: start with ancestor set, add items introduced by each side, remove items deleted by each side.
+
+### Strategy 2: Last-Writer-Wins (LWW)
+
+The simplest strategy — compare HLC timestamps, pick the winner:
+
+```bash
+sed -n '482,510p' zdb-core/src/crdt_resolver.rs
+```
+
+```rust
+/// Resolve conflicts using Last-Writer-Wins by HLC comparison.
+/// Higher HLC wins. Tie-break: higher node string wins.
+/// If no HLC available, falls back to "ours".
+pub fn resolve_lww(conflicts: Vec<ConflictFile>) -> Result<Vec<ResolvedFile>> {
+    let mut resolved = Vec::new();
+    for conflict in conflicts {
+        let content = pick_lww_winner(&conflict);
+        resolved.push(ResolvedFile {
+            path: conflict.path,
+            content,
+        });
+    }
+    Ok(resolved)
+}
+
+/// Pick the winner based on HLC comparison.
+fn pick_lww_winner(conflict: &ConflictFile) -> String {
+    match (&conflict.ours_hlc, &conflict.theirs_hlc) {
+        (Some(ours_hlc), Some(theirs_hlc)) => {
+            if theirs_hlc > ours_hlc {
+                conflict.theirs.clone()
+            } else {
+                conflict.ours.clone()
+            }
+        }
+        // No HLC available — fallback to ours
+        _ => conflict.ours.clone(),
+    }
+}
+```
+
+LWW is whole-file — no per-zone merging. Higher HLC wins. Tie-break by node string (deterministic). Without HLC data, "ours" wins. This is the fallback when the default CRDT merge produces invalid output.
+
+### Strategy 3: Append-Log
+
+For project/journal zettels with temporal log sections (`## Log` followed by `- [x] 2026-01-01 Did thing`), entries from both sides are unioned, deduped, and sorted chronologically. Non-log body sections still use the text CRDT. Frontmatter and references use the same merge as the default strategy.
+
+## 9. SQLite Indexer — `zdb-core/src/indexer.rs`
+
+The index is a derived SQLite database (`~/.zdb/index.db`) providing fast queries. It's always rebuildable from git. The schema:
+
+```bash
+sed -n '17,83p' zdb-core/src/indexer.rs
+```
+
+```rust
+pub struct Index {
+    pub(crate) conn: Connection,
+}
+
+impl Index {
+    /// Open (or create) the SQLite index database.
+    pub fn open(path: &Path) -> Result<Self> {
+        let conn = Connection::open(path)?;
+        conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS zettels (
+                id TEXT PRIMARY KEY,
+                title TEXT,
+                date TEXT,
+                type TEXT,
+                path TEXT UNIQUE NOT NULL,
+                body TEXT,
+                updated_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS _zdb_tags (
+                zettel_id TEXT NOT NULL REFERENCES zettels(id),
+                tag TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_zdb_tags_tag ON _zdb_tags(tag);
+
+            CREATE TABLE IF NOT EXISTS _zdb_fields (
+                zettel_id TEXT NOT NULL REFERENCES zettels(id),
+                key TEXT NOT NULL,
+                value TEXT,
+                zone TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_zdb_fields_key ON _zdb_fields(key);
+
+            CREATE TABLE IF NOT EXISTS _zdb_links (
+                source_id TEXT NOT NULL REFERENCES zettels(id),
+                target_path TEXT NOT NULL,
+                display TEXT,
+                zone TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_zdb_links_target ON _zdb_links(target_path);
+
+            CREATE TABLE IF NOT EXISTS _zdb_aliases (
+                zettel_id TEXT NOT NULL REFERENCES zettels(id),
+                alias TEXT COLLATE NOCASE NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_zdb_aliases_alias ON _zdb_aliases(alias);
+
+            CREATE TABLE IF NOT EXISTS _zdb_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+
+            CREATE VIRTUAL TABLE IF NOT EXISTS _zdb_fts USING fts5(
+                title, body, tags,
+                tokenize = 'porter unicode61'
+            );",
+        )?;
+
+        Ok(Self { conn })
+    }
+
+    /// Upsert a single parsed zettel into the index.
+    #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
+    pub fn index_zettel(&self, zettel: &ParsedZettel) -> Result<()> {
+        let id = zettel.meta.id.as_ref().map(|z| z.0.as_str()).unwrap_or("");
+```
+
+Six tables:
+- **zettels** — core metadata (id, title, date, type, path, body)
+- **_zdb_tags** — normalized tag-to-zettel mapping
+- **_zdb_fields** — inline fields (key, value, zone) plus scalar frontmatter extras (String, Number, Bool) with `zone = 'Frontmatter'`
+- **_zdb_links** — wikilinks (source, target, display text, zone)
+- **_zdb_aliases** — alternative names for zettels (title, aliases from fields)
+- **_zdb_fts** — FTS5 virtual table (porter stemmer + unicode61 tokenizer)
+
+WAL mode is enabled for concurrent read/write. The `_zdb_meta` table tracks the HEAD commit hash for staleness detection.
+
+### Index Rebuild
+
+`rebuild()` walks every zettel in git, parses it, and upserts into SQLite. It also materializes typed tables and infers schemas:
+
+```bash
+grep -n 'pub fn rebuild\b' zdb-core/src/indexer.rs
+```
+
+```rust
+275:    pub fn rebuild(&self, repo: &impl ZettelSource) -> Result<crate::types::RebuildReport> {
+```
+
+```bash
+sed -n '275,325p' zdb-core/src/indexer.rs
+```
+
+```rust
+    pub fn rebuild(&self, repo: &impl ZettelSource) -> Result<crate::types::RebuildReport> {
+        tracing::info!("rebuild_triggered");
+        let paths = repo.list_zettels()?;
+        let mut report = crate::types::RebuildReport::default();
+
+        // Phase 1: index all zettels
+        for path in &paths {
+            let content = repo.read_file(path)?;
+            let parsed = crate::parser::parse(&content, path)?;
+            self.index_zettel(&parsed)?;
+            report.indexed += 1;
+        }
+
+        // Phase 2: collect consistency warnings
+        report.warnings = self.collect_consistency_warnings(repo);
+
+        // Phase 3: materialize typed tables using merged schemas
+        let mat_report = self.materialize_all_types(repo)?;
+        report.tables_materialized = mat_report.0;
+        report.types_inferred = mat_report.1;
+
+        let head = repo.head_oid()?.to_string();
+        self.conn.execute(
+            "INSERT OR REPLACE INTO _zdb_meta (key, value) VALUES ('head', ?1)",
+            params![head],
+        )?;
+
+        tracing::info!(
+            indexed = report.indexed,
+            tables = report.tables_materialized,
+            warnings = report.warnings.len(),
+            "rebuild_complete"
+        );
+
+        Ok(report)
+    }
+
+    /// Materialize SQLite tables for all typed zettels using merged schemas.
+    /// Returns (tables_materialized, types_inferred).
+    pub fn materialize_all_types(&self, repo: &impl ZettelSource) -> Result<(usize, Vec<String>)> {
+        let mut tables_materialized = 0;
+        let mut types_inferred = Vec::new();
+
+        // Load explicit _typedef schemas
+        let typedef_schemas = self.load_all_typedefs(repo);
+
+        // Find all distinct types (excluding _typedef and empty)
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT type FROM zettels WHERE type != '_typedef' AND type != '' AND type IS NOT NULL",
+        )?;
+        let type_names: Vec<String> = stmt
+```
+
+Rebuild runs in three phases:
+
+1. **Index all zettels** — parse each .md file and upsert into all six tables
+2. **Consistency warnings** — detect malformed YAML, cross-zone duplicates, missing required fields
+3. **Materialize typed tables** — create a SQLite table for each zettel type (e.g. `project`, `contact`) with columns derived from _typedef zettels or inferred from existing data. Column names are normalized to lowercase during inference since SQLite column names are case-insensitive; this prevents duplicate column errors from case-variant frontmatter keys (e.g. `xP` and `xp`)
+
+The HEAD commit hash is stored in `_zdb_meta` so subsequent operations can detect when the index is stale (HEAD changed without reindex). `rebuild_if_stale()` checks this before reads.
+
+### Incremental Reindex
+
+When the stored HEAD exists and is reachable, `rebuild_if_stale()` uses `incremental_reindex` instead of a full rebuild. This diffs the old HEAD tree against the new HEAD tree using `git2::diff_tree_to_tree` (via `ZettelSource::diff_paths`) and only processes changed files:
+
+- **Added/Modified**: read, parse, and upsert into SQLite
+- **Deleted**: remove from the index
+- **`_typedef` change**: triggers full `materialize_all_types` (schema changes affect table structure)
+
+If the diff fails (e.g. old HEAD was garbage-collected), it falls back to a full rebuild. At 1K zettels with 1 change, incremental reindex takes ~1ms vs ~200ms for a full rebuild.
+
+### Full-Text Search
+
+FTS5 with porter stemmer and unicode61 tokenizer enables natural language search. The primary entry point is `search_paginated`, which supports `LIMIT`/`OFFSET` pagination and returns a total count alongside results:
+
+```rust
+pub struct PaginatedSearchResult {
+    pub hits: Vec<SearchResult>,
+    pub total_count: usize,
+}
+```
+
+The implementation runs two queries: the paginated FTS5 `MATCH` with `LIMIT ?2 OFFSET ?3`, and a `SELECT COUNT(*)` with the same match for total count. The convenience method `search()` delegates to `search_paginated(query, usize::MAX, 0)` and returns just the hits.
+
+The FTS5 `MATCH` query handles boolean operators, phrase matching, and prefix queries. `snippet()` generates search result excerpts with `<b>` highlights. Results are ranked by BM25.
+
+The GraphQL `search` field returns a `SearchConnection { hits, totalCount }` and accepts optional `limit` (default 20) and `offset` (default 0) arguments. The CLI `zdb search` exposes `--limit` and `--offset` flags with a "Showing X-Y of Z results" header.
+
+## 10. SQL Engine — `zdb-core/src/sql_engine.rs`
+
+The SQL engine translates standard SQL into zettel operations. This is what makes ZettelDB feel like a database — you can create zettel types with `CREATE TABLE` and manipulate them with `INSERT`, `UPDATE`, `DELETE`, and `SELECT`:
+
+```bash
+sed -n '1,35p' zdb-core/src/sql_engine.rs
+```
+
+```rust
+use rusqlite::params;
+use sqlparser::ast::{
+    AssignmentTarget, ColumnOption, DataType, Expr, FromTable, SetExpr, Statement,
+    Value as SqlValue,
+};
+use sqlparser::dialect::GenericDialect;
+use sqlparser::parser::Parser;
+use std::collections::BTreeMap;
+
+use crate::error::{Result, ZettelError};
+use crate::indexer::Index;
+use crate::traits::ZettelStore;
+use crate::parser;
+use crate::types::{
+    ColumnDef, InlineField, ParsedZettel, TableSchema, Value, WikiLink, ZettelId, ZettelMeta, Zone,
+};
+
+#[derive(Debug)]
+pub enum SqlResult {
+    Rows { columns: Vec<String>, rows: Vec<Vec<String>> },
+    Affected(usize),
+    Ok(String),
+}
+
+pub struct SqlEngine<'a> {
+    index: &'a Index,
+    repo: &'a dyn ZettelStore,
+    txn: Option<TransactionBuffer>,
+}
+
+/// Reserved table names that cannot be used for CREATE TABLE.
+fn is_reserved_table(name: &str) -> bool {
+    name == "zettels"
+        || name.starts_with("_zdb_")
+        || name.starts_with("sqlite_")
+}
+```
+
+Two entry points:
+
+- `execute(sql)` — single-statement convenience, delegates to `execute_batch`
+- `execute_batch(sql)` — parses multiple semicolon-separated statements via `sqlparser`, executes sequentially
+
+Statement dispatch in `execute_statement`:
+
+```rust
+match stmt {
+    Statement::CreateTable(ct) => self.handle_create_table(ct),
+    Statement::Insert(ins) => self.handle_insert(ins),
+    Statement::Update { from: Some(_), .. } => /* reject UPDATE...FROM */,
+    Statement::Update { .. } => self.handle_update(table, assignments, selection),
+    Statement::Delete(del) => self.handle_delete(del),
+    Statement::AlterTable { .. } => self.handle_alter_table(name, operations),
+    Statement::Drop { object_type: Index|View, .. } => /* reject */,
+    Statement::Drop { .. } => self.handle_drop(object_type, if_exists, names, cascade),
+    Statement::CreateIndex(_) | CreateView { .. } | CreateVirtualTable { .. }
+        | CreateTrigger { .. } | AlterIndex { .. } => /* reject */,
+    Statement::StartTransaction { .. } => self.handle_begin(),
+    Statement::Commit { .. } => self.handle_commit(),
+    Statement::Rollback { .. } => self.handle_rollback(),
+    _ => /* pass through to SQLite */,
+}
+```
+
+The SQL engine uses `sqlparser` to parse SQL ASTs, then dispatches:
+
+- **CREATE TABLE** → creates a `_typedef` zettel defining the schema, then materializes the corresponding SQLite table
+- **INSERT** → creates a new zettel of the table's type with the specified field values; rejects `OR REPLACE`, `REPLACE INTO`, and `ON CONFLICT` modifiers (they bypass git)
+- **UPDATE** → fast path for `WHERE id = '...'` (single zettel); bulk path delegates WHERE to SQLite via `resolve_matching_ids`, applies changes in batch; rejects `UPDATE...FROM` (ambiguous join-to-document mapping)
+- **DELETE** → fast path for `WHERE id = '...'`; bulk path resolves matching rows via SQLite, deletes in batch via `delete_files`
+- **ALTER TABLE** → ADD/DROP COLUMN modifies typedef and rematerializes; RENAME COLUMN rewrites typedef + all data zettels in a single commit
+- **DROP TABLE** → without CASCADE strips `type:` from data zettels; with CASCADE deletes all; IF EXISTS is a no-op when missing
+- **CREATE INDEX / VIEW / VIRTUAL TABLE / TRIGGER, ALTER INDEX, DROP INDEX / VIEW** → explicitly rejected with descriptive errors (these operate only on the materialized cache and would be lost on reindex)
+- **SELECT / everything else** → passed through directly to SQLite
+
+The key insight: SQL tables are zettel types. `CREATE TABLE project (...)` creates a `_typedef` zettel that defines the `project` type's schema. `INSERT INTO project VALUES (...)` creates a new zettel with `type: project` and the specified fields in its frontmatter/body/reference section.
+
+The bulk operations pattern uses `resolve_matching_ids` to delegate WHERE evaluation to SQLite — this reconstructs the WHERE clause via sqlparser's `Display` impl, runs `SELECT id FROM {table} WHERE {clause}` against the materialized table, then resolves each ID to a file path. This avoids reimplementing SQL expression evaluation in Rust.
+
+### Transactions
+
+SqlEngine supports `BEGIN`/`COMMIT`/`ROLLBACK` to wrap multiple DML statements into a single git commit. All methods take `&mut self`.
+
+When `BEGIN` executes, a SQLite `SAVEPOINT zdb_txn` is created and a `TransactionBuffer` initialized. DML within the transaction applies to SQLite immediately (enabling read-your-writes via SELECT) but buffers git operations as `PendingWrite`/`PendingDelete` entries. On `COMMIT`, all buffered writes and deletes flush to git in a single `commit_batch` call (commit message: `"transaction"`). On `ROLLBACK`, the SQLite savepoint rolls back and the buffer is discarded.
+
+The `read_content` helper checks the transaction buffer before falling back to `repo.read_file`, enabling UPDATE of rows INSERTed within the same transaction. On COMMIT, cancelled operations (write then delete of the same path) are filtered out — this handles INSERT-then-DELETE within a transaction without touching git.
+
+`Drop for SqlEngine` automatically rolls back any active transaction, preventing dangling savepoints on panic or early return. Nested `BEGIN` is rejected with an error.
+
+The indexer methods (`index_zettel`, `remove_zettel`) use `SAVEPOINT`/`RELEASE` instead of `unchecked_transaction()` to nest correctly within the engine's savepoint.
+
+## 11. Sync Manager — `zdb-core/src/sync_manager.rs`
+
+The sync manager orchestrates multi-device sync with a cascade merge strategy:
+
+```bash
+sed -n '105,204p' zdb-core/src/sync_manager.rs
+```
+
+```rust
+    /// Full sync cycle: fetch → merge → resolve → push → update state → reindex.
+    #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
+    pub fn sync(&mut self, remote: &str, branch: &str, index: &Index) -> Result<SyncReport> {
+        tracing::info!(remote, branch, "sync_start");
+        // Fetch
+        self.repo.fetch(remote, branch)?;
+        tracing::debug!(remote, branch, "fetch_complete");
+
+        // Merge
+        let merge_result = self.repo.merge_remote(remote, branch)?;
+
+        let mut report = SyncReport {
+            direction: "bidirectional".into(),
+            commits_transferred: 0,
+            conflicts_resolved: 0,
+            resurrected: 0,
+        };
+
+        match merge_result {
+            MergeResult::AlreadyUpToDate => {
+                tracing::info!("merge_result: up-to-date");
+                report.direction = "up-to-date".into();
+            }
+            MergeResult::FastForward(_) => {
+                report.commits_transferred = 1;
+            }
+            MergeResult::Clean(oid) => {
+                report.commits_transferred = 1;
+                report.conflicts_resolved = self.validate_clean_merge_or_fallback(oid, index)?;
+            }
+            MergeResult::Conflicts(conflicts, theirs_oid) => {
+                let count = conflicts.len();
+                tracing::info!(count, "merge_result: conflicts");
+                // Separate delete-vs-edit from normal conflicts
+                let (delete_edit, normal): (Vec<_>, Vec<_>) = conflicts
+                    .into_iter()
+                    .partition(|c| c.ours.is_empty() || c.theirs.is_empty());
+
+                let mut resolved = Vec::new();
+
+                // Delete-vs-edit: edit wins, add resurrected marker
+                for conflict in &delete_edit {
+                    let surviving = if conflict.ours.is_empty() {
+                        &conflict.theirs
+                    } else {
+                        &conflict.ours
+                    };
+                    let content = add_resurrected_marker(surviving);
+                    resolved.push(crate::types::ResolvedFile {
+                        path: conflict.path.clone(),
+                        content,
+                    });
+                }
+                report.resurrected = delete_edit.len();
+                if report.resurrected > 0 {
+                    tracing::info!(count = report.resurrected, "delete_edit_resolved");
+                }
+
+                // Normal conflicts: cascade resolve
+                if !normal.is_empty() {
+                    let strategy = self.lookup_crdt_strategy_for_conflicts(&normal, index);
+                    resolved.extend(self.cascade_resolve(normal, strategy.as_deref()));
+                }
+
+                // Tick HLC for merge commit
+                let hlc = self.tick_hlc();
+                let merge_msg = crate::hlc::append_hlc_trailer(
+                    "resolve merge conflicts via CRDT",
+                    &hlc,
+                );
+
+                // Write resolved files and create merge commit with both parents
+                let files: Vec<(&str, &str)> = resolved
+                    .iter()
+                    .map(|r| (r.path.as_str(), r.content.as_str()))
+                    .collect();
+                self.repo.commit_merge(&files, &merge_msg, &theirs_oid)?;
+
+                report.conflicts_resolved = count;
+                report.commits_transferred = 1;
+            }
+        }
+
+        // Push
+        if report.direction != "up-to-date" {
+            self.repo.push(remote, branch)?;
+            tracing::debug!(remote, branch, "push_complete");
+        }
+
+        // Update sync state
+        self.update_sync_state()?;
+
+        // Push again to propagate node registry
+        self.repo.push(remote, branch)?;
+
+        // Reindex
+        index.rebuild(self.repo)?;
+
+        Ok(report)
+    }
+```
+
+The sync flow:
+
+1. **Fetch** from remote
+2. **Merge** — git's 3-way merge classifies the result
+3. **Handle conflicts**:
+   - **Delete-vs-edit**: edit wins, add `resurrected: true` to frontmatter
+   - **Normal conflicts**: run cascade resolve (CRDT → validate → LWW fallback)
+4. **Commit merge** with both parents + HLC trailer
+5. **Push** back to remote
+6. **Update sync state** (known_heads, last_sync timestamp)
+7. **Push again** to propagate node registry changes
+8. **Reindex** the local SQLite index
+
+### Cascade Merge Strategy
+
+The `cascade_resolve()` method implements a three-step fallback:
+
+```bash
+sed -n '212,249p' zdb-core/src/sync_manager.rs
+```
+
+```rust
+    fn cascade_resolve(
+        &self,
+        conflicts: Vec<ConflictFile>,
+        strategy: Option<&str>,
+    ) -> Vec<crate::types::ResolvedFile> {
+        // Step 2: CRDT
+        tracing::debug!(strategy = strategy.unwrap_or("preset:default"), "cascade_step2_crdt");
+        match crdt_resolver::resolve_conflicts(conflicts.clone(), strategy) {
+            Ok(resolved) => {
+                // Validate each resolved file
+                let all_valid = resolved.iter().all(|r| {
+                    parser::parse(&r.content, &r.path).is_ok()
+                });
+                if all_valid {
+                    return resolved;
+                }
+                tracing::warn!("CRDT resolution produced invalid output; falling back to LWW");
+            }
+            Err(e) => {
+                tracing::warn!("CRDT resolution failed ({}); falling back to LWW", e);
+            }
+        }
+
+        // Step 3: LWW by HLC
+        match crdt_resolver::resolve_lww(conflicts.clone()) {
+            Ok(resolved) => resolved,
+            Err(_) => {
+                // LWW should never fail, but if it does, ours-wins is the last resort
+                conflicts
+                    .into_iter()
+                    .map(|c| crate::types::ResolvedFile {
+                        path: c.path,
+                        content: c.ours,
+                    })
+                    .collect()
+            }
+        }
+    }
+```
+
+Three levels of fallback:
+1. **Git merge** (already happened) — handles non-conflicting changes
+2. **CRDT resolve** — per-zone Automerge merge. Validated by re-parsing the result.
+3. **LWW by HLC** — if CRDT produces invalid output, pick the winner by timestamp
+4. **Ours-wins** — absolute last resort if LWW somehow fails
+
+The strategy for each zettel type is looked up from the `_typedef` zettel's `crdt_strategy` field, or falls back to the repo config's default.
+
+## 12. Compaction — `zdb-core/src/compaction.rs`
+
+Over time, CRDT temp files accumulate in `.crdt/temp/`. Compaction cleans them up:
+
+```bash
+sed -n '209,247p' zdb-core/src/compaction.rs
+```
+
+```rust
+/// Full compaction pipeline: threshold check → shared head → cleanup → crdt doc compact → gc.
+#[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
+pub fn compact(repo: &GitRepo, sync_mgr: &SyncManager, force: bool) -> Result<CompactionReport> {
+    // Threshold check: skip if under threshold (unless forced)
+    if !force {
+        let config = repo.load_config()?;
+        let size_mb = crdt_temp_size(repo) as f64 / (1024.0 * 1024.0);
+        if size_mb < config.compaction.threshold_mb as f64 {
+            tracing::debug!(size_mb, threshold_mb = config.compaction.threshold_mb, "below_threshold_skip");
+            return Ok(CompactionReport {
+                files_removed: 0,
+                crdt_docs_compacted: 0,
+                gc_success: true,
+            });
+        }
+    }
+
+    let nodes = sync_mgr.list_nodes()?;
+    let head = shared_head(repo, &nodes)?;
+    tracing::debug!(shared_head = ?head, node_count = nodes.len(), "shared_head_computed");
+    let files_removed = cleanup_crdt_temp(repo, head)?;
+    if files_removed > 0 {
+        tracing::info!(files_removed, "crdt_temp_cleanup");
+    }
+
+    let crdt_docs_compacted = compact_crdt_docs(repo)?;
+    if crdt_docs_compacted > 0 {
+        tracing::info!(crdt_docs_compacted, "crdt_docs_compacted");
+    }
+
+    let gc_success = run_gc(&repo.path)?;
+    tracing::info!(gc_success, "gc_result");
+
+    Ok(CompactionReport {
+        files_removed,
+        crdt_docs_compacted,
+        gc_success,
+    })
+}
+```
+
+Compaction runs four steps:
+
+1. **Threshold check** — skip if `.crdt/temp/` is under the configured MB limit (default 1MB)
+2. **Shared head** — compute the greatest common ancestor commit across all active nodes. CRDT files older than this are safe to delete because all nodes have seen them.
+3. **Cleanup** — delete temp files at or before the shared head
+4. **Compact** — merge multiple Automerge documents for the same zettel into one
+5. **Git GC** — run `git gc` to reclaim space
+
+Stale and retired nodes are excluded from the shared head calculation, so an offline device doesn't block compaction forever.
+
+## 13. CLI — `zdb-cli/src/main.rs`
+
+The `zdb` binary is a thin shell over `zdb-core`. Clap provides the command structure:
+
+```bash
+sed -n '11,125p' zdb-cli/src/main.rs
+```
+
+```rust
+#[derive(Parser)]
+#[command(name = "zdb", about = "Decentralized Zettelkasten")]
+struct Cli {
+    /// Repository path (default: current directory)
+    #[arg(short, long, default_value = ".")]
+    repo: PathBuf,
+
+    /// Directory for NDJSON log files (default: stderr with env filter)
+    #[arg(long, global = true, env = "ZDB_LOG_DIR")]
+    log_dir: Option<PathBuf>,
+
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Initialize a new zettelkasten repository
+    Init {
+        /// Path to create the repository
+        path: Option<PathBuf>,
+    },
+    /// Create a new zettel
+    Create {
+        #[arg(long)]
+        title: String,
+        #[arg(long)]
+        tags: Option<String>,
+        #[arg(long, rename_all = "kebab-case")]
+        r#type: Option<String>,
+        #[arg(long)]
+        body: Option<String>,
+    },
+    /// Read a zettel by ID
+    Read {
+        /// Zettel ID
+        id: String,
+    },
+    /// Update an existing zettel
+    Update {
+        /// Zettel ID
+        id: String,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        tags: Option<String>,
+        #[arg(long, rename_all = "kebab-case")]
+        r#type: Option<String>,
+        #[arg(long)]
+        body: Option<String>,
+    },
+    /// Sync with remote
+    Sync {
+        /// Remote name
+        #[arg(default_value = "origin")]
+        remote: String,
+        /// Branch name
+        #[arg(default_value = "master")]
+        branch: String,
+    },
+    /// Execute SQL (DDL/DML routed through SQL engine; SELECT queries index)
+    Query {
+        /// SQL statement
+        sql: String,
+    },
+    /// Full-text search
+    Search {
+        /// Search query
+        query: String,
+        #[arg(long, default_value = "20")]
+        limit: usize,
+        #[arg(long, default_value = "0")]
+        offset: usize,
+    },
+    /// Register this device as a sync node
+    RegisterNode {
+        /// Device name
+        name: String,
+    },
+    /// Show repository status
+    Status,
+    /// Compact CRDT history and run git gc
+    Compact {
+        /// Force compaction even if under threshold
+        #[arg(long)]
+        force: bool,
+        /// Show what would be done without doing it
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Rebuild the search index
+    Reindex,
+    /// Type definition management
+    Type {
+        #[command(subcommand)]
+        action: TypeAction,
+    },
+    /// Node management
+    Node {
+        #[command(subcommand)]
+        action: NodeAction,
+    },
+    /// Export/import bundles for air-gapped sync
+    Bundle {
+        #[command(subcommand)]
+        action: BundleAction,
+    },
+    /// Start GraphQL API server
+    Serve {
+        #[arg(long, default_value = "2891")]
+        port: u16,
+        #[arg(long, default_value = "2892")]
+        pg_port: u16,
+        #[arg(long, default_value = "127.0.0.1")]
+        bind: String,
+        #[arg(long)]
+        playground: bool,
+    },
+}
+```
+
+Each command follows the same pattern: open repo → open index → perform operation → print result. The CLI delegates directly to `zdb-core` functions, adding only I/O formatting.
+
+The `Serve` command bootstraps a tokio runtime and launches the async server. Logging supports two modes: NDJSON to a file (for structured logging) or stderr with `RUST_LOG` env filter (for development).
+
+### Self-Update — `zdb-cli/src/updater.rs`
+
+The updater provides zero-friction binary updates from pre-built releases at `github.com/doogat/zdb`.
+
+**Auto-update flow (every command):** `main()` calls `notify_if_updated()` which reads the state file at `~/.config/zetteldb/update-check.json`. If `updated_from` is set (meaning a background auto-update replaced the binary), it prints a one-line notice and clears the flag. Then `spawn_background_check()` fires if >1h since last check — it re-execs `zdb __update-check` as a detached process that hits the GitHub releases API, and if a newer version exists, downloads + verifies + replaces the binary automatically. Zero latency impact on the actual command.
+
+**Explicit flow (`zdb update-bin`):** Synchronous fetch of latest release → semver compare → download `.tar.gz` archive → verify SHA-256 checksum → extract binary → verify `--version` output → `self_replace::self_replace()`. The `UpdateBin` variant is handled in `main()` before `run()` to avoid requiring a `--repo` path.
+
+The `__update-check` hidden subcommand exists solely as the background auto-update entry point.
+
+## 14. Server — `zdb-server/`
+
+The server exposes ZettelDB through three protocols: HTTP/GraphQL, WebSocket (for real-time events), and PostgreSQL wire protocol (pgwire).
+
+### Actor Pattern
+
+Since `GitRepo` and `Index` are not `Send` (they use `git2::Repository` and `rusqlite::Connection`), the server uses an actor pattern: a single background OS thread owns the repo and index, accepting commands via an mpsc channel:
+
+```bash
+sed -n '17,97p' zdb-server/src/actor.rs
+```
+
+```rust
+/// Commands the actor understands.
+pub enum ActorCommand {
+    GetZettel {
+        id: String,
+    },
+    ListZettels {
+        zettel_type: Option<String>,
+        tag: Option<String>,
+        backlinks_of: Option<String>,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    },
+    Search {
+        query: String,
+        limit: usize,
+        offset: usize,
+    },
+    CreateZettel {
+        title: String,
+        body: Option<String>,
+        tags: Vec<String>,
+        zettel_type: Option<String>,
+    },
+    UpdateZettel {
+        id: String,
+        title: Option<String>,
+        body: Option<String>,
+        tags: Option<Vec<String>>,
+        zettel_type: Option<String>,
+    },
+    DeleteZettel {
+        id: String,
+    },
+    ExecuteSql {
+        sql: String,
+    },
+    GetTypeSchemas,
+    GetBacklinks {
+        id: String,
+    },
+    CountZettels {
+        zettel_type: Option<String>,
+        tag: Option<String>,
+        backlinks_of: Option<String>,
+    },
+    FilteredList {
+        table_name: String,
+        where_sql: String,
+        params: Vec<rusqlite::types::Value>,
+        order_sql: Option<String>,
+        limit: Option<i64>,
+        offset: Option<i64>,
+    },
+    AggregateQuery {
+        sql: String,
+        params: Vec<rusqlite::types::Value>,
+    },
+    RunMaintenance { force: bool },
+    NoSqlGet { id: String },
+    NoSqlScanType { type_name: String },
+    NoSqlScanTag { tag: String },
+    NoSqlBacklinks { id: String },
+}
+
+/// Replies from the actor.
+pub enum ActorReply {
+    Zettel(Box<ActorResult<ParsedZettel>>),
+    ZettelList(ActorResult<Vec<ParsedZettel>>),
+    SearchResults(ActorResult<PaginatedSearchResult>),
+    SqlResult(ActorResult<SqlResult>),
+    TypeSchemas(ActorResult<Vec<TableSchema>>),
+    Backlinks(ActorResult<Vec<String>>),
+    Deleted(ActorResult<()>),
+    Count(ActorResult<i64>),
+    AggregateRow(ActorResult<Vec<String>>),
+    Maintenance(ActorResult<()>),
+    NoSqlZettel(Box<ActorResult<ParsedZettel>>),
+    NoSqlIds(ActorResult<Vec<String>>),
+}
+
+struct ActorMsg {
+    cmd: ActorCommand,
+    reply: oneshot::Sender<ActorReply>,
+}
+
+/// Async handle to the repo actor.
+#[derive(Clone)]
+pub struct ActorHandle {
+    tx: mpsc::Sender<ActorMsg>,
+    event_bus: EventBus,
+}
+
+impl ActorHandle {
+    /// Spawn the actor on a std::thread. Returns the handle for async callers.
+    pub fn spawn(repo_path: PathBuf, event_bus: EventBus) -> ActorResult<Self> {
+        // Validate repo opens before spawning
+        let _ = GitRepo::open(&repo_path)?;
+
+        let (tx, rx) = mpsc::channel::<ActorMsg>(64);
+        let bus = event_bus.clone();
+        std::thread::spawn(move || {
+            actor_loop(repo_path, rx, bus);
+        });
+        Ok(Self { tx, event_bus })
+```
+
+`ActorHandle` is `Clone + Send + Sync` — it's just an `mpsc::Sender`. Async route handlers send commands through the channel and `await` a oneshot reply. The actor thread runs a blocking loop (`rx.blocking_recv()`) processing one command at a time — no locks needed since it's single-threaded.
+
+Mutations (create, update, delete) emit events through an `EventBus` for WebSocket subscribers. When the `nosql` feature is active, the actor also dual-writes to `RedbIndex` after each mutation for O(1) key-value access.
+
+### Server Startup
+
+```bash
+cat zdb-server/src/lib.rs
+```
+
+```rust
+pub mod actor;
+pub mod auth;
+pub mod config;
+pub mod error;
+pub mod events;
+pub mod filter;
+pub mod maintenance;
+pub mod nosql_api;
+pub mod pgwire;
+pub mod reload;
+pub mod rest;
+pub mod schema;
+pub mod ws;
+
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use arc_swap::ArcSwap;
+use axum::{middleware, Extension, Router};
+use async_graphql::dynamic::Schema;
+use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
+
+use actor::ActorHandle;
+use auth::AuthToken;
+use config::ServerConfig;
+use events::EventBus;
+
+/// Run the GraphQL server.
+pub async fn run(
+    repo_path: PathBuf,
+    port: Option<u16>,
+    pg_port: Option<u16>,
+    bind: Option<&str>,
+    playground: bool,
+) -> std::io::Result<()> {
+    let cfg = ServerConfig::load(port, pg_port, bind);
+
+    // Auth
+    let token = auth::load_or_create_token(&cfg.token_file)?;
+    eprintln!("auth token: {}", cfg.token_file.display());
+
+    // Actor
+    let event_bus = EventBus::new();
+    let actor = ActorHandle::spawn(repo_path, event_bus).map_err(|e| {
+        std::io::Error::other(e.to_string())
+    })?;
+
+    // Fetch type schemas for dynamic schema generation
+    let type_schemas = actor.get_type_schemas().await.unwrap_or_default();
+    let type_count = type_schemas.len();
+
+    // Build GraphQL schema with hot-reload support (two-phase init)
+    let rest_actor = actor.clone();
+    let (reloader, shared_schema) = reload::SchemaReloader::new(actor.clone());
+    let gql_schema = match schema::build_schema(actor, type_schemas, Some(reloader.clone())) {
+        Ok(s) => s,
+        Err(e) => {
+            log::error!("failed to build initial GraphQL schema: {e}");
+            return Err(std::io::Error::other(e));
+        }
+    };
+    reloader.store_initial(gql_schema);
+
+    // Router
+    let mut app = Router::new()
+        .route("/graphql", axum::routing::post(graphql_handler))
+        .route("/ws", axum::routing::get(ws::ws_handler))
+        .nest("/rest", rest::router());
+
+    if playground {
+        let playground_token = token.clone();
+        app = app.route(
+            "/graphql",
+            axum::routing::get(move || {
+                let t = playground_token.clone();
+                async move {
+                    axum::response::Html(async_graphql::http::playground_source(
+                        async_graphql::http::GraphQLPlaygroundConfig::new("/graphql")
+                            .with_header("Authorization", &format!("Bearer {t}")),
+                    ))
+                }
+            }),
+        );
+    }
+
+    let pg_actor = rest_actor.clone();
+    let pg_token = token.clone();
+    let pg_reloader = reloader.clone();
+
+    let app = app
+        .layer(middleware::from_fn(auth::require_auth))
+        .layer(Extension(AuthToken(token)))
+        .layer(Extension(rest_actor))
+        .layer(Extension(shared_schema));
+
+    let addr = format!("{}:{}", cfg.bind, cfg.port);
+    eprintln!("listening on {addr}");
+    eprintln!("{type_count} type schema(s) loaded");
+
+    let listener = tokio::net::TcpListener::bind(&addr).await?;
+
+    let pg = pgwire::start(
+        pg_actor,
+        pg_token,
+        pg_reloader,
+        &cfg.bind,
+        cfg.pg_port,
+    );
+
+    tokio::select! {
+        r = axum::serve(listener, app) => r?,
+        r = pg => r?,
+    };
+    Ok(())
+}
+
+async fn graphql_handler(
+    Extension(schema): Extension<Arc<ArcSwap<Schema>>>,
+    req: GraphQLRequest,
+) -> GraphQLResponse {
+    let schema = schema.load();
+    schema.execute(req.into_inner()).await.into()
+}
+```
+
+Startup sequence:
+
+1. Load config from `~/.config/zetteldb/`
+2. Generate or load bearer auth token
+3. Spawn the actor thread with an EventBus (actor opens `RedbIndex` and rebuilds it at startup)
+4. Fetch `_typedef` schemas and build a dynamic GraphQL schema (`build_schema() -> Result<Schema, String>` — aborts startup on failure)
+5. Set up `SchemaReloader` backed by `arc_swap::ArcSwap` for hot-reload when types change
+6. Spawn background maintenance task if `maintenance_enabled` (default: on, interval: 1h)
+7. Mount routes: `/graphql` (POST), `/ws` (WebSocket), `/rest/*` (REST API), `/nosql/*` (NoSQL key-value)
+8. Start pgwire on a separate port (default 2892)
+9. `tokio::select!` runs both HTTP and pgwire concurrently
+
+The GraphQL schema is **dynamic** — built at runtime from `_typedef` zettels. If a user creates a `project` type with fields `status` and `deadline`, the GraphQL schema gains a `project` query type with those fields. The `SchemaReloader` uses `ArcSwap` so the schema can be atomically replaced without restarting the server.
+
+The reload loop (`SchemaReloader::reload_loop`) handles errors gracefully: if `get_type_schemas()` fails or `build_schema()` returns `Err`, the error is logged and the last-known-good schema is preserved. Invalid typedef table names (those failing `is_valid_graphql_name()`) are skipped with a warning during schema build, so one bad typedef doesn't poison the entire schema.
+
+Auth is bearer-token based. The token file lives at `~/.config/zetteldb/auth-token`. All routes pass through `require_auth` middleware.
+
+### Filtering, Sorting, and Aggregation
+
+The `filter.rs` module (883 lines) generates all the GraphQL types and SQL builders needed for rich per-type queries. It's structured in layers — shared scalar filters → per-type input generation → SQL compilation.
+
+**Shared scalar filter types** define five reusable input objects: `StringFilter`, `IntFilter`, `FloatFilter`, `BoolFilter`, and `IDFilter`. Each exposes operator fields appropriate to its type:
+
+```bash
+sed -n '10,56p' zdb-server/src/filter.rs
+```
+
+```rust
+pub fn string_filter() -> InputObject {
+    InputObject::new("StringFilter")
+        .field(InputValue::new("eq", TypeRef::named(TypeRef::STRING)))
+        .field(InputValue::new("neq", TypeRef::named(TypeRef::STRING)))
+        .field(InputValue::new("contains", TypeRef::named(TypeRef::STRING)))
+        .field(InputValue::new("startsWith", TypeRef::named(TypeRef::STRING)))
+        .field(InputValue::new("in", TypeRef::named_list(TypeRef::STRING)))
+}
+// ... int_filter(), float_filter(), bool_filter(), id_filter() follow the same pattern
+```
+
+**Per-type Where inputs** are generated from `TableSchema` columns. `build_where_input` maps each column to the matching scalar filter type and adds `_and`/`_or` fields for compound logic:
+
+```bash
+sed -n '75,89p' zdb-server/src/filter.rs
+```
+
+```rust
+pub fn build_where_input(type_name: &str, schema: &TableSchema) -> InputObject {
+    let name = format!("{type_name}Where");
+    let mut input = InputObject::new(&name);
+    for col in &schema.columns {
+        let filter_type = filter_type_for_column(col);
+        input = input.field(InputValue::new(&col.name, TypeRef::named(filter_type)));
+    }
+    input = input.field(InputValue::new("_and", TypeRef::named_list(&name)));
+    input = input.field(InputValue::new("_or", TypeRef::named_list(&name)));
+    input
+}
+```
+
+**WHERE clause compilation** in `build_where_sql` walks the GraphQL filter object recursively, emitting parameterized SQL. Column names are validated against the schema to prevent injection. `_and`/`_or` combinators produce nested `(... AND ...)` / `(... OR ...)` groups:
+
+```bash
+sed -n '334,409p' zdb-server/src/filter.rs
+```
+
+```rust
+pub fn build_where_sql(input: &GqlValue, schema: &TableSchema) -> WhereClause {
+    let mut conditions = Vec::new();
+    let mut params = Vec::new();
+    let obj = match input {
+        GqlValue::Object(obj) => obj,
+        _ => return WhereClause::empty(),
+    };
+    for (name, value) in obj {
+        match name.as_str() {
+            "_and" => { /* recursively AND sub-clauses */ }
+            "_or"  => { /* recursively OR sub-clauses */ }
+            field  => {
+                // Validate column exists, then build operator conditions
+                if schema.columns.iter().any(|c| c.name == field) {
+                    // each operator (eq, gt, contains...) adds "col OP ?" + param
+                }
+            }
+        }
+    }
+    WhereClause { sql: conditions.join(" AND "), params }
+}
+```
+
+All filter values become `?` placeholders with corresponding `rusqlite::types::Value` entries — no string interpolation touches user input.
+
+**Sorting**: `build_order_by_input` generates a `{Type}OrderBy` input where each column maps to the `SortOrder` enum (`ASC`/`DESC`). `build_order_sql` compiles this into an ORDER BY clause, validating column names against the schema.
+
+**Connection wrapper**: `build_connection_type` generates `{Type}Connection` with `items: [Type!]!` and `totalCount: Int!`. The resolver extracts these from a `GqlValue::Object` passed by the parent query. `totalCount` reflects total matching rows (ignoring `limit`/`offset`) for pagination.
+
+**Aggregation**: `build_aggregate_type` generates `{Type}Aggregate` with `count: Int!` plus `min{Col}`/`max{Col}`/`sum{Col}`/`avg{Col}` as nullable Float fields for each numeric column. `build_aggregate_sql` compiles this into `SELECT COUNT(*) AS count, MIN("col"), ... FROM "table"` with optional WHERE clause.
+
+The actor processes these through two new commands: `FilteredList` (runs parameterized `SELECT id FROM "{table}" WHERE ...` then hydrates zettels from git) and `AggregateQuery` (runs raw aggregate SQL, returns a single row of string values).
+
+## 15. Test Coverage
+
+The codebase has comprehensive tests at every level:
+
+```bash
+grep -c '#\[test\]' zdb-core/src/*.rs zdb-core/src/**/*.rs zdb-server/src/*.rs 2>/dev/null | grep -v ':0$'
+```
+
+```rust
+zdb-core/src/bundle.rs:3
+zdb-core/src/bundled_types.rs:7
+zdb-core/src/compaction.rs:9
+zdb-core/src/crdt_resolver.rs:25
+zdb-core/src/git_ops.rs:19
+zdb-core/src/hlc.rs:10
+zdb-core/src/indexer.rs:33
+zdb-core/src/nosql.rs:3
+zdb-core/src/parser.rs:31
+zdb-core/src/sql_engine.rs:15
+zdb-core/src/sync_manager.rs:10
+zdb-server/src/filter.rs:23
+zdb-server/src/pgwire.rs:2
+```
+
+```bash
+wc -l tests/smoke.sh
+```
+
+```rust
+382 tests/smoke.sh
+```
+
+```bash
+head -30 tests/smoke.sh
+```
+
+```rust
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Build and lint
+cargo clippy --workspace --quiet
+cargo build --quiet
+cargo bench --no-run --quiet 2>/dev/null
+ZDB="$(cargo metadata --format-version=1 --no-deps | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')/debug/zdb"
+
+# Work in temp directories, clean up on exit
+TMPDIR="$(mktemp -d)"
+REMOTE_DIR="$(mktemp -d)"
+NODE1_DIR="$(mktemp -d)"
+NODE2_DIR="$(mktemp -d)"
+NODE3_DIR="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR" "$REMOTE_DIR" "$NODE1_DIR" "$NODE2_DIR" "$NODE3_DIR"' EXIT
+cd "$TMPDIR"
+
+pass() { printf '  ✓ %s\n' "$1"; }
+
+echo "=== smoke test ==="
+
+pass "clippy + bench compile"
+
+# 1. init
+$ZDB init . >/dev/null
+pass "init"
+
+# 2. create zettels (no sleeps — tests cross-process ID uniqueness)
+ID1=$($ZDB create --title "First note" --tags "test,smoke" --body "Hello world")
+ID2=$($ZDB create --title "Links to first" --body "See [[$ID1]]")
+```
+
+167 unit tests across 12 modules, plus a 382-line integration smoke test with 28 sections covering the full CLI (init, CRUD, delete, search, SQL DDL/DML, type install/suggest, node list/retire, compact --dry-run), server protocols (GraphQL CRUD + expanded operations, REST API CRUD with auth and filtering, PgWire SELECT with auth rejection), multi-node sync with conflict resolution, and air-gapped bundle sync (full export/import, delta export/import).
+
+### Property-Based Tests
+
+`zdb-core/tests/property_tests.rs` uses proptest to systematically explore input spaces across three subsystems:
+
+**Parser (10K cases):** parse-serialize-parse idempotency, zone isolation (body edits don't affect frontmatter/references), no false reference boundary detection from thematic breaks.
+
+**CRDT Resolver (1K cases):** merge commutativity for non-overlapping frontmatter, body, and reference edits; frontmatter field independence (changing X doesn't affect Y); merge idempotency (identical ours/theirs → original); non-overlapping body edits both survive; concurrent reference additions produce union.
+
+**Indexer (500 cases):** sequential `index_zettel` calls produce same query results as full `rebuild`, staleness detection correct after commit change.
+
+Run with `cargo test -p zdb-core --test property_tests`. Override case count via `PROPTEST_CASES` env var (e.g. 100 for CI).
+
+## Data Flow Summary
+
+Here's how the pieces connect for the most common operations:
+
+**Create a zettel:**
+
+```
+CLI/GraphQL → parser::serialize(ParsedZettel) → git_ops::commit_file → indexer::index_zettel
+```
+
+**Read a zettel:**
+
+```
+CLI/GraphQL → indexer::resolve_path(id) → git_ops::read_file → parser::parse → ParsedZettel
+```
+
+**Search:**
+
+```
+CLI/GraphQL → indexer::search_paginated(query, limit, offset) → FTS5 MATCH + COUNT(*) → PaginatedSearchResult { hits, total_count }
+```
+
+**SQL query:**
+
+```
+CLI/GraphQL → sql_engine::execute(sql) → sqlparser AST → dispatch:
+  SELECT → indexer (SQLite passthrough)
+  INSERT → parser::serialize → git_ops::commit → indexer::index
+  CREATE TABLE → build _typedef zettel → git_ops::commit → indexer::materialize
+```
+
+**Sync:**
+
+```
+CLI → sync_manager::sync:
+  git_ops::fetch → git_ops::merge_remote → MergeResult::Conflicts?
+    → crdt_resolver::resolve_conflicts (per-zone Automerge)
+    → validate → fallback to LWW if invalid
+    → git_ops::commit_merge → git_ops::push → indexer::rebuild
+```
+
+**Incremental reindex:**
+
+```
+rebuild_if_stale → stored_head_oid (from _zdb_meta) → diff_paths(old_head, new_head)
+  → Added/Modified: read + parse + index_zettel (upsert)
+  → Deleted: remove_zettel
+  → _typedef changed? → materialize_all_types
+  → diff error? → fallback to full rebuild
+```
+
+**Compaction:**
+
+```
+CLI → compaction::compact:
+  shared_head(all active nodes) → cleanup_crdt_temp(before head)
+  → compact_crdt_docs(merge per-zettel) → git gc
+```
+
+## 16. File Attachments — `zdb-core/src/attachments.rs`
+
+The attachments module provides file attachment support for zettels. Files are stored in `reference/{zettel_id}/` within the git repo and tracked in the zettel's frontmatter `attachments` array.
+
+### Storage Model
+
+Attached files live alongside zettel Markdown files but in a separate `reference/` tree:
+
+```
+zettelkasten/20260301130000.md     # the zettel
+reference/20260301130000/photo.jpg  # its attachment
+reference/20260301130000/resume.pdf # another attachment
+```
+
+The zettel's frontmatter tracks metadata:
+
+```yaml
+attachments:
+  - name: photo.jpg
+    mime: image/jpeg
+    size: 45230
+  - name: resume.pdf
+    mime: application/pdf
+    size: 128400
+```
+
+```bash
+grep -n "pub fn\|pub struct" zdb-core/src/attachments.rs
+```
+
+```rust
+58:pub fn list_attachments(repo: &GitRepo, id: &ZettelId) -> Result<Vec<AttachmentInfo>> {
+66:pub fn attach_file(
+121:pub fn detach_file(
+```
+
+### Core API
+
+Three public functions compose git operations and frontmatter manipulation:
+
+- **`attach_file`** — writes binary file to `reference/{id}/{filename}` via `commit_binary_file`, updates the zettel's frontmatter `attachments` array, re-indexes
+- **`detach_file`** — removes the file from git via `delete_file`, strips the entry from frontmatter, re-indexes
+- **`list_attachments`** — parses the zettel's frontmatter and returns `AttachmentInfo` structs
+
+All three depend on the parser's round-trip fidelity: read zettel → parse → modify `meta.extra["attachments"]` → serialize → commit.
+
+### MIME Detection
+
+`AttachmentInfo::mime_from_filename()` maps file extensions to MIME types via a simple match expression — no external dependency. Falls back to `application/octet-stream` for unknown extensions.
+
+### Index Table
+
+The indexer creates `_zdb_attachments(zettel_id, name, mime, size, path)` and populates it during `index_zettel` from the frontmatter `attachments` array. This enables SQL queries like:
+
+```sql
+SELECT z.title, a.name, a.size FROM zettels z
+JOIN _zdb_attachments a ON a.zettel_id = z.id
+WHERE a.mime LIKE 'image/%'
+```
+
+### API Surface
+
+- **CLI**: `zdb attach <id> <file>`, `zdb detach <id> <filename>`, `zdb attachments <id>`
+- **GraphQL**: `attachFile(input: AttachFileInput!)` mutation (base64 data), `detachFile(zettelId, filename)`, `attachments` field on `Zettel` type
+- **REST**: `GET /attachments/{zettel_id}/{filename}` serves files directly with correct Content-Type
+- **FFI**: `attach_file(zettel_id, file_path)`, `detach_file(zettel_id, filename)`, `list_attachments(zettel_id)` on `ZettelDriver`
+
+## 17. Zettel Rename — `zdb-core/src/git_ops.rs` + `parser.rs` + `indexer.rs`
+
+When a zettel moves (e.g. gains a type and relocates from `zettelkasten/` to `zettelkasten/contact/`), all wikilinks across the repo pointing to the old path or bare ID must be rewritten. The rename feature spans three modules:
+
+- **parser** — `rewrite_wikilinks()` performs string-level wikilink target replacement
+- **indexer** — `backlinking_zettel_paths()` finds all zettels linking to a target
+- **git_ops** — `rename_file()` does the git mv, `rename_zettel()` orchestrates the full operation
+
+### Wikilink Rewriting
+
+The parser module provides `rewrite_wikilinks()` which replaces wikilink targets in raw file content. It matches `[[old_target]]` and `[[old_target|display]]` forms, preserving display text and YAML quoting:
+
+```bash
+sed -n '/^pub fn rewrite_wikilinks/,/^}/p' zdb-core/src/parser.rs
+```
+
+```output
+pub fn rewrite_wikilinks(content: &str, old_target: &str, new_target: &str) -> String {
+    use std::sync::OnceLock;
+    static REWRITE_RE: OnceLock<Regex> = OnceLock::new();
+    // Capture: [[target]] or [[target|display]]
+    let re = REWRITE_RE.get_or_init(|| {
+        Regex::new(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]").expect("valid regex: wikilink rewrite")
+    });
+
+    re.replace_all(content, |caps: &regex::Captures| {
+        let target = &caps[1];
+        if target == old_target {
+            match caps.get(2) {
+                Some(display) => format!("[[{}|{}]]", new_target, display.as_str()),
+                None => format!("[[{}]]", new_target),
+            }
+        } else {
+            caps[0].to_string()
+        }
+    })
+    .into_owned()
+}
+```
+
+### Backlink Path Resolution
+
+The indexer adds `backlinking_zettel_paths()` which joins `_zdb_links` with `zettels` to return both source ID and file path for each backlinking zettel:
+
+```bash
+sed -n '/pub fn backlinking_zettel_paths/,/^    }/p' zdb-core/src/indexer.rs
+```
+
+```output
+    pub fn backlinking_zettel_paths(&self, target: &str) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT l.source_id, z.path \
+             FROM _zdb_links l JOIN zettels z ON l.source_id = z.id \
+             WHERE l.target_path = ?1",
+        )?;
+        let rows = stmt.query_map(params![target], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+```
+
+### Rename Orchestration
+
+`rename_zettel()` in `git_ops.rs` ties everything together:
+
+1. Move the file via `rename_file()` (first commit)
+2. Extract bare ID from the old path
+3. Query backlinks for both old path and bare ID (wikilinks may use either form)
+4. Deduplicate, then rewrite each backlinking file using `rewrite_wikilinks()`
+5. Commit all rewritten files in a single batch (second commit)
+6. Return a `RenameReport` with updated and unresolvable file lists
+
+```bash
+sed -n '/^pub fn rename_zettel/,/^}/p' zdb-core/src/git_ops.rs
+```
+
+```output
+pub fn rename_zettel(
+    repo: &GitRepo,
+    index: &crate::indexer::Index,
+    old_path: &str,
+    new_path: &str,
+) -> Result<RenameReport> {
+    // Step 1: move the file
+    repo.rename_file(old_path, new_path, &format!("rename: {old_path} → {new_path}"))?;
+
+    // Extract the bare ID from the old path (filename without .md)
+    let old_id = Path::new(old_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+
+    // Step 2: find backlinks for both old path and bare ID
+    let mut backlinks = index.backlinking_zettel_paths(old_path)?;
+    if !old_id.is_empty() && old_id != old_path {
+        let by_id = index.backlinking_zettel_paths(old_id)?;
+        for entry in by_id {
+            if !backlinks.iter().any(|(id, _)| *id == entry.0) {
+                backlinks.push(entry);
+            }
+        }
+    }
+
+    let mut report = RenameReport::default();
+
+    if backlinks.is_empty() {
+        return Ok(report);
+    }
+
+    // Derive new target forms for rewriting
+    let new_target_for_path = new_path.trim_end_matches(".md");
+    let old_target_for_path = old_path.trim_end_matches(".md");
+
+    // Step 3: rewrite each backlinking file
+    let mut writes: Vec<(String, String)> = Vec::new();
+    for (_source_id, source_path) in &backlinks {
+        let content = repo.read_file(source_path)?;
+        let mut rewritten = content.clone();
+
+        // Rewrite path-qualified links (without .md, as wikilinks typically omit it)
+        rewritten = crate::parser::rewrite_wikilinks(&rewritten, old_target_for_path, new_target_for_path);
+
+        // Rewrite bare ID links
+        if !old_id.is_empty() {
+            rewritten = crate::parser::rewrite_wikilinks(&rewritten, old_id, new_target_for_path);
+        }
+
+        if rewritten != content {
+            writes.push((source_path.clone(), rewritten));
+            report.updated.push(source_path.clone());
+        }
+    }
+
+    // Step 4: commit all rewrites in one batch
+    if !writes.is_empty() {
+        let write_refs: Vec<(&str, &str)> = writes.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+        repo.commit_files(&write_refs, &format!("refactor: rewrite wikilinks after rename {old_path}"))?;
+    }
+
+    Ok(report)
+}
+```
+
+### CLI Command
+
+The `zdb rename <id> <new-path>` command resolves the current path from the index, calls `rename_zettel()`, and prints the report:
+
+- **`zdb rename <id> <new-path>`** — Move a zettel and rewrite all backlinks pointing to it

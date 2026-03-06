@@ -1,0 +1,353 @@
+# GraphQL Server
+
+ZettelDB exposes a GraphQL API via `zdb serve`, enabling mobile, desktop, and web clients to interact with the zettelkasten over HTTP.
+
+## Architecture
+
+```
+Client → HTTP (axum) → Bearer auth middleware → GraphQL POST /graphql
+                                               → REST /rest/*
+                                               → NoSQL /nosql/*
+                                               → WebSocket /ws (subscriptions)
+       → TCP (pgwire) → MD5 password auth ─────→ SQL simple query protocol
+                                                       ↓
+                                              ActorHandle (mpsc channel)
+                                                       ↓
+                                              Actor thread (std::thread)
+                                              owns GitRepo + Index + RedbIndex + SqlEngine
+                                              emits → EventBus (broadcast channel)
+                                                       ↓
+                                              Subscription streams (per-client filter)
+```
+
+A single actor thread owns all core resources (`GitRepo`, `Index`), satisfying the single-writer concurrency model. Both reads and writes serialize through the actor. Reads are fast (SQLite WAL mode); serialization avoids lock complexity for MVP.
+
+The actor bridges sync and async worlds: it runs on `std::thread::spawn` with `blocking_recv()`, while the HTTP layer is fully async (tokio + axum). Communication uses `tokio::sync::mpsc` for commands and `oneshot` channels for replies.
+
+## Running
+
+```bash
+zdb serve                           # default: HTTP 2891, pgwire 2892
+zdb serve --port 8080               # custom HTTP port
+zdb serve --pg-port 5432            # custom pgwire port
+zdb serve --bind 0.0.0.0            # all interfaces
+zdb serve --playground              # enable GraphQL Playground at GET /graphql
+```
+
+## Configuration
+
+Server config lives at `~/.config/zetteldb/config.toml`:
+
+```toml
+[server]
+port = 2891
+pg_port = 2892
+bind = "127.0.0.1"
+token_file = "/path/to/custom/token"  # optional
+```
+
+CLI flags (`--port`, `--pg-port`, `--bind`) override config file values.
+
+## Authentication
+
+On first start, the server generates a UUID v4 token at `~/.config/zetteldb/token` (chmod 0600 on Unix). All requests must include:
+
+```
+Authorization: Bearer <token>
+```
+
+Missing or invalid tokens return HTTP 401.
+
+## Schema
+
+The schema has two components: base types (always present) and dynamic types (generated from `_typedef` zettels at startup).
+
+### Base Types
+
+```graphql
+type Zettel {
+  id: ID!
+  title: String
+  date: String
+  type: String
+  tags: [String!]!
+  body: String!
+  path: String!
+  fields: [InlineField!]!
+  links: [Link!]!
+  attachments: [Attachment!]!
+}
+
+type Attachment { name: String!, mime: String!, size: Int!, url: String! }
+
+type InlineField { key: String!, value: String!, zone: String! }
+type Link { target: String!, display: String, zone: String! }
+type SearchHit { id: ID!, title: String!, path: String!, snippet: String!, rank: Float! }
+type SearchConnection { hits: [SearchHit!]!, totalCount: Int! }
+type TypeDef { name: String!, columns: [ColumnInfo!]!, crdtStrategy: String, templateSections: [String!]! }
+type ColumnInfo { name: String!, dataType: String!, zone: String, required: Boolean!, references: String }
+type SqlResult { rows: [String!], affected: Int, message: String }
+```
+
+Note: `SqlResult.rows` encodes each row as a JSON string to avoid nested list limitations.
+
+### Queries
+
+```graphql
+type Query {
+  zettel(id: ID!): Zettel
+  zettels(type: String, tag: String, backlinksOf: ID, limit: Int, offset: Int): [Zettel!]!
+  search(query: String!, limit: Int, offset: Int): SearchConnection!
+  typeDefs: [TypeDef!]!
+  sql(query: String!): SqlResult!
+  schemaVersion: Int!
+}
+```
+
+### Mutations
+
+```graphql
+type Mutation {
+  createZettel(input: CreateZettelInput!): Zettel!
+  updateZettel(input: UpdateZettelInput!): Zettel!
+  deleteZettel(id: ID!): Boolean!
+  executeSql(sql: String!): SqlResult!
+  attachFile(input: AttachFileInput!): Attachment!
+  detachFile(zettelId: ID!, filename: String!): Boolean!
+}
+
+input CreateZettelInput { title: String!, content: String, tags: [String!], type: String }
+input UpdateZettelInput { id: ID!, title: String, content: String, tags: [String!], type: String }
+input AttachFileInput { zettelId: ID!, filename: String!, dataBase64: String!, mime: String }
+```
+
+### Subscriptions
+
+Real-time push notifications over WebSocket using the `graphql-transport-ws` protocol.
+
+```graphql
+type Subscription {
+  zettelChanged: ZettelChangeEvent!
+  zettelCreated: Zettel!
+  zettelUpdated: Zettel!
+  zettelDeleted: ID!
+  # per-type fields (e.g. contactChanged, bookmarkChanged)
+}
+
+type ZettelChangeEvent {
+  action: String!    # "created", "updated", "deleted"
+  zettel: Zettel     # null for deletions
+  zettelId: ID!
+}
+```
+
+**WebSocket endpoint**: `ws://host:port/ws`
+
+**Authentication**: The HTTP upgrade request must include the `Authorization: Bearer <token>` header (same token as REST/GraphQL). Note: browser `WebSocket` API cannot set custom headers, so browser clients would need query-param auth or `connection_init` payload auth (not yet implemented). Native clients (UniFFI, CLI tools) can set headers on the upgrade request.
+
+**Protocol**: Clients connect using the `graphql-transport-ws` subprotocol. Flow:
+
+1. Client sends `connection_init`
+2. Server responds with `connection_ack`
+3. Client sends `subscribe` with the subscription query
+4. Server pushes `next` messages as mutations occur
+5. Client sends `complete` to unsubscribe
+
+**Event bus**: The actor emits events to a `tokio::sync::broadcast` channel (capacity 256) after successful mutations. Each subscription stream receives events from this bus and filters by kind/type. When no subscribers exist, events are dropped with zero overhead. Slow clients that lag behind the buffer lose events (acceptable for MVP — clients can refetch on reconnect).
+
+**Per-type subscriptions**: For each `_typedef`, a `{typeName}Changed` subscription field is generated (e.g. `contactChanged`). These filter events server-side by `zettel_type`, so clients only receive events for the types they care about.
+
+**Keepalive**: The server sends periodic pings per the `graphql-ws` protocol. If a client doesn't respond to a ping within 30 seconds, the connection is closed. Idle connections survive indefinitely as long as the client responds to pings.
+
+### Dynamic Types
+
+For each `_typedef` zettel (e.g. "project"), the server generates:
+- A typed GraphQL object (e.g. `Project`) with native fields from the typedef columns
+- A `{Type}Connection` wrapper with `items` and `totalCount`
+- A `{Type}Where` input for field-level filtering
+- A `{Type}OrderBy` input for sorting
+- A `{Type}Aggregate` type for aggregate queries
+- A per-type query: `projects(where: ProjectWhere, orderBy: ProjectOrderBy, tag: String, limit: Int, offset: Int): ProjectConnection!`
+- A per-type aggregate query: `projectsAggregate(where: ProjectWhere): ProjectAggregate!`
+
+Column type mapping:
+
+| `_typedef` data_type | Zone | GraphQL type |
+|---------------------|------|-------------|
+| BOOLEAN | frontmatter | `Boolean` |
+| INTEGER | frontmatter | `Int` |
+| REAL | frontmatter | `Float` |
+| TEXT | frontmatter | `String` |
+| TEXT | body | `String` (section content) |
+| TEXT | reference | `String` (wikilink target) |
+
+### Filtering
+
+Each per-type query accepts a `where` argument with field-level filters. Filter types match column data types:
+
+```graphql
+input StringFilter { eq: String, neq: String, contains: String, startsWith: String, in: [String] }
+input IntFilter    { eq: Int, neq: Int, gt: Int, gte: Int, lt: Int, lte: Int, in: [Int] }
+input FloatFilter  { eq: Float, neq: Float, gt: Float, gte: Float, lt: Float, lte: Float, in: [Float] }
+input BoolFilter   { eq: Boolean }
+input IDFilter     { eq: ID, in: [ID] }
+```
+
+Where inputs support compound logic with `_and` and `_or`:
+
+```graphql
+{ projects(where: {
+    status: { eq: "active" },
+    _or: [{ priority: { gte: 3 } }, { tags: { contains: "urgent" } }]
+  }) { items { id title } totalCount } }
+```
+
+All filter values are parameterized (never interpolated into SQL), preventing injection.
+
+### Sorting
+
+Per-type queries accept `orderBy` with column names mapped to `SortOrder` (`ASC`/`DESC`):
+
+```graphql
+{ projects(orderBy: { priority: DESC, title: ASC }) {
+    items { id title priority } totalCount
+  } }
+```
+
+### Aggregation
+
+Per-type aggregate queries return `count` plus per-numeric-column `min`/`max`/`avg`/`sum`:
+
+```graphql
+{ projectsAggregate(where: { status: { eq: "active" } }) {
+    count
+    priority { min max avg sum }
+  } }
+```
+
+### Connection Wrapper
+
+Per-type queries return a Connection type instead of a bare list:
+
+```graphql
+type ProjectConnection {
+  items: [Project!]!
+  totalCount: Int!
+}
+```
+
+`totalCount` reflects the total matching rows (respecting `where` filters but ignoring `limit`/`offset`), enabling pagination UI.
+
+### Hot Schema Reload
+
+The schema updates automatically when types change at runtime. After an `executeSql` mutation containing `CREATE TABLE` or `DROP TABLE`:
+
+1. The mutation triggers a reload signal
+2. A background task fetches current type schemas from the actor
+3. A new GraphQL schema is built and atomically swapped in via `ArcSwap`
+4. In-flight requests finish against the old schema; new requests use the updated one
+
+No server restart is needed. Clients can poll the `schemaVersion` query field to detect when the schema has changed:
+
+```graphql
+{ schemaVersion }  # monotonic Int!, starts at 1, increments on each reload
+```
+
+## Attachment Downloads
+
+`GET /attachments/{zettel_id}/{filename}` serves raw attachment bytes from the `reference/` directory with the correct `Content-Type` header (detected via `AttachmentInfo::mime_from_filename`). Protected by the same bearer auth middleware. Returns 404 if the file does not exist, 400 if the path contains traversal characters.
+
+## Error Mapping
+
+| ZettelError variant | GraphQL `code` extension |
+|---|---|
+| `NotFound` | `NOT_FOUND` |
+| `Validation` | `VALIDATION_ERROR` |
+| `SqlEngine` | `SQL_ERROR` |
+| All others | `INTERNAL_ERROR` |
+
+## PostgreSQL Wire Protocol
+
+The server also speaks the PostgreSQL wire protocol (simple query mode), so standard tools like `psql`, DBeaver, or any Postgres client library can query ZettelDB directly.
+
+### Usage
+
+```bash
+psql -h 127.0.0.1 -p 2892 -U zdb -d zdb
+# password prompt → paste the auth token from ~/.config/zetteldb/token
+```
+
+Or from any Postgres client library (e.g. `tokio-postgres`, `psycopg2`, `node-postgres`) — connect to `127.0.0.1:2892`, user `zdb`, password = auth token.
+
+### Authentication
+
+Uses PostgreSQL MD5 password authentication. The password is the same bearer token used for HTTP/GraphQL auth (`~/.config/zetteldb/token`). The username can be anything (conventionally `zdb`).
+
+### DDL propagation
+
+`CREATE TABLE` and `DROP TABLE` statements sent over pgwire trigger the same hot schema reload as the GraphQL `executeSql` mutation. New types become immediately available via GraphQL after creation.
+
+### Limitations
+
+- **TEXT-only**: all column values are returned as PostgreSQL `VARCHAR` (text). No native int/bool encoding.
+- **Simple query protocol only**: no prepared statements or extended query protocol. Most clients default to simple mode for ad-hoc queries.
+- **No TLS**: bind to localhost or use an SSH tunnel for remote access.
+- **No catalog queries**: psql meta-commands (`\dt`, `\d`, `\l`) query PostgreSQL system catalogs which don't exist — they fail gracefully.
+
+## Background Maintenance
+
+The server runs periodic maintenance (compaction + stale node detection) in a background tokio task.
+
+### Configuration
+
+```toml
+[maintenance]
+enabled = true         # default: true
+interval_secs = 3600   # default: 3600 (1 hour)
+```
+
+Set `enabled = false` to disable. CLI flags don't override maintenance config — edit `~/.config/zetteldb/config.toml`.
+
+### Behavior
+
+- Spawns on startup if `maintenance_enabled` is true
+- Skips the first tick (waits one full interval before first run)
+- Calls `compact()` + `detect_stale_nodes()` via `ActorCommand::RunMaintenance`
+- Logs at `info` on success, `warn` on failure — maintenance errors are non-fatal
+
+## NoSQL REST API
+
+When built with the `nosql` feature (enabled by default), the server exposes key-value endpoints at `/nosql/`:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/nosql/:id` | Fetch zettel by ID (O(1) redb lookup) |
+| `GET` | `/nosql?type=<type>` | Prefix scan by zettel type |
+| `GET` | `/nosql?tag=<tag>` | Prefix scan by tag |
+| `GET` | `/nosql/:id/backlinks` | Backlinks for a zettel |
+
+The actor holds an `Option<RedbIndex>` alongside `Index`. Every create/update/delete that touches SQLite also writes to redb (dual-write). The redb index is rebuilt once at startup and kept in sync via dual-writes.
+
+## REST API
+
+In addition to GraphQL, the server exposes a REST API at `/rest/*`. Both interfaces share the same actor backend and auth middleware. See [REST API](./rest-api.md) for endpoint details.
+
+## Crate Structure
+
+```
+zdb-server/src/
+├── lib.rs       # pub async fn run() entrypoint
+├── actor.rs     # RepoActor: thread-safe GitRepo+Index bridge, emits events
+├── schema.rs    # Dynamic GraphQL schema builder (query, mutation, subscription)
+├── filter.rs    # Filter/sort/aggregate: input types, SQL builders, Connection wrapper
+├── events.rs    # ZettelEvent, EventKind, EventBus (broadcast channel)
+├── ws.rs        # WebSocket upgrade handler for graphql-ws subscriptions
+├── pgwire.rs    # PostgreSQL wire protocol (simple query, MD5 auth)
+├── reload.rs    # Hot schema reload orchestration (ArcSwap + Notify)
+├── rest.rs          # REST API handlers (/rest/zettels CRUD)
+├── nosql_api.rs     # NoSQL REST handlers (/nosql/ key-value queries)
+├── maintenance.rs   # Background maintenance loop (compaction + stale detection)
+├── auth.rs          # Token generation + Bearer middleware
+├── config.rs        # ServerConfig from config.toml
+└── error.rs         # ZettelError → GraphQL error mapping
+```
