@@ -987,7 +987,7 @@ This is the heart of the decentralized merge. Three strategies are available, ea
 The default strategy resolves each zone independently:
 
 ```bash
-sed -n '16,81p' zdb-core/src/crdt_resolver.rs
+sed -n '16,82p' zdb-core/src/crdt_resolver.rs
 ```
 
 ```rust
@@ -1066,17 +1066,19 @@ Each conflict file is split into three zones, then each zone is merged independe
 - **Body**: Automerge Text CRDT with character-level diffs using the `similar` crate.
 - **Reference**: Automerge List CRDT at line level, sorted and deduped on output.
 
-The three merged zones are reassembled into a valid `ParsedZettel` and serialized back to markdown.
+The three merged zones are reassembled into a valid `ParsedZettel` and serialized back to markdown. The `ResolvedFile` now carries `fm_crdt_bytes: Option<Vec<u8>>` — the serialized automerge document for frontmatter state persistence.
 
 ### Frontmatter merge detail:
 
 ```bash
-sed -n '101,151p' zdb-core/src/crdt_resolver.rs
+sed -n '101,154p' zdb-core/src/crdt_resolver.rs
 ```
 
 ```rust
+
 /// Merge YAML frontmatter at field granularity.
 /// Scalar fields use Automerge Map CRDT. List fields (e.g. tags) use three-way set merge.
+/// Returns `(resolved_yaml, automerge_doc_bytes)` for CRDT state persistence.
 #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
 pub fn merge_frontmatter(ancestor: &str, ours: &str, theirs: &str) -> Result<(String, Vec<u8>)> {
     let ancestor_map = yaml_to_map(ancestor)?;
@@ -1129,7 +1131,7 @@ pub fn merge_frontmatter(ancestor: &str, ours: &str, theirs: &str) -> Result<(St
     Ok((map_to_yaml(&merged), doc_bytes))
 ```
 
-The Automerge pattern is fork → apply diffs → merge. Starting from the ancestor state, both "ours" and "theirs" diffs are applied to separate forks, then merged. Automerge handles the convergence deterministically.
+The Automerge pattern is fork → apply diffs → merge. Starting from the ancestor state, both "ours" and "theirs" diffs are applied to separate forks, then merged. Automerge handles the convergence deterministically. After merging, `doc_ours.save()` serializes the full automerge document for persistence as `_fm.crdt`.
 
 For list fields like `tags`, a custom three-way set merge preserves order: start with ancestor set, add items introduced by each side, remove items deleted by each side.
 
@@ -1148,10 +1150,11 @@ The `_fm` suffix is parsed by `parse_crdt_temp_name()`, which returns `(oid, zet
 The simplest strategy — compare HLC timestamps, pick the winner:
 
 ```bash
-sed -n '482,510p' zdb-core/src/crdt_resolver.rs
+sed -n '484,512p' zdb-core/src/crdt_resolver.rs
 ```
 
 ```rust
+
 /// Resolve conflicts using Last-Writer-Wins by HLC comparison.
 /// Higher HLC wins. Tie-break: higher node string wins.
 /// If no HLC available, falls back to "ours".
@@ -1180,11 +1183,10 @@ fn pick_lww_winner(conflict: &ConflictFile) -> String {
         }
         // No HLC available — fallback to ours
         _ => conflict.ours.clone(),
-    }
-}
 ```
 
 LWW is whole-file — no per-zone merging. Higher HLC wins. Tie-break by node string (deterministic). Without HLC data, "ours" wins. This is the fallback when the default CRDT merge produces invalid output.
+
 
 ### Strategy 3: Append-Log
 
