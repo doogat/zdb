@@ -82,12 +82,16 @@ After every task, update the code walkthrough at `docs/src/technical/walkthrough
 
 ### Process
 
+**NEVER edit `walkthrough.md` directly with Edit/Write tools.** All changes MUST go through `showboat` so code snippets stay executable and verifiable.
+
 1. Read the source files touched by the task plus any related modules
 2. Plan a linear walkthrough order that explains how the changed code fits into the whole
 3. Run `uvx showboat --help` to learn the tool, then use it to build the walkthrough:
    - `showboat note` for commentary sections
    - `showboat exec` with `cat`, `sed`, `grep`, etc. to include real code snippets
 4. Always update in place — add, revise, or reorder sections as needed
+5. For updating existing sections: build replacement in a temp file with showboat, then splice into the walkthrough
+6. Run `showboat verify` after changes to confirm code blocks still match
 
 ### Code block rules
 
