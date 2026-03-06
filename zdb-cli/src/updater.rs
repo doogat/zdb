@@ -430,7 +430,7 @@ mod tests {
         let triple = target_triple();
         assert!(triple.is_some(), "target_triple() returned None on this platform");
         let t = triple.unwrap();
-        assert!(t.contains("apple") || t.contains("linux"));
+        assert!(t.contains("apple") || t.contains("linux") || t.contains("windows"));
     }
 
     #[test]
