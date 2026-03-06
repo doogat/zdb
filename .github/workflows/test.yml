@@ -41,6 +41,10 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
-      - name: Smoke test (Linux)
-        if: runner.os == 'Linux'
+      - name: Smoke test (Unix)
+        if: runner.os != 'Windows'
         run: ./tests/smoke.sh
+
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        run: pwsh -File tests/smoke.ps1

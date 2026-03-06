@@ -71,7 +71,7 @@ Follow SOLID and Clean Architecture principles as adapted for Rust. These are ma
 A task is NOT complete unless ALL of these pass:
 
 1. **Tests** — unit tests in the module AND integration/e2e tests in `tests/` (not just unit tests)
-2. **Smoke test** — if the change adds a CLI command, server endpoint, or user-facing behavior, add a corresponding scenario to `tests/smoke.sh` following the existing numbered-section + `pass` helper pattern
+2. **Smoke test** — if the change adds a CLI command, server endpoint, or user-facing behavior, add a corresponding scenario to BOTH `tests/smoke.sh` (bash, runs on Linux/macOS) and `tests/smoke.ps1` (PowerShell, runs on Windows) following each file's existing numbered-section + `pass` helper pattern
 3. **Docs** — update relevant files in `docs/src/` to reflect any behavioral or API changes
 4. **Build** — `cargo clippy --workspace` and `cargo test` both pass
 5. **Walkthrough** — update `docs/src/technical/walkthrough.md` (see below)
