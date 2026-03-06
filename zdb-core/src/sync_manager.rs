@@ -64,6 +64,27 @@ fn add_resurrected_marker(content: &str) -> String {
     }
 }
 
+/// Write `_fm.crdt` files for resolved files that carry frontmatter CRDT state.
+fn write_fm_crdt_files(
+    repo_path: &std::path::Path,
+    commit_hash: &CommitHash,
+    resolved: &[crate::types::ResolvedFile],
+) -> Result<()> {
+    let temp_dir = repo_path.join(".crdt/temp");
+    for r in resolved {
+        if let Some(bytes) = &r.fm_crdt_bytes {
+            let zettel_id = std::path::Path::new(&r.path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("unknown");
+            std::fs::create_dir_all(&temp_dir)?;
+            let name = format!("{}_{zettel_id}_fm.crdt", commit_hash.0);
+            std::fs::write(temp_dir.join(name), bytes)?;
+        }
+    }
+    Ok(())
+}
+
 impl<'a> SyncManager<'a> {
     /// Open a SyncManager from an existing repo with a registered node.
     pub fn open(repo: &'a GitRepo) -> Result<Self> {
@@ -180,6 +201,10 @@ impl<'a> SyncManager<'a> {
                     .map(|r| (r.path.as_str(), r.content.as_str()))
                     .collect();
                 self.repo.commit_merge(&files, &merge_msg, &theirs_oid)?;
+
+                // Persist frontmatter CRDT state for compaction
+                let commit_oid = self.repo.head_oid()?;
+                write_fm_crdt_files(&self.repo.path, &commit_oid, &resolved)?;
 
                 report.conflicts_resolved = count;
                 report.commits_transferred = 1;
@@ -308,6 +333,11 @@ impl<'a> SyncManager<'a> {
             .collect();
         self.repo
             .commit_files(&files, "validate clean merge fallback via CRDT")?;
+
+        // Persist frontmatter CRDT state for compaction
+        let commit_oid = self.repo.head_oid()?;
+        write_fm_crdt_files(&self.repo.path, &commit_oid, &resolved)?;
+
         Ok(files.len())
     }
 
