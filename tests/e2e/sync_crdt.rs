@@ -219,3 +219,51 @@ fn concurrent_tag_additions_both_survive() {
     assert!(content.contains("laptop"), "laptop tag from node1 present");
     assert!(content.contains("desktop"), "desktop tag from node2 present");
 }
+
+#[test]
+fn frontmatter_conflict_creates_fm_crdt_file() {
+    let setup = TwoNodeSetup::new();
+
+    let out = setup.node1.zdb()
+        .args(["create", "--title", "FmCrdt", "--tags", "base"])
+        .output().unwrap();
+    let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    push_node1(&setup);
+    let node2_path = setup.clone_node2();
+    ZdbTestRepo::zdb_at(&node2_path).arg("sync").assert().success();
+
+    // Both change frontmatter (title) to create a conflict
+    setup.node1.zdb()
+        .args(["update", &id, "--title", "Laptop Title"])
+        .assert().success();
+    ZdbTestRepo::zdb_at(&node2_path)
+        .args(["update", &id, "--title", "Desktop Title"])
+        .assert().success();
+
+    // Node1 pushes, node2 syncs → conflict resolution
+    setup.node1.zdb().arg("sync").assert().success();
+    ZdbTestRepo::zdb_at(&node2_path)
+        .arg("sync")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("conflicts resolved: 1"));
+
+    // Check _fm.crdt file exists in node2's .crdt/temp/
+    let temp_dir = node2_path.join(".crdt/temp");
+    let fm_files: Vec<_> = std::fs::read_dir(&temp_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().ends_with("_fm.crdt"))
+        .collect();
+    assert!(!fm_files.is_empty(), "_fm.crdt file should exist after frontmatter conflict resolution");
+
+    // Verify the _fm.crdt file contains valid automerge data
+    let data = std::fs::read(fm_files[0].path()).unwrap();
+    assert!(!data.is_empty(), "_fm.crdt file should not be empty");
+
+    // Run compaction — should handle _fm.crdt files
+    ZdbTestRepo::zdb_at(&node2_path)
+        .args(["compact", "--force"])
+        .assert()
+        .success();
+}
