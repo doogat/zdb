@@ -44,7 +44,7 @@ pub fn resolve_conflicts(
         let ours = parse_zones(&conflict.ours)?;
         let theirs = parse_zones(&conflict.theirs)?;
 
-        let merged_fm = merge_frontmatter(
+        let (merged_fm, fm_crdt_bytes) = merge_frontmatter(
             &ancestor.raw_frontmatter,
             &ours.raw_frontmatter,
             &theirs.raw_frontmatter,
@@ -74,6 +74,7 @@ pub fn resolve_conflicts(
         resolved.push(ResolvedFile {
             path: conflict.path,
             content,
+            fm_crdt_bytes: Some(fm_crdt_bytes),
         });
     }
 
@@ -100,8 +101,9 @@ enum FmValue {
 
 /// Merge YAML frontmatter at field granularity.
 /// Scalar fields use Automerge Map CRDT. List fields (e.g. tags) use three-way set merge.
+/// Returns `(resolved_yaml, automerge_doc_bytes)` for CRDT state persistence.
 #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
-pub fn merge_frontmatter(ancestor: &str, ours: &str, theirs: &str) -> Result<String> {
+pub fn merge_frontmatter(ancestor: &str, ours: &str, theirs: &str) -> Result<(String, Vec<u8>)> {
     let ancestor_map = yaml_to_map(ancestor)?;
     let ours_map = yaml_to_map(ours)?;
     let theirs_map = yaml_to_map(theirs)?;
@@ -148,7 +150,8 @@ pub fn merge_frontmatter(ancestor: &str, ours: &str, theirs: &str) -> Result<Str
         merged.insert(k, v);
     }
 
-    Ok(map_to_yaml(&merged))
+    let doc_bytes = doc_ours.save();
+    Ok((map_to_yaml(&merged), doc_bytes))
 }
 
 /// Partition an FmValue map into scalar and list components.
@@ -489,6 +492,7 @@ pub fn resolve_lww(conflicts: Vec<ConflictFile>) -> Result<Vec<ResolvedFile>> {
         resolved.push(ResolvedFile {
             path: conflict.path,
             content,
+            fm_crdt_bytes: None,
         });
     }
     Ok(resolved)
@@ -524,7 +528,7 @@ pub fn resolve_append_log(conflicts: Vec<ConflictFile>) -> Result<Vec<ResolvedFi
         let theirs = parse_zones(&conflict.theirs)?;
 
         // Frontmatter: same as default (Automerge Map)
-        let merged_fm = merge_frontmatter(
+        let (merged_fm, fm_crdt_bytes) = merge_frontmatter(
             &ancestor.raw_frontmatter,
             &ours.raw_frontmatter,
             &theirs.raw_frontmatter,
@@ -562,6 +566,7 @@ pub fn resolve_append_log(conflicts: Vec<ConflictFile>) -> Result<Vec<ResolvedFi
         resolved.push(ResolvedFile {
             path: conflict.path,
             content: parser::serialize(&parsed),
+            fm_crdt_bytes: Some(fm_crdt_bytes),
         });
     }
 
@@ -757,7 +762,7 @@ mod tests {
         let ours = "title: Changed by us\ndate: 2026-01-01";
         let theirs = "title: Original\ndate: 2026-01-01\nauthor: Them";
 
-        let merged = merge_frontmatter(ancestor, ours, theirs).unwrap();
+        let (merged, _) = merge_frontmatter(ancestor, ours, theirs).unwrap();
         assert!(merged.contains("Changed by us"));
         assert!(merged.contains("author"));
     }
@@ -769,7 +774,7 @@ mod tests {
         let theirs = "title: Theirs";
 
         // Automerge picks one deterministically
-        let merged = merge_frontmatter(ancestor, ours, theirs).unwrap();
+        let (merged, _) = merge_frontmatter(ancestor, ours, theirs).unwrap();
         assert!(merged.contains("title:"));
     }
 
@@ -779,7 +784,7 @@ mod tests {
         let ours = "title: Test"; // removed author
         let theirs = "title: Test\nauthor: Bob";
 
-        let merged = merge_frontmatter(ancestor, ours, theirs).unwrap();
+        let (merged, _) = merge_frontmatter(ancestor, ours, theirs).unwrap();
         assert!(merged.contains("title:"));
         // author should be removed since ours removed it
         assert!(!merged.contains("author"));
@@ -791,7 +796,7 @@ mod tests {
         let ours = "title: \"[[note|My Note]]\"";
         let theirs = "title: Original";
 
-        let merged = merge_frontmatter(ancestor, ours, theirs).unwrap();
+        let (merged, _) = merge_frontmatter(ancestor, ours, theirs).unwrap();
         assert!(merged.contains("title: \"[[note|My Note]]\""));
     }
 
@@ -801,7 +806,7 @@ mod tests {
         let ours = "tags:\n  - shared\n  - ours";
         let theirs = "tags:\n  - shared";
 
-        let merged = merge_frontmatter(ancestor, ours, theirs).unwrap();
+        let (merged, _) = merge_frontmatter(ancestor, ours, theirs).unwrap();
         let parsed = parser::parse_frontmatter(&merged, "test.md").unwrap();
         assert_eq!(parsed.tags, vec!["shared", "ours"]);
     }
@@ -812,7 +817,7 @@ mod tests {
         let ours = "title: Test\ntags:\n  - shared\n  - ours-tag";
         let theirs = "title: Test\ntags:\n  - shared\n  - theirs-tag";
 
-        let merged = merge_frontmatter(ancestor, ours, theirs).unwrap();
+        let (merged, _) = merge_frontmatter(ancestor, ours, theirs).unwrap();
         let parsed = parser::parse_frontmatter(&merged, "test.md").unwrap();
         // Both concurrent additions must survive
         assert!(parsed.tags.contains(&"shared".to_string()));
@@ -827,9 +832,24 @@ mod tests {
         let ours = "tags:\n  - keep"; // removed 'remove'
         let theirs = "tags:\n  - keep\n  - remove";
 
-        let merged = merge_frontmatter(ancestor, ours, theirs).unwrap();
+        let (merged, _) = merge_frontmatter(ancestor, ours, theirs).unwrap();
         let parsed = parser::parse_frontmatter(&merged, "test.md").unwrap();
         assert_eq!(parsed.tags, vec!["keep"]);
+    }
+
+    #[test]
+    fn frontmatter_returns_loadable_automerge_bytes() {
+        let ancestor = "title: Original\ndate: 2026-01-01";
+        let ours = "title: Changed\ndate: 2026-01-01";
+        let theirs = "title: Original\ndate: 2026-01-01\nauthor: Them";
+
+        let (yaml, doc_bytes) = merge_frontmatter(ancestor, ours, theirs).unwrap();
+        assert!(!yaml.is_empty());
+        assert!(!doc_bytes.is_empty());
+
+        // Bytes must be a valid automerge document
+        let loaded = automerge::AutoCommit::load(&doc_bytes);
+        assert!(loaded.is_ok(), "automerge doc bytes should be loadable");
     }
 
     #[test]

@@ -153,6 +153,7 @@ impl<'a> SyncManager<'a> {
                     resolved.push(crate::types::ResolvedFile {
                         path: conflict.path.clone(),
                         content,
+                        fm_crdt_bytes: None,
                     });
                 }
                 report.resurrected = delete_edit.len();
@@ -242,6 +243,7 @@ impl<'a> SyncManager<'a> {
                     .map(|c| crate::types::ResolvedFile {
                         path: c.path,
                         content: c.ours,
+                        fm_crdt_bytes: None,
                     })
                     .collect()
             }

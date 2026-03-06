@@ -280,6 +280,7 @@ pub enum MergeResult {
 pub struct ResolvedFile {
     pub path: String,
     pub content: String,
+    pub fm_crdt_bytes: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone)]
