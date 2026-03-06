@@ -1022,7 +1022,7 @@ pub fn resolve_conflicts(
         let ours = parse_zones(&conflict.ours)?;
         let theirs = parse_zones(&conflict.theirs)?;
 
-        let merged_fm = merge_frontmatter(
+        let (merged_fm, fm_crdt_bytes) = merge_frontmatter(
             &ancestor.raw_frontmatter,
             &ours.raw_frontmatter,
             &theirs.raw_frontmatter,
@@ -1052,6 +1052,7 @@ pub fn resolve_conflicts(
         resolved.push(ResolvedFile {
             path: conflict.path,
             content,
+            fm_crdt_bytes: Some(fm_crdt_bytes),
         });
     }
 
@@ -1077,7 +1078,7 @@ sed -n '101,151p' zdb-core/src/crdt_resolver.rs
 /// Merge YAML frontmatter at field granularity.
 /// Scalar fields use Automerge Map CRDT. List fields (e.g. tags) use three-way set merge.
 #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
-pub fn merge_frontmatter(ancestor: &str, ours: &str, theirs: &str) -> Result<String> {
+pub fn merge_frontmatter(ancestor: &str, ours: &str, theirs: &str) -> Result<(String, Vec<u8>)> {
     let ancestor_map = yaml_to_map(ancestor)?;
     let ours_map = yaml_to_map(ours)?;
     let theirs_map = yaml_to_map(theirs)?;
@@ -1124,12 +1125,23 @@ pub fn merge_frontmatter(ancestor: &str, ours: &str, theirs: &str) -> Result<Str
         merged.insert(k, v);
     }
 
-    Ok(map_to_yaml(&merged))
+    let doc_bytes = doc_ours.save();
+    Ok((map_to_yaml(&merged), doc_bytes))
 ```
 
 The Automerge pattern is fork → apply diffs → merge. Starting from the ancestor state, both "ours" and "theirs" diffs are applied to separate forks, then merged. Automerge handles the convergence deterministically.
 
 For list fields like `tags`, a custom three-way set merge preserves order: start with ancestor set, add items introduced by each side, remove items deleted by each side.
+
+### Frontmatter CRDT state persistence
+
+`merge_frontmatter()` returns `(String, Vec<u8>)` — the resolved YAML plus serialized Automerge document bytes. After conflict resolution, `sync_manager` writes the bytes to `.crdt/temp/{commit_oid}_{zettel_id}_fm.crdt`. This preserves the CRDT state separately from body CRDT files so that:
+
+1. A node that hasn't synced past the merge commit can re-merge from the saved state
+2. Compaction handles frontmatter and body CRDT files independently — `compact_crdt_docs()` groups by `(zettel_id, is_frontmatter)`, producing separate `compacted_{id}.crdt` and `compacted_{id}_fm.crdt` files
+3. `cleanup_crdt_temp()` uses the same shared-head logic for both file types
+
+The `_fm` suffix is parsed by `parse_crdt_temp_name()`, which returns `(oid, zettel_id, is_frontmatter)`.
 
 ### Strategy 2: Last-Writer-Wins (LWW)
 
@@ -1150,6 +1162,7 @@ pub fn resolve_lww(conflicts: Vec<ConflictFile>) -> Result<Vec<ResolvedFile>> {
         resolved.push(ResolvedFile {
             path: conflict.path,
             content,
+            fm_crdt_bytes: None,
         });
     }
     Ok(resolved)
@@ -1701,12 +1714,12 @@ pub fn compact(repo: &GitRepo, sync_mgr: &SyncManager, force: bool) -> Result<Co
 }
 ```
 
-Compaction runs four steps:
+Compaction runs five steps:
 
 1. **Threshold check** — skip if `.crdt/temp/` is under the configured MB limit (default 1MB)
 2. **Shared head** — compute the greatest common ancestor commit across all active nodes. CRDT files older than this are safe to delete because all nodes have seen them.
-3. **Cleanup** — delete temp files at or before the shared head
-4. **Compact** — merge multiple Automerge documents for the same zettel into one
+3. **Cleanup** — delete temp files at or before the shared head (both `.crdt` and `_fm.crdt`)
+4. **Compact** — merge multiple Automerge documents for the same zettel into one. Body (`.crdt`) and frontmatter (`_fm.crdt`) files are grouped and compacted independently.
 5. **Git GC** — run `git gc` to reclaim space
 
 Stale and retired nodes are excluded from the shared head calculation, so an offline device doesn't block compaction forever.

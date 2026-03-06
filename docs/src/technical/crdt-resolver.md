@@ -123,12 +123,16 @@ Section-aware body merge for log-style zettels (e.g. project type):
 
 ## Compaction Strategy
 
-CRDT temp files in `.crdt/temp/` use the naming convention `{commit_oid}_{zettel_id}.crdt` to enable per-zettel grouping. Legacy files using bare OIDs are also supported.
+CRDT temp files in `.crdt/temp/` use two naming conventions:
+- Body: `{commit_oid}_{zettel_id}.crdt`
+- Frontmatter: `{commit_oid}_{zettel_id}_fm.crdt`
+
+Legacy files using bare OIDs are also supported. `parse_crdt_temp_name()` returns `(oid, zettel_id, is_frontmatter)`.
 
 Compaction modes:
 
-- **Cleanup**: removes temp files whose commit is an ancestor of the shared head (all nodes have synced past it)
-- **Doc compaction**: groups remaining temp files by zettel ID, loads all Automerge changes, calls `AutoCommit::save()` to produce a single compacted blob per zettel
+- **Cleanup**: removes temp files whose commit is an ancestor of the shared head (all nodes have synced past it). Handles both `.crdt` and `_fm.crdt` files.
+- **Doc compaction**: groups remaining temp files by `(zettel_id, is_frontmatter)`, loads all Automerge changes, calls `AutoCommit::save()` to produce separate compacted blobs for body and frontmatter per zettel
 - **Per-zettel**: `compact_zettel(repo, zettel_id)` targets a single zettel's CRDT history
 - **Threshold check**: compaction skips when `.crdt/temp/` size is below `CompactionConfig.threshold_mb` (default 1MB) unless `--force` is passed
 
