@@ -33,16 +33,22 @@ pub fn shared_head(repo: &GitRepo, nodes: &[crate::types::NodeConfig]) -> Result
 }
 
 /// Parse zettel ID from CRDT temp filename.
-/// Supports formats: `{oid}_{zettel_id}.crdt` (new) and `{oid}` or `{oid}.crdt` (legacy).
-fn parse_crdt_temp_name(name: &str) -> Option<(git2::Oid, Option<String>)> {
+/// Supports formats: `{oid}_{zettel_id}.crdt`, `{oid}_{zettel_id}_fm.crdt`,
+/// and legacy `{oid}` or `{oid}.crdt`.
+/// Returns `(oid, zettel_id, is_frontmatter)`.
+fn parse_crdt_temp_name(name: &str) -> Option<(git2::Oid, Option<String>, bool)> {
     let stem = name.strip_suffix(".crdt").unwrap_or(name);
 
-    if let Some((oid_part, zettel_id)) = stem.split_once('_') {
+    if let Some((oid_part, rest)) = stem.split_once('_') {
         let oid = git2::Oid::from_str(oid_part).ok()?;
-        Some((oid, Some(zettel_id.to_string())))
+        if let Some(zettel_id) = rest.strip_suffix("_fm") {
+            Some((oid, Some(zettel_id.to_string()), true))
+        } else {
+            Some((oid, Some(rest.to_string()), false))
+        }
     } else {
         let oid = git2::Oid::from_str(stem).ok()?;
-        Some((oid, None))
+        Some((oid, None, false))
     }
 }
 
@@ -64,7 +70,7 @@ pub fn cleanup_crdt_temp(repo: &GitRepo, shared_head: Option<git2::Oid>) -> Resu
         if name == ".gitkeep" {
             continue;
         }
-        let Some((temp_commit_oid, _zettel_id)) = parse_crdt_temp_name(&name) else {
+        let Some((temp_commit_oid, _zettel_id, _is_fm)) = parse_crdt_temp_name(&name) else {
             continue;
         };
 
@@ -85,24 +91,24 @@ pub fn compact_crdt_docs(repo: &GitRepo) -> Result<usize> {
         return Ok(0);
     }
 
-    // Group files by zettel ID
-    let mut by_zettel: HashMap<String, Vec<std::path::PathBuf>> = HashMap::new();
+    // Group files by (zettel_id, is_frontmatter) so fm and body compact independently
+    let mut by_key: HashMap<(String, bool), Vec<std::path::PathBuf>> = HashMap::new();
     for entry in std::fs::read_dir(&temp_dir)? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().to_string();
         if name == ".gitkeep" {
             continue;
         }
-        if let Some((_oid, Some(zettel_id))) = parse_crdt_temp_name(&name) {
-            by_zettel
-                .entry(zettel_id)
+        if let Some((_oid, Some(zettel_id), is_fm)) = parse_crdt_temp_name(&name) {
+            by_key
+                .entry((zettel_id, is_fm))
                 .or_default()
                 .push(entry.path());
         }
     }
 
     let mut compacted = 0;
-    for (zettel_id, files) in &by_zettel {
+    for ((zettel_id, is_fm), files) in &by_key {
         if files.len() < 2 {
             continue; // nothing to compact
         }
@@ -118,9 +124,10 @@ pub fn compact_crdt_docs(repo: &GitRepo) -> Result<usize> {
             }
         }
 
-        // Save compacted doc
+        // Save compacted doc with appropriate suffix
         let compacted_data = doc.save();
-        let compacted_name = format!("compacted_{zettel_id}.crdt");
+        let fm_suffix = if *is_fm { "_fm" } else { "" };
+        let compacted_name = format!("compacted_{zettel_id}{fm_suffix}.crdt");
         std::fs::write(temp_dir.join(&compacted_name), compacted_data)?;
 
         // Remove original files
@@ -145,7 +152,7 @@ pub fn compact_zettel(repo: &GitRepo, zettel_id: &str) -> Result<usize> {
     for entry in std::fs::read_dir(&temp_dir)? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().to_string();
-        if let Some((_oid, Some(zid))) = parse_crdt_temp_name(&name) {
+        if let Some((_oid, Some(zid), _is_fm)) = parse_crdt_temp_name(&name) {
             if zid == zettel_id {
                 files.push(entry.path());
             }
@@ -310,17 +317,25 @@ mod tests {
     #[test]
     fn parse_crdt_temp_name_formats() {
         // Legacy: bare OID
-        let (oid, zid) = parse_crdt_temp_name("abc123def456abc123def456abc123def456abcd").unwrap();
+        let (oid, zid, is_fm) = parse_crdt_temp_name("abc123def456abc123def456abc123def456abcd").unwrap();
         assert!(zid.is_none());
+        assert!(!is_fm);
         assert_eq!(oid.to_string(), "abc123def456abc123def456abc123def456abcd");
 
         // Legacy: OID.crdt
-        let (_, zid) = parse_crdt_temp_name("abc123def456abc123def456abc123def456abcd.crdt").unwrap();
+        let (_, zid, is_fm) = parse_crdt_temp_name("abc123def456abc123def456abc123def456abcd.crdt").unwrap();
         assert!(zid.is_none());
+        assert!(!is_fm);
 
         // New: OID_zettelid.crdt
-        let (_, zid) = parse_crdt_temp_name("abc123def456abc123def456abc123def456abcd_20260301120000.crdt").unwrap();
+        let (_, zid, is_fm) = parse_crdt_temp_name("abc123def456abc123def456abc123def456abcd_20260301120000.crdt").unwrap();
         assert_eq!(zid.as_deref(), Some("20260301120000"));
+        assert!(!is_fm);
+
+        // Frontmatter: OID_zettelid_fm.crdt
+        let (_, zid, is_fm) = parse_crdt_temp_name("abc123def456abc123def456abc123def456abcd_20260301120000_fm.crdt").unwrap();
+        assert_eq!(zid.as_deref(), Some("20260301120000"));
+        assert!(is_fm);
     }
 
     #[test]
