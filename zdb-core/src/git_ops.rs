@@ -1172,6 +1172,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn symlink_read_rejected() {
         let (dir, repo) = temp_repo();
         repo.commit_file("zettelkasten/real.md", "content", "add").unwrap();
@@ -1201,6 +1202,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn symlink_write_rejected() {
         let (dir, repo) = temp_repo();
         repo.commit_file("zettelkasten/real.md", "original", "add").unwrap();
