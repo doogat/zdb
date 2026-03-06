@@ -417,4 +417,55 @@ mod tests {
         assert!(report.gc_success);
     }
 
+    #[test]
+    fn compact_crdt_docs_separates_fm_and_body() {
+        let (_dir, repo) = temp_repo();
+        let c1 = repo.commit_file("zettelkasten/a.md", "a", "c1").unwrap();
+
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let c2 = repo.commit_file("zettelkasten/b.md", "b", "c2").unwrap();
+        let temp_dir = repo.path.join(".crdt/temp");
+
+        let mut doc = automerge::AutoCommit::new();
+        doc.put(automerge::ROOT, "k", "v").unwrap();
+        let bytes = doc.save();
+
+        // Two body files for same zettel
+        std::fs::write(temp_dir.join(format!("{}_20260301120000.crdt", c1.0)), &bytes).unwrap();
+        std::fs::write(temp_dir.join(format!("{}_20260301120000.crdt", c2.0)), &bytes).unwrap();
+        // Two fm files for same zettel
+        std::fs::write(temp_dir.join(format!("{}_20260301120000_fm.crdt", c1.0)), &bytes).unwrap();
+        std::fs::write(temp_dir.join(format!("{}_20260301120000_fm.crdt", c2.0)), &bytes).unwrap();
+
+        let compacted = compact_crdt_docs(&repo).unwrap();
+        // Should compact body and fm independently → 2 groups compacted
+        assert_eq!(compacted, 2);
+
+        let files: Vec<String> = std::fs::read_dir(&temp_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n != ".gitkeep")
+            .collect();
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|f| f == "compacted_20260301120000.crdt"));
+        assert!(files.iter().any(|f| f == "compacted_20260301120000_fm.crdt"));
+    }
+
+    #[test]
+    fn cleanup_handles_fm_naming_format() {
+        let (_dir, repo) = temp_repo();
+        let c1 = repo.commit_file("zettelkasten/a.md", "a", "c1").unwrap();
+        let c2 = repo.commit_file("zettelkasten/b.md", "b", "c2").unwrap();
+        let temp_dir = repo.path.join(".crdt/temp");
+
+        // Create _fm.crdt files
+        std::fs::write(temp_dir.join(format!("{}_20260301120000_fm.crdt", c1.0)), "data").unwrap();
+        std::fs::write(temp_dir.join(format!("{}_20260301120000_fm.crdt", c2.0)), "data").unwrap();
+
+        let c2_oid = git2::Oid::from_str(&c2.0).unwrap();
+        let removed = cleanup_crdt_temp(&repo, Some(c2_oid)).unwrap();
+        assert_eq!(removed, 2);
+    }
+
 }
