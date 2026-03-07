@@ -55,6 +55,17 @@ pass "delete"
 $ZDB status | grep -q "^head:"
 pass "status"
 
+# 6b. broken backlink report on delete
+BL_TARGET=$($ZDB create --title "Backlink Target" --body "I will be deleted")
+sleep 1
+BL_SOURCE=$($ZDB create --title "Backlink Source" --body "See [[$BL_TARGET]]")
+$ZDB reindex >/dev/null
+$ZDB delete "$BL_TARGET" 2>&1 | grep -q "broken backlinks"
+$ZDB status 2>/dev/null | grep -q "broken backlinks"
+# Clean up: delete source so broken backlinks don't affect later tests
+$ZDB delete "$BL_SOURCE" >/dev/null 2>&1
+pass "broken backlink report on delete"
+
 # 7. reindex
 $ZDB reindex | grep -q "indexed 2 zettels"
 pass "reindex"
