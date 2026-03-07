@@ -955,6 +955,24 @@ impl Index {
         Ok(out)
     }
 
+    /// Return (source_id, target_path) pairs where a link target has no matching zettel.
+    pub fn broken_backlinks(&self) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT l.source_id, l.target_path \
+             FROM _zdb_links l \
+             LEFT JOIN zettels z ON l.target_path = z.id \
+             WHERE z.id IS NULL",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     /// Execute arbitrary SQL query, return rows as string vectors.
     pub fn query_raw(&self, sql: &str) -> Result<Vec<Vec<String>>> {
         let mut stmt = self.conn.prepare(sql)?;
