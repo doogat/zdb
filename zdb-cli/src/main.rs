@@ -561,16 +561,11 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
                     }
                 }
 
-                let broken = index.query_raw(
-                    "SELECT DISTINCT l.source_id, l.target_path \
-                     FROM _zdb_links l \
-                     LEFT JOIN zettels z ON l.target_path = z.id \
-                     WHERE z.id IS NULL"
-                ).unwrap_or_default();
+                let broken = index.broken_backlinks().unwrap_or_default();
                 if !broken.is_empty() {
                     println!("broken backlinks:");
-                    for row in &broken {
-                        println!("  {} -> {}", row[0], row.get(1).map(|s| s.as_str()).unwrap_or("?"));
+                    for (src_id, target_path) in &broken {
+                        println!("  {src_id} -> {target_path}");
                     }
                 }
             }
