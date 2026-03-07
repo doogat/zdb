@@ -441,6 +441,14 @@ impl MultiNodeSetup {
             .success();
     }
 
+    /// Delete a zettel
+    pub fn delete(node: &Path, id: &str) {
+        ZdbTestRepo::zdb_at(node)
+            .args(["delete", id])
+            .assert()
+            .success();
+    }
+
     fn git_push(path: &Path) {
         std::process::Command::new("git")
             .current_dir(path)
