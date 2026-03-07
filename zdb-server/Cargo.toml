@@ -30,6 +30,7 @@ criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
 reqwest = { version = "0.12", features = ["json"] }
 tempfile = "3"
 tokio = { version = "1", features = ["full"] }
+tokio-postgres = "0.7"
 
 [[bench]]
 name = "server_load"

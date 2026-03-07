@@ -116,6 +116,18 @@ impl BenchServer {
     fn url(&self) -> String {
         format!("http://127.0.0.1:{}/graphql", self.port)
     }
+
+    fn rest_url(&self, path: &str) -> String {
+        format!("http://127.0.0.1:{}/rest{path}", self.port)
+    }
+
+    fn nosql_url(&self, path: &str) -> String {
+        format!("http://127.0.0.1:{}/nosql{path}", self.port)
+    }
+
+    fn pg_port(&self) -> u16 {
+        self.port + 1
+    }
 }
 
 impl Drop for BenchServer {
@@ -329,6 +341,24 @@ fn bench_concurrent_search(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
+// REST / NoSQL / pgwire helpers
+// ---------------------------------------------------------------------------
+
+async fn rest_request(
+    client: &reqwest::Client,
+    url: &str,
+) -> reqwest::Result<serde_json::Value> {
+    client.get(url).send().await?.json().await
+}
+
+async fn pgwire_query_reuse(
+    client: &tokio_postgres::Client,
+    sql: &str,
+) {
+    client.simple_query(sql).await.unwrap();
+}
+
+// ---------------------------------------------------------------------------
 // Mixed-load benchmark: reads during concurrent writes
 // ---------------------------------------------------------------------------
 
@@ -421,11 +451,77 @@ fn bench_mixed_load(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Cross-protocol comparison: same "list zettels" across all protocols
+// ---------------------------------------------------------------------------
+
+fn bench_protocol_comparison(c: &mut Criterion) {
+    let server = setup_server();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let client = build_client(&server.token);
+    let graphql_url = server.url();
+    let first_id = format!("{:014}", 20260101000000u64);
+    let rest_url = server.rest_url(&format!("/zettels/{first_id}"));
+    let nosql_url = server.nosql_url(&format!("/{:014}", 20260101000000u64));
+    let pg_port = server.pg_port();
+    let token = server.token.clone();
+
+    // Pre-connect a persistent pgwire client for fair comparison
+    let pg_client: tokio_postgres::Client = rt.block_on(async {
+        let (client, conn) = tokio_postgres::Config::new()
+            .host("127.0.0.1")
+            .port(pg_port)
+            .user("zdb")
+            .password(&token)
+            .dbname("zdb")
+            .connect(tokio_postgres::NoTls)
+            .await
+            .unwrap();
+        tokio::spawn(async move { conn.await.ok(); });
+        client
+    });
+
+    let mut group = c.benchmark_group("server/protocol_comparison");
+    group.sample_size(50);
+    group.measurement_time(Duration::from_secs(10));
+
+    let gql_get = q_get(0);
+    group.bench_function("graphql", |b| {
+        b.iter(|| {
+            rt.block_on(graphql_request(&client, &graphql_url, &gql_get)).unwrap();
+        });
+    });
+
+    group.bench_function("rest", |b| {
+        b.iter(|| {
+            rt.block_on(rest_request(&client, &rest_url)).unwrap();
+        });
+    });
+
+    group.bench_function("nosql", |b| {
+        b.iter(|| {
+            rt.block_on(rest_request(&client, &nosql_url)).unwrap();
+        });
+    });
+
+    group.bench_function("pgwire", |b| {
+        b.iter(|| {
+            rt.block_on(pgwire_query_reuse(
+                &pg_client,
+                &format!("SELECT id, title, body FROM zettels WHERE id = '{first_id}'"),
+            ));
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_single_reads,
     bench_concurrent_reads,
     bench_concurrent_search,
-    bench_mixed_load
+    bench_mixed_load,
+    bench_protocol_comparison
 );
 criterion_main!(benches);
