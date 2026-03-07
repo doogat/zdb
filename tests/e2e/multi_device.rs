@@ -309,3 +309,34 @@ fn airgapped_delta_transfer() {
     let out = MultiNodeSetup::read(&setup.nodes[1], &id1);
     assert!(out.contains("Delta note"), "delta transfer should bring new zettel");
 }
+
+// ── Test: concurrent edits to same zettel ────────────────────────
+
+#[test]
+fn concurrent_edits_same_zettel() {
+    let setup = MultiNodeSetup::new(3);
+
+    // Node0 creates a zettel, sync to all
+    let id = MultiNodeSetup::create(&setup.nodes[0], "Shared zettel", "original body");
+    MultiNodeSetup::push(&setup.nodes[0]);
+    MultiNodeSetup::sync(&setup.nodes[1]);
+    MultiNodeSetup::sync(&setup.nodes[2]);
+
+    // All 3 nodes edit the same zettel without syncing between edits
+    MultiNodeSetup::update(&setup.nodes[0], &id, "Edit from node0", "body from node0");
+    MultiNodeSetup::update(&setup.nodes[1], &id, "Edit from node1", "body from node1");
+    MultiNodeSetup::update(&setup.nodes[2], &id, "Edit from node2", "body from node2");
+
+    // Sync cascade: 3 rounds to ensure full convergence
+    for _ in 0..3 {
+        sync_round_robin(&setup);
+    }
+
+    // All nodes must converge to identical content (CRDT determinism)
+    let content0 = MultiNodeSetup::read(&setup.nodes[0], &id);
+    let content1 = MultiNodeSetup::read(&setup.nodes[1], &id);
+    let content2 = MultiNodeSetup::read(&setup.nodes[2], &id);
+
+    assert_eq!(content0, content1, "node0 and node1 diverged");
+    assert_eq!(content1, content2, "node1 and node2 diverged");
+}
