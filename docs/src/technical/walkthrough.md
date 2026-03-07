@@ -2990,3 +2990,88 @@ sed -n '1231,1245p' zdb-core/src/git_ops.rs
 ```
 
 The path-validation logic itself did not change. What changed is the test fixture: the absolute-path regression tests now call `native_absolute_path()` so Windows exercises a real Windows absolute path instead of Unix-only literals like `/etc/passwd`. That keeps the `validate_path()` contract portable without weakening the repository-boundary checks described earlier in the walkthrough.
+
+## Benchmark Validation Suite
+
+The project validates performance against spec targets (NFR-01 through NFR-04, AC-19) using a combination of Criterion benchmarks and threshold assertion tests.
+
+### Benchmark Structure
+
+Five Criterion benchmark targets measure different aspects:
+
+```bash
+sed -n '/\[\[bench\]\]/,/^$/{ /name/p }' zdb-core/Cargo.toml
+```
+
+```toml
+name = "crud"
+name = "search"
+name = "sync"
+name = "growth"
+name = "large_scale"
+```
+
+- **crud** — CRUD operations at 1K zettels
+- **search** — FTS5 search and SQL SELECT at 1K and 5K zettels
+- **sync** — fast-forward sync and compaction at 1K and 5K
+- **growth** — repo size growth simulation (365 days × 10 edits/day at 5K)
+- **large_scale** — FTS5 and SQL at 50K zettels
+
+### Threshold Tests
+
+Alongside Criterion benchmarks, two test files enforce NFR targets with hard assertions:
+
+```bash
+grep -E '^(#\[test\]|#\[ignore|fn [a-z])' zdb-core/tests/query_thresholds.rs
+```
+
+```rust
+fn zettel_content(i: usize) -> String {
+fn zettel_path(i: usize) -> String {
+fn setup(count: usize) -> (TempDir, Index) {
+fn median_ms<F: FnMut()>(mut f: F) -> u128 {
+#[test]
+fn nfr01_fts_query_under_10ms_at_5k() {
+#[test]
+fn nfr01_sql_query_under_10ms_at_5k() {
+#[test]
+#[ignore = "50K setup takes minutes — run explicitly"]
+fn ac19_fts_query_under_50ms_at_50k() {
+#[test]
+#[ignore = "50K setup takes minutes — run explicitly"]
+fn ac19_sql_query_under_50ms_at_50k() {
+```
+
+```bash
+grep -E '^(#\[test\]|#\[ignore|fn [a-z])' zdb-core/tests/sync_thresholds.rs
+```
+
+```rust
+fn zettel_content(i: usize) -> String {
+fn zettel_path(i: usize) -> String {
+#[test]
+#[ignore = "NFR-03 not yet met: sync ~12.6s vs 2s target"]
+fn nfr03_sync_under_2s_at_5k() {
+```
+
+```bash
+sed -n '/^fn median_ms/,/^}/p' zdb-core/tests/query_thresholds.rs
+```
+
+```rust
+fn median_ms<F: FnMut()>(mut f: F) -> u128 {
+    // warmup
+    for _ in 0..WARMUP_ITERS {
+        f();
+    }
+    // measure
+    let mut times = Vec::with_capacity(MEASURE_ITERS);
+    for _ in 0..MEASURE_ITERS {
+        let start = Instant::now();
+        f();
+        times.push(start.elapsed().as_millis());
+    }
+    times.sort();
+    times[MEASURE_ITERS / 2]
+}
+```
