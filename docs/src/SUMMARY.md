@@ -28,6 +28,7 @@
 - [NoSQL Index](./technical/nosql.md)
 - [Benchmarks](./technical/benchmarks.md)
 - [Git Scalability Audit](./technical/git-scalability-audit.md)
+- [Performance](./technical/performance.md)
 
 # User Guide
 
