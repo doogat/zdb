@@ -340,3 +340,47 @@ fn concurrent_edits_same_zettel() {
     assert_eq!(content0, content1, "node0 and node1 diverged");
     assert_eq!(content1, content2, "node1 and node2 diverged");
 }
+
+// ── Test: delete-vs-edit across 3 nodes ──────────────────────────
+
+#[test]
+fn delete_vs_edit_multi_node() {
+    let setup = MultiNodeSetup::new(3);
+
+    // Node0 creates a zettel, sync to all
+    let id = MultiNodeSetup::create(&setup.nodes[0], "Will conflict", "original body");
+    MultiNodeSetup::push(&setup.nodes[0]);
+    MultiNodeSetup::sync(&setup.nodes[1]);
+    MultiNodeSetup::sync(&setup.nodes[2]);
+
+    // Node1 deletes the zettel
+    MultiNodeSetup::delete(&setup.nodes[1], &id);
+
+    // Node2 edits the zettel
+    MultiNodeSetup::update(&setup.nodes[2], &id, "Edited after delete", "surviving body");
+
+    // Node1 pushes delete, then node2 syncs (triggers delete-vs-edit conflict)
+    MultiNodeSetup::push(&setup.nodes[1]);
+    MultiNodeSetup::sync(&setup.nodes[2]);
+
+    // Full sync to propagate resolution
+    for _ in 0..3 {
+        sync_round_robin(&setup);
+    }
+
+    // Edit wins: zettel should exist on all nodes with node2's content
+    for (i, node) in setup.nodes.iter().enumerate() {
+        let out = MultiNodeSetup::read(node, &id);
+        assert!(
+            out.contains("Edited after delete") || out.contains("surviving body"),
+            "node {i}: edit should win over delete, got: {out}"
+        );
+    }
+
+    // Check resurrected marker in frontmatter
+    let out = MultiNodeSetup::read(&setup.nodes[2], &id);
+    assert!(
+        out.contains("resurrected: true"),
+        "resurrected marker missing from frontmatter: {out}"
+    );
+}
