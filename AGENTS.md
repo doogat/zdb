@@ -97,6 +97,13 @@ After every task, update the code walkthrough at `docs/src/technical/walkthrough
 
 - Use the correct language label: `` ```rust `` for Rust, `` ```toml `` for Cargo files, `` ```bash `` for shell, etc.
 - Never use `` ```output `` — if the output is Rust code/config, label it as such
+- **Gotcha:** `showboat` generates `` ```output `` labels by default — post-process to the correct language label
+
+## Gotchas
+
+- E2E tests require the `zdb` binary — run `cargo build -p zdb-cli` before `cargo test -p zdb-e2e`
+- `head_oid()` returns `CommitHash` (a String newtype, access inner via `.0`), not `git2::Oid`
+- `merge_frontmatter` is called from both `resolve_conflicts` and `resolve_append_log`
 
 ## Commands
 
