@@ -2427,4 +2427,63 @@ Widget
         let empty = index.backlinking_zettel_paths("20260301100000").unwrap();
         assert!(empty.is_empty());
     }
+
+    #[test]
+    fn broken_backlinks_after_delete() {
+        let index = in_memory_index();
+
+        // Create target zettel A
+        let a = ParsedZettel {
+            meta: ZettelMeta {
+                id: Some(ZettelId("20260301100000".into())),
+                title: Some("Target".into()),
+                date: None,
+                zettel_type: None,
+                tags: vec![],
+                extra: Default::default(),
+            },
+            body: String::new(),
+            reference_section: String::new(),
+            inline_fields: vec![],
+            wikilinks: vec![],
+            path: "zettelkasten/20260301100000.md".into(),
+        };
+
+        // Create zettel B that links to A
+        let b = ParsedZettel {
+            meta: ZettelMeta {
+                id: Some(ZettelId("20260301100001".into())),
+                title: Some("Linker".into()),
+                date: None,
+                zettel_type: None,
+                tags: vec![],
+                extra: Default::default(),
+            },
+            body: "See [[20260301100000]]".into(),
+            reference_section: String::new(),
+            inline_fields: vec![],
+            wikilinks: vec![WikiLink {
+                target: "20260301100000".into(),
+                display: None,
+                zone: Zone::Body,
+            }],
+            path: "zettelkasten/20260301100001.md".into(),
+        };
+
+        index.index_zettel(&a).unwrap();
+        index.index_zettel(&b).unwrap();
+
+        // No broken backlinks yet
+        let broken = index.broken_backlinks().unwrap();
+        assert!(broken.is_empty());
+
+        // Delete A
+        index.remove_zettel("20260301100000").unwrap();
+
+        // B's link to A is now broken
+        let broken = index.broken_backlinks().unwrap();
+        assert_eq!(broken.len(), 1);
+        assert_eq!(broken[0].0, "20260301100001");
+        assert_eq!(broken[0].1, "20260301100000");
+    }
 }
