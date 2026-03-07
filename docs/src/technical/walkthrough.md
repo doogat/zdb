@@ -3075,3 +3075,89 @@ fn median_ms<F: FnMut()>(mut f: F) -> u128 {
     times[MEASURE_ITERS / 2]
 }
 ```
+
+The server crate adds a Criterion benchmark suite (`zdb-server/benches/server_load.rs`) measuring read latency, concurrent throughput, mixed read/write load, and cross-protocol comparison. This is the first benchmark targeting the server layer rather than zdb-core directly.
+
+### Benchmark Harness
+
+The server benchmark spawns a real `zdb serve` subprocess (just like e2e tests), seeds it with 200 zettels, then measures via HTTP (reqwest) and pgwire (tokio-postgres). A lightweight `BenchServer` struct mirrors the e2e `ServerGuard` pattern:
+
+```bash
+sed -n "/^struct BenchServer/,/^}/p" zdb-server/benches/server_load.rs
+```
+
+```rust
+struct BenchServer {
+    child: Child,
+    port: u16,
+    token: String,
+    _dir: TempDir,
+}
+```
+
+### Benchmark Groups
+
+The suite contains five benchmark groups measuring different aspects of server performance:
+
+```bash
+grep -E "benchmark_group\(\"" zdb-server/benches/server_load.rs | sed "s/.*benchmark_group(\"/- /" | sed "s/\".*//"
+```
+
+```text
+- server/single_read
+- server/concurrent_reads
+- server/concurrent_search
+- server/mixed_load
+- server/protocol_comparison
+```
+
+- **single_read** — baseline latency for individual GraphQL queries (list, get, search)
+- **concurrent_reads** — list query latency at 1/4/8/16 concurrent readers, measures actor serialization cost
+- **concurrent_search** — FTS search at same concurrency levels
+- **mixed_load** — read latency with and without background write mutations
+- **protocol_comparison** — same get-zettel query across GraphQL, REST, NoSQL, and pgwire
+
+### Mixed-Load Pattern
+
+The mixed-load benchmark spawns a background write loop that continuously creates and updates zettels while the benchmark measures read latency. This reveals actor contention:
+
+```bash
+grep -A5 'fn spawn_write_load' zdb-server/benches/server_load.rs
+```
+
+```rust
+fn spawn_write_load(
+    rt: &tokio::runtime::Runtime,
+    client: &reqwest::Client,
+    url: &str,
+    stop: Arc<AtomicBool>,
+) -> (tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
+```
+
+The write loop alternates between `createZettel` and `updateZettel` mutations with a 1ms yield between operations, simulating sustained write activity. Criterion measures read latency both with and without this background load, producing a direct comparison.
+
+### Cross-Protocol Comparison
+
+The protocol comparison benchmark runs the same get-zettel-by-id query through all four server protocols with identical configuration. For pgwire, a persistent `tokio_postgres::Client` connection is reused across iterations to avoid measuring connection setup:
+
+```bash
+grep 'bench_function' zdb-server/benches/server_load.rs
+```
+
+```rust
+    group.bench_function("list_zettels", |b| {
+    group.bench_function("get_zettel", |b| {
+    group.bench_function("search", |b| {
+    group.bench_function("reads_only", |b| {
+    group.bench_function("reads_during_writes", |b| {
+    group.bench_function("search_during_writes", |b| {
+    group.bench_function("graphql", |b| {
+    group.bench_function("rest", |b| {
+    group.bench_function("nosql", |b| {
+    group.bench_function("pgwire", |b| {
+```
+
+The four protocol-specific benchmarks (graphql, rest, nosql, pgwire) use the same server instance and zettel dataset, isolating protocol overhead from actor/query cost. Results and the architectural decision are documented in `docs/src/technical/server-read-path.md`.
+
+Run the full server benchmark suite with: `cargo bench -p zdb-server`
+
