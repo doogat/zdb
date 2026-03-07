@@ -441,9 +441,19 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
             let index = open_index(&cli.repo)?;
             index.rebuild_if_stale(&repo)?;
             let path = index.resolve_path(&id)?;
+            let broken = index.backlinking_zettel_paths(&path)?;
             repo.delete_file(&path, &format!("delete zettel {id}"))?;
             index.remove_zettel(&id)?;
             redb_remove_zettel(&cli.repo, &id);
+            if !broken.is_empty() {
+                eprintln!(
+                    "warning: {} zettel(s) have broken backlinks after deleting {id}:",
+                    broken.len()
+                );
+                for (src_id, src_path) in &broken {
+                    eprintln!("  - {src_id} ({src_path})");
+                }
+            }
         }
 
         Command::Sync { remote, branch } => {
