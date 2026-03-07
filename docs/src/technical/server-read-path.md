@@ -115,6 +115,35 @@ Non-mutating queries bypass the actor and read SQLite directly via a shared read
 - **Premature complexity**: Adding a read fast path now would create consistency surface area for no demonstrated user need.
 - **Misleading benchmarks**: Sustained background writes are worst-case; real usage will show lower contention.
 
+## Operating Envelope
+
+These are the supported performance boundaries for the single-actor design.
+
+### Supported
+
+| Parameter | Limit | Notes |
+|-----------|-------|-------|
+| Concurrent readers (no writes) | Up to 16 | Latency grows linearly; p99 stays under 50 ms for list queries |
+| Single-request latency | < 3 ms (list), < 300 µs (get/search) | All protocols, 200 zettels |
+| Throughput (read-only) | ~360 req/s (list), ~15K req/s (search) | Actor-serialized ceiling |
+| Write frequency | Human-speed (< 1 write/sec) | Reads remain responsive at this rate |
+
+### Degraded
+
+| Condition | Impact | Mitigation |
+|-----------|--------|------------|
+| Sustained writes (> 1/sec) | List latency degrades 10-45x | Batch writes; use search instead of list |
+| > 16 concurrent readers | Latency > 50 ms per request | Rate-limit clients or add read fast path |
+| Sync during reads | Similar to write degradation | Schedule sync during idle periods |
+
+### Revisit triggers
+
+Introduce a read fast path if any of these become true:
+
+1. Multiple clients poll the server concurrently (e.g., mobile + desktop + web)
+2. Background sync runs frequently enough to cause sustained write contention
+3. Query latency under mixed load exceeds NFR-01's 10 ms target in production
+
 ## References
 
 - NFR-01 / AC-06: Query latency < 10 ms at 5K zettels

@@ -56,3 +56,15 @@ Sync latency exceeds the NFR-03 target by ~6x. This needs optimization work (lik
 Run: `cargo bench -p zdb-core --bench sync -- "5k"`
 
 Threshold test (ignored): `cargo test --release -p zdb-core --test sync_thresholds -- --ignored`
+
+## Server Read-Path (NFR-01 under load)
+
+| Workload | Latency | Status |
+|----------|---------|--------|
+| Single read (get zettel) | 60–276 µs | PASS |
+| 16 concurrent readers | ~44 ms (list 20) | PASS |
+| Reads during sustained writes | ~500 ms (list 20) | Degraded |
+
+The actor serializes all operations. Reads meet NFR-01 targets under normal use but degrade 45x under sustained write load. Decision: keep single actor; see [Server Read-Path Decision](./server-read-path.md) for full analysis and operating envelope.
+
+Run: `cargo bench -p zdb-server`
