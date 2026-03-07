@@ -1,7 +1,8 @@
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
-use std::sync::atomic::{AtomicU16, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
@@ -327,10 +328,104 @@ fn bench_concurrent_search(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// Mixed-load benchmark: reads during concurrent writes
+// ---------------------------------------------------------------------------
+
+fn q_create(seq: usize) -> String {
+    format!(
+        r#"mutation {{ createZettel(input: {{ title: "bench-write-{seq}", content: "load test body {seq}", tags: ["bench"] }}) {{ id }} }}"#
+    )
+}
+
+fn q_update(id: &str, seq: usize) -> String {
+    format!(
+        r#"mutation {{ updateZettel(input: {{ id: "{id}", title: "bench-updated-{seq}" }}) {{ id }} }}"#
+    )
+}
+
+/// Spawn a background write loop that creates and updates zettels until `stop` is set.
+/// Returns a JoinHandle and an Arc tracking how many writes completed.
+fn spawn_write_load(
+    rt: &tokio::runtime::Runtime,
+    client: &reqwest::Client,
+    url: &str,
+    stop: Arc<AtomicBool>,
+) -> (tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
+    let c = client.clone();
+    let u = url.to_string();
+    let write_count = Arc::new(AtomicUsize::new(0));
+    let wc = write_count.clone();
+    let handle = rt.spawn(async move {
+        let mut seq = 0usize;
+        let mut created_ids: Vec<String> = Vec::new();
+        while !stop.load(Ordering::Relaxed) {
+            // Alternate: create a new zettel, then update one we created earlier
+            let resp = graphql_request(&c, &u, &q_create(seq)).await.unwrap();
+            wc.fetch_add(1, Ordering::Relaxed);
+            if let Some(id) = resp
+                .pointer("/data/createZettel/id")
+                .and_then(|v| v.as_str())
+            {
+                created_ids.push(id.to_string());
+            }
+            if let Some(id) = created_ids.get(seq % created_ids.len().max(1)) {
+                let _ = graphql_request(&c, &u, &q_update(id, seq)).await;
+                wc.fetch_add(1, Ordering::Relaxed);
+            }
+            seq += 1;
+            // Small yield to avoid starving the read benchmarks
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+    });
+    (handle, write_count)
+}
+
+fn bench_mixed_load(c: &mut Criterion) {
+    let server = setup_server();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let client = build_client(&server.token);
+    let url = server.url();
+
+    let mut group = c.benchmark_group("server/mixed_load");
+    group.sample_size(30);
+    group.measurement_time(Duration::from_secs(15));
+
+    // Baseline: read-only (no background writes)
+    group.bench_function("reads_only", |b| {
+        b.iter(|| {
+            rt.block_on(concurrent_reads(&client, &url, Q_LIST, 4));
+        });
+    });
+
+    // Mixed: reads with background writes
+    let stop = Arc::new(AtomicBool::new(false));
+    let (write_handle, _write_count) = spawn_write_load(&rt, &client, &url, stop.clone());
+
+    group.bench_function("reads_during_writes", |b| {
+        b.iter(|| {
+            rt.block_on(concurrent_reads(&client, &url, Q_LIST, 4));
+        });
+    });
+
+    // Mixed: search with background writes
+    group.bench_function("search_during_writes", |b| {
+        b.iter(|| {
+            rt.block_on(concurrent_reads(&client, &url, Q_SEARCH, 4));
+        });
+    });
+
+    stop.store(true, Ordering::Relaxed);
+    rt.block_on(write_handle).unwrap();
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_single_reads,
     bench_concurrent_reads,
-    bench_concurrent_search
+    bench_concurrent_search,
+    bench_mixed_load
 );
 criterion_main!(benches);
