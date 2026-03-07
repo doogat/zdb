@@ -1,4 +1,5 @@
 use crate::common::{MultiNodeSetup, ZdbTestRepo};
+use rand::prelude::*;
 
 /// Round-robin sync: push from one node, pull on all others
 fn sync_round_robin(setup: &MultiNodeSetup) {
@@ -383,4 +384,126 @@ fn delete_vs_edit_multi_node() {
         out.contains("resurrected: true"),
         "resurrected marker missing from frontmatter: {out}"
     );
+}
+
+// ── Test: chaos convergence with 4 nodes ─────────────────────────
+
+/// List zettel files in a node's zettelkasten directory, sorted.
+fn list_zettels(node: &std::path::Path) -> Vec<String> {
+    let zk_dir = node.join("zettelkasten");
+    let mut files: Vec<String> = std::fs::read_dir(&zk_dir)
+        .unwrap()
+        .filter_map(|e| {
+            let e = e.unwrap();
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.ends_with(".md") && !name.starts_with('_') {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+/// Read a zettel file directly from disk for comparison.
+fn read_zettel_file(node: &std::path::Path, filename: &str) -> String {
+    std::fs::read_to_string(node.join("zettelkasten").join(filename)).unwrap()
+}
+
+#[test]
+fn chaos_convergence() {
+    let setup = MultiNodeSetup::new(4);
+    let mut rng = StdRng::seed_from_u64(42);
+
+    // Each node tracks its locally-known zettel IDs (for updates)
+    let mut local_ids: Vec<Vec<String>> = vec![vec![]; 4];
+
+    // Phase 1: each node creates an initial zettel so there's something to operate on
+    for (i, node) in setup.nodes.iter().enumerate() {
+        let id = MultiNodeSetup::create(node, &format!("Init {i}"), &format!("body {i}"));
+        local_ids[i].push(id);
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+
+    // Sync all so every node knows every zettel
+    for _ in 0..3 {
+        sync_round_robin(&setup);
+    }
+
+    // Propagate all IDs to all nodes' known lists
+    let all_ids: Vec<String> = local_ids.iter().flatten().cloned().collect();
+    for ids in &mut local_ids {
+        *ids = all_ids.clone();
+    }
+
+    // Phase 2: each node performs 5 random ops (create or update only)
+    for i in 0..4 {
+        for _ in 0..5 {
+            let op: u8 = rng.gen_range(0..3);
+            match op {
+                0 => {
+                    // Create
+                    let id = MultiNodeSetup::create(
+                        &setup.nodes[i],
+                        &format!("Chaos {i}"),
+                        &format!("chaos body {i}"),
+                    );
+                    local_ids[i].push(id);
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+                1 if !local_ids[i].is_empty() => {
+                    // Update a random known zettel
+                    let idx = rng.gen_range(0..local_ids[i].len());
+                    let id = local_ids[i][idx].clone();
+                    MultiNodeSetup::update(
+                        &setup.nodes[i],
+                        &id,
+                        &format!("Updated by {i}"),
+                        &format!("updated body {i}"),
+                    );
+                }
+                _ => {
+                    // Create (fallback when no IDs to update)
+                    let id = MultiNodeSetup::create(
+                        &setup.nodes[i],
+                        &format!("Chaos fallback {i}"),
+                        &format!("fallback body {i}"),
+                    );
+                    local_ids[i].push(id);
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+            }
+        }
+    }
+
+    // Phase 3: converge with multiple sync rounds
+    for _ in 0..5 {
+        sync_round_robin(&setup);
+    }
+
+    // Phase 4: verify all nodes have identical zettel set and content
+    let files_node0 = list_zettels(&setup.nodes[0]);
+    assert!(!files_node0.is_empty(), "node 0 should have zettels");
+
+    for (i, node) in setup.nodes.iter().enumerate().skip(1) {
+        let files = list_zettels(node);
+        assert_eq!(
+            files_node0, files,
+            "node 0 and node {i} have different zettel sets"
+        );
+    }
+
+    // Verify file contents match across all nodes
+    for filename in &files_node0 {
+        let content0 = read_zettel_file(&setup.nodes[0], filename);
+        for (i, node) in setup.nodes.iter().enumerate().skip(1) {
+            let content = read_zettel_file(node, filename);
+            assert_eq!(
+                content0, content,
+                "node 0 and node {i} diverged on {filename}"
+            );
+        }
+    }
 }
