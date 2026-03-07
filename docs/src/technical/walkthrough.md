@@ -2878,23 +2878,18 @@ The key ordering is: query backlinks → delete from git → remove from index �
 
 ### Status Integration
 
-`zdb status` also reports broken backlinks by scanning all links in `_zdb_links` where the target doesn't match any existing zettel:
+`zdb status` also reports broken backlinks using the dedicated `broken_backlinks()` method on the indexer:
 
 ```bash
-sed -n '/broken = index.query_raw/,/^                }/p' zdb-cli/src/main.rs
+sed -n '/let broken = index.broken_backlinks/,/^                }/p' zdb-cli/src/main.rs
 ```
 
 ```rust
-                let broken = index.query_raw(
-                    "SELECT DISTINCT l.source_id, l.target_path \
-                     FROM _zdb_links l \
-                     LEFT JOIN zettels z ON l.target_path = z.id \
-                     WHERE z.id IS NULL"
-                ).unwrap_or_default();
+                let broken = index.broken_backlinks().unwrap_or_default();
                 if !broken.is_empty() {
                     println!("broken backlinks:");
-                    for row in &broken {
-                        println!("  {} -> {}", row[0], row.get(1).map(|s| s.as_str()).unwrap_or("?"));
+                    for (src_id, target_path) in &broken {
+                        println!("  {src_id} -> {target_path}");
                     }
                 }
 ```
