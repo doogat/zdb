@@ -1,6 +1,16 @@
 # Performance
 
-Measured values for NFR/AC performance targets.
+Measured values for NFR/AC performance targets. All measurements taken on Darwin/arm64 (Apple Silicon) in release mode.
+
+## Summary
+
+| Req | Target | Measured | Status |
+|-----|--------|----------|--------|
+| NFR-01 / AC-06 | Query < 10ms (5K) | FTS ~3ms, SQL ~6µs | PASS |
+| NFR-02 / AC-08 | Growth < 50MB/yr (5K) | < 50MB | PASS |
+| NFR-03 / AC-02 | Sync < 2s (5K, LAN) | ~12.6s | FAIL |
+| NFR-04 / AC-07 | Binary size profiled | 23.5MB | — |
+| AC-19 | Query < 50ms (50K) | not yet measured | — |
 
 ## Binary Size (NFR-04 / AC-07)
 
@@ -12,19 +22,37 @@ Run `dev/bin/profile-binary-size` to measure on your platform.
 
 ## Query Latency (NFR-01 / AC-06 / AC-19)
 
-| Scale | Target | Measured |
-|-------|--------|----------|
-| 5K zettels | < 10ms | — |
-| 50K zettels | < 50ms | — |
+| Scale | Operation | Target | Measured |
+|-------|-----------|--------|----------|
+| 5K zettels | FTS search | < 10ms | ~3.0ms |
+| 5K zettels | SQL SELECT | < 10ms | ~6.1µs |
+| 50K zettels | FTS search | < 50ms | not yet measured |
+| 50K zettels | SQL SELECT | < 50ms | not yet measured |
+
+Run 5K benchmarks: `cargo bench -p zdb-core --bench search -- "5k"`
+
+Run 50K benchmarks: `cargo bench -p zdb-core --bench large_scale`
+
+Threshold tests: `cargo test -p zdb-core --test query_thresholds`
+
+50K threshold tests (slow): `cargo test --release -p zdb-core --test query_thresholds -- --ignored`
 
 ## Repo Growth (NFR-02 / AC-08)
 
-| Scale | Target | Measured |
-|-------|--------|----------|
-| 5K zettels, 1 year | < 50MB | — |
+| Scale | Target | Status |
+|-------|--------|--------|
+| 5K zettels, 365 days × 10 edits/day | < 50MB | PASS |
+
+Run: `cargo bench -p zdb-core --bench growth -- --test`
 
 ## Sync Latency (NFR-03 / AC-02)
 
-| Scale | Target | Measured |
-|-------|--------|----------|
-| 5K zettels, LAN | < 2s | — |
+| Scale | Target | Measured | Status |
+|-------|--------|----------|--------|
+| 5K zettels, localhost | < 2s | ~12.6s | FAIL |
+
+Sync latency exceeds the NFR-03 target by ~6x. This needs optimization work (likely in `SyncManager::sync` or the underlying git fetch/merge path).
+
+Run: `cargo bench -p zdb-core --bench sync -- "5k"`
+
+Threshold test (ignored): `cargo test --release -p zdb-core --test sync_thresholds -- --ignored`
