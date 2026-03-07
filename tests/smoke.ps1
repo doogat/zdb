@@ -93,6 +93,19 @@ $output = zdb status
 if ($output -notmatch "^head:") { throw "status missing head" }
 pass "status"
 
+# 6b. broken backlink report on delete
+$BL_TARGET = zdb create --title "Backlink Target" --body "I will be deleted"
+Start-Sleep -Seconds 1
+$BL_SOURCE = zdb create --title "Backlink Source" --body "See [[$BL_TARGET]]"
+zdb reindex | Out-Null
+$output = & $ZDB delete $BL_TARGET 2>&1
+if ($output -notmatch "broken backlinks") { throw "delete missing broken backlink report" }
+$output = & $ZDB status 2>&1
+if ($output -notmatch "broken backlinks") { throw "status missing broken backlinks" }
+# Clean up: delete source so broken backlinks don't affect later tests
+& $ZDB delete $BL_SOURCE 2>&1 | Out-Null
+pass "broken backlink report on delete"
+
 # 7. reindex
 $output = zdb reindex
 if ($output -notmatch "indexed 2 zettels") { throw "reindex count wrong" }
