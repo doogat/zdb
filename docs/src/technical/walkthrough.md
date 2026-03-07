@@ -2451,7 +2451,7 @@ The parser module provides `rewrite_wikilinks()` which replaces wikilink targets
 sed -n '/^pub fn rewrite_wikilinks/,/^}/p' zdb-core/src/parser.rs
 ```
 
-```output
+```rust
 pub fn rewrite_wikilinks(content: &str, old_target: &str, new_target: &str) -> String {
     use std::sync::OnceLock;
     static REWRITE_RE: OnceLock<Regex> = OnceLock::new();
@@ -2483,7 +2483,7 @@ The indexer adds `backlinking_zettel_paths()` which joins `_zdb_links` with `zet
 sed -n '/pub fn backlinking_zettel_paths/,/^    }/p' zdb-core/src/indexer.rs
 ```
 
-```output
+```rust
     pub fn backlinking_zettel_paths(&self, target: &str) -> Result<Vec<(String, String)>> {
         let mut stmt = self.conn.prepare(
             "SELECT DISTINCT l.source_id, z.path \
@@ -2516,7 +2516,7 @@ sed -n '/pub fn backlinking_zettel_paths/,/^    }/p' zdb-core/src/indexer.rs
 sed -n '/^pub fn rename_zettel/,/^}/p' zdb-core/src/git_ops.rs
 ```
 
-```output
+```rust
 pub fn rename_zettel(
     repo: &GitRepo,
     index: &crate::indexer::Index,
@@ -2907,9 +2907,9 @@ The GitHub Actions test job now restores the minimum artifact set needed for the
 sed -n '36,52p' .github/workflows/test.yml
 ```
 
-```output
+```yaml
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Build CLI binary
         run: cargo build -p zdb-cli --bin zdb
@@ -2931,7 +2931,7 @@ sed -n '36,52p' .github/workflows/test.yml
 sed -n '4,14p' tests/smoke.sh
 ```
 
-```output
+```bash
 # Build and lint (skip if ZDB_BIN is set, e.g. in CI where build already ran)
 if [ -z "${ZDB_BIN:-}" ]; then
   cargo clippy --workspace --quiet
@@ -2951,7 +2951,7 @@ The important detail is the absolute `ZDB_BIN`. `tests/smoke.sh` changes into a 
 sed -n '892,909p' zdb-core/src/git_ops.rs
 ```
 
-```output
+```rust
     use super::*;
     use tempfile::TempDir;
 
@@ -2976,7 +2976,7 @@ sed -n '892,909p' zdb-core/src/git_ops.rs
 sed -n '1231,1245p' zdb-core/src/git_ops.rs
 ```
 
-```output
+```rust
     #[test]
     fn absolute_path_write_rejected() {
         let (_dir, repo) = temp_repo();
