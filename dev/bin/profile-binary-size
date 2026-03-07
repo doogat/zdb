@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "Usage: dev/bin/profile-binary-size [--release-type debug|release]"
+  exit 1
+}
+
+RELEASE_TYPE="release"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --release-type) RELEASE_TYPE="$2"; shift 2 ;;
+    *) usage ;;
+  esac
+done
+
+case "$RELEASE_TYPE" in
+  release) cargo build --release -p zdb-cli --quiet ;;
+  debug)   cargo build -p zdb-cli --quiet ;;
+  *)       usage ;;
+esac
+
+BINARY="target/${RELEASE_TYPE}/zdb"
+if [[ ! -f "$BINARY" ]]; then
+  echo "error: binary not found at ${BINARY}" >&2
+  exit 1
+fi
+
+SIZE_BYTES=$(wc -c < "$BINARY" | tr -d ' ')
+
+if (( SIZE_BYTES >= 1048576 )); then
+  SIZE_HUMAN="$(awk "BEGIN {printf \"%.1f\", ${SIZE_BYTES}/1048576}")MB"
+else
+  SIZE_HUMAN="$(awk "BEGIN {printf \"%.1f\", ${SIZE_BYTES}/1024}")KB"
+fi
+
+OS=$(uname -s)
+ARCH=$(uname -m)
+
+echo "${RELEASE_TYPE} binary: ${SIZE_HUMAN} (${SIZE_BYTES} bytes)"
+echo "platform: ${OS}/${ARCH}"
