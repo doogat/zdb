@@ -5,7 +5,8 @@ use tempfile::TempDir;
 use zdb_core::git_ops::GitRepo;
 use zdb_core::indexer::Index;
 
-const ZETTEL_COUNT: usize = 1000;
+const ZETTEL_COUNT_1K: usize = 1000;
+const ZETTEL_COUNT_5K: usize = 5000;
 
 fn zettel_content(i: usize) -> String {
     let word = match i % 5 {
@@ -27,9 +28,9 @@ fn zettel_path(i: usize) -> String {
     format!("zettelkasten/{:014}.md", 20260101000000u64 + i as u64)
 }
 
-fn populated_repo_and_index(repo_dir: &Path, db_path: &Path) -> (GitRepo, Index) {
+fn populated_repo_and_index(repo_dir: &Path, db_path: &Path, count: usize) -> (GitRepo, Index) {
     let repo = GitRepo::init(repo_dir).unwrap();
-    let files: Vec<(String, String)> = (0..ZETTEL_COUNT)
+    let files: Vec<(String, String)> = (0..count)
         .map(|i| (zettel_path(i), zettel_content(i)))
         .collect();
     let refs: Vec<(&str, &str)> = files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
@@ -44,9 +45,9 @@ fn bench_search(c: &mut Criterion) {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("index.db");
     let repo_dir = dir.path().join("repo");
-    let (_repo, index) = populated_repo_and_index(&repo_dir, &db_path);
+    let (_repo, index) = populated_repo_and_index(&repo_dir, &db_path, ZETTEL_COUNT_1K);
 
-    c.bench_function("search/fts", |b| {
+    c.bench_function("search/fts_1k", |b| {
         b.iter(|| {
             index.search("architecture").unwrap();
         });
@@ -57,9 +58,37 @@ fn bench_query_raw(c: &mut Criterion) {
     let dir = TempDir::new().unwrap();
     let db_path = dir.path().join("index.db");
     let repo_dir = dir.path().join("repo");
-    let (_repo, index) = populated_repo_and_index(&repo_dir, &db_path);
+    let (_repo, index) = populated_repo_and_index(&repo_dir, &db_path, ZETTEL_COUNT_1K);
 
-    c.bench_function("search/sql_select", |b| {
+    c.bench_function("search/sql_select_1k", |b| {
+        b.iter(|| {
+            index
+                .query_raw("SELECT id, title FROM zettels WHERE title LIKE '%architecture%' LIMIT 10")
+                .unwrap();
+        });
+    });
+}
+
+fn bench_search_5k(c: &mut Criterion) {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("index.db");
+    let repo_dir = dir.path().join("repo");
+    let (_repo, index) = populated_repo_and_index(&repo_dir, &db_path, ZETTEL_COUNT_5K);
+
+    c.bench_function("search/fts_5k", |b| {
+        b.iter(|| {
+            index.search("architecture").unwrap();
+        });
+    });
+}
+
+fn bench_query_raw_5k(c: &mut Criterion) {
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("index.db");
+    let repo_dir = dir.path().join("repo");
+    let (_repo, index) = populated_repo_and_index(&repo_dir, &db_path, ZETTEL_COUNT_5K);
+
+    c.bench_function("search/sql_select_5k", |b| {
         b.iter(|| {
             index
                 .query_raw("SELECT id, title FROM zettels WHERE title LIKE '%architecture%' LIMIT 10")
@@ -76,7 +105,7 @@ fn bench_rebuild(c: &mut Criterion) {
                 let db_path = dir.path().join("index.db");
                 let repo_dir = dir.path().join("repo");
                 let repo = GitRepo::init(&repo_dir).unwrap();
-                let files: Vec<(String, String)> = (0..ZETTEL_COUNT)
+                let files: Vec<(String, String)> = (0..ZETTEL_COUNT_1K)
                     .map(|i| (zettel_path(i), zettel_content(i)))
                     .collect();
                 let refs: Vec<(&str, &str)> =
@@ -100,7 +129,7 @@ fn bench_incremental_reindex(c: &mut Criterion) {
                 let db_path = dir.path().join("index.db");
                 let repo_dir = dir.path().join("repo");
                 let repo = GitRepo::init(&repo_dir).unwrap();
-                let files: Vec<(String, String)> = (0..ZETTEL_COUNT)
+                let files: Vec<(String, String)> = (0..ZETTEL_COUNT_1K)
                     .map(|i| (zettel_path(i), zettel_content(i)))
                     .collect();
                 let refs: Vec<(&str, &str)> =
@@ -126,5 +155,13 @@ fn bench_incremental_reindex(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_search, bench_query_raw, bench_rebuild, bench_incremental_reindex);
+criterion_group!(
+    benches,
+    bench_search,
+    bench_query_raw,
+    bench_search_5k,
+    bench_query_raw_5k,
+    bench_rebuild,
+    bench_incremental_reindex
+);
 criterion_main!(benches);
