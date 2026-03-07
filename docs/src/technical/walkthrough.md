@@ -2836,3 +2836,111 @@ fn chaos_convergence() {
     }
 }
 ```
+
+
+## 19. Broken Backlink Report — `zdb-cli/src/main.rs`
+
+
+When a zettel is deleted, other zettels may still link to it via wikilinks. The `zdb delete` command reports these broken backlinks to stderr after deletion.
+
+### Delete Handler
+
+Before removing a zettel from git and the index, the delete handler queries `backlinking_zettel_paths()` with the zettel ID. This must happen before `remove_zettel()` because the link data lives in the index. After deletion, any broken backlinks are printed as warnings:
+
+```bash
+sed -n '/Command::Delete { id }/,/^        }/p' zdb-cli/src/main.rs
+```
+
+```rust
+        Command::Delete { id } => {
+            let repo = GitRepo::open(&cli.repo)?;
+            let index = open_index(&cli.repo)?;
+            index.rebuild_if_stale(&repo)?;
+            let path = index.resolve_path(&id)?;
+            let broken = index.backlinking_zettel_paths(&id)?;
+            repo.delete_file(&path, &format!("delete zettel {id}"))?;
+            index.remove_zettel(&id)?;
+            redb_remove_zettel(&cli.repo, &id);
+            if !broken.is_empty() {
+                eprintln!(
+                    "warning: {} zettel(s) have broken backlinks after deleting {id}:",
+                    broken.len()
+                );
+                for (src_id, src_path) in &broken {
+                    eprintln!("  - {src_id} ({src_path})");
+                }
+            }
+        }
+```
+
+
+The key ordering is: query backlinks → delete from git → remove from index → print report. Querying before deletion ensures the link data is still available in the index.
+
+### Status Integration
+
+`zdb status` also reports broken backlinks by scanning all links in `_zdb_links` where the target doesn't match any existing zettel:
+
+```bash
+sed -n '/broken = index.query_raw/,/^                }/p' zdb-cli/src/main.rs
+```
+
+```rust
+                let broken = index.query_raw(
+                    "SELECT DISTINCT l.source_id, l.target_path \
+                     FROM _zdb_links l \
+                     LEFT JOIN zettels z ON l.target_path = z.id \
+                     WHERE z.id IS NULL"
+                ).unwrap_or_default();
+                if !broken.is_empty() {
+                    println!("broken backlinks:");
+                    for row in &broken {
+                        println!("  {} -> {}", row[0], row.get(1).map(|s| s.as_str()).unwrap_or("?"));
+                    }
+                }
+```
+
+## 20. CI Test Workflow and Cross-Platform Path Tests
+
+The GitHub Actions test job now restores the minimum artifact set needed for the expensive integration layers without going back to a full workspace build. Instead of relying on `cargo clippy --all-targets` to leave behind a runnable CLI, the workflow explicitly builds only `zdb-cli` and then reuses that binary in both the e2e suite and smoke scripts. The smoke scripts themselves honor `ZDB_BIN`, which lets CI skip a redundant rebuild and point at an absolute path even after the script changes into a temporary working directory.
+
+```bash
+sed -n '36,52p' .github/workflows/test.yml
+```
+
+```output
+      - name: Clippy
+        run: cargo clippy --workspace -- -D warnings
+
+      - name: Build CLI binary
+        run: cargo build -p zdb-cli --bin zdb
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Smoke test (Unix)
+        if: runner.os != 'Windows'
+        env:
+          ZDB_BIN: ${{ github.workspace }}/target/debug/zdb
+        run: ./tests/smoke.sh
+
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+```
+
+```bash
+sed -n '4,14p' tests/smoke.sh
+```
+
+```output
+# Build and lint (skip if ZDB_BIN is set, e.g. in CI where build already ran)
+if [ -z "${ZDB_BIN:-}" ]; then
+  cargo clippy --workspace --quiet
+  cargo build --quiet
+  cargo bench --no-run --quiet 2>/dev/null
+fi
+ZDB="${ZDB_BIN:-$(cargo metadata --format-version=1 --no-deps | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')/debug/zdb}"
+
+# Work in temp directories, clean up on exit
+TMPDIR="$(mktemp -d)"
+REMOTE_DIR="$(mktemp -d)"
+```
