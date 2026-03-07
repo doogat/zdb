@@ -34,7 +34,7 @@ jobs:
           git config --global user.name "ZettelDB CI"
 
       - name: Clippy
-        run: cargo clippy --workspace -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Build CLI binary
         run: cargo build -p zdb-cli --bin zdb

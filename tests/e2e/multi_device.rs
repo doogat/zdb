@@ -439,26 +439,26 @@ fn chaos_convergence() {
     }
 
     // Phase 2: each node performs 5 random ops (create or update only)
-    for i in 0..4 {
+    for (i, (node, ids)) in setup.nodes.iter().zip(local_ids.iter_mut()).enumerate() {
         for _ in 0..5 {
             let op: u8 = rng.gen_range(0..3);
             match op {
                 0 => {
                     // Create
                     let id = MultiNodeSetup::create(
-                        &setup.nodes[i],
+                        node,
                         &format!("Chaos {i}"),
                         &format!("chaos body {i}"),
                     );
-                    local_ids[i].push(id);
+                    ids.push(id);
                     std::thread::sleep(std::time::Duration::from_secs(1));
                 }
-                1 if !local_ids[i].is_empty() => {
+                1 if !ids.is_empty() => {
                     // Update a random known zettel
-                    let idx = rng.gen_range(0..local_ids[i].len());
-                    let id = local_ids[i][idx].clone();
+                    let idx = rng.gen_range(0..ids.len());
+                    let id = ids[idx].clone();
                     MultiNodeSetup::update(
-                        &setup.nodes[i],
+                        node,
                         &id,
                         &format!("Updated by {i}"),
                         &format!("updated body {i}"),
@@ -467,11 +467,11 @@ fn chaos_convergence() {
                 _ => {
                     // Create (fallback when no IDs to update)
                     let id = MultiNodeSetup::create(
-                        &setup.nodes[i],
+                        node,
                         &format!("Chaos fallback {i}"),
                         &format!("fallback body {i}"),
                     );
-                    local_ids[i].push(id);
+                    ids.push(id);
                     std::thread::sleep(std::time::Duration::from_secs(1));
                 }
             }
