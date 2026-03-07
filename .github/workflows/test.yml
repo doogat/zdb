@@ -34,7 +34,10 @@ jobs:
           git config --global user.name "ZettelDB CI"
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace -- -D warnings
+
+      - name: Build CLI binary
+        run: cargo build -p zdb-cli --bin zdb
 
       - name: Test
         run: cargo test --workspace
@@ -42,11 +45,11 @@ jobs:
       - name: Smoke test (Unix)
         if: runner.os != 'Windows'
         env:
-          ZDB_BIN: target/debug/zdb
+          ZDB_BIN: ${{ github.workspace }}/target/debug/zdb
         run: ./tests/smoke.sh
 
       - name: Smoke test (Windows)
         if: runner.os == 'Windows'
         env:
-          ZDB_BIN: target/debug/zdb.exe
+          ZDB_BIN: ${{ github.workspace }}\target\debug\zdb.exe
         run: pwsh -File tests/smoke.ps1

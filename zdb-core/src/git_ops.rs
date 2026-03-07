@@ -898,6 +898,14 @@ mod tests {
         (dir, repo)
     }
 
+    fn native_absolute_path() -> &'static str {
+        if cfg!(windows) {
+            r"C:\Windows\System32\drivers\etc\hosts"
+        } else {
+            "/etc/passwd"
+        }
+    }
+
     #[test]
     fn init_creates_directory_structure() {
         let (dir, _repo) = temp_repo();
@@ -1224,7 +1232,7 @@ mod tests {
     fn absolute_path_write_rejected() {
         let (_dir, repo) = temp_repo();
         let err = repo
-            .commit_file("/tmp/evil.md", "hacked", "write outside repo")
+            .commit_file(native_absolute_path(), "hacked", "write outside repo")
             .unwrap_err();
         assert!(matches!(err, ZettelError::InvalidPath(_)));
     }
@@ -1232,7 +1240,7 @@ mod tests {
     #[test]
     fn absolute_path_read_rejected() {
         let (_dir, repo) = temp_repo();
-        let err = repo.read_file("/etc/passwd").unwrap_err();
+        let err = repo.read_file(native_absolute_path()).unwrap_err();
         assert!(matches!(err, ZettelError::InvalidPath(_)));
     }
 

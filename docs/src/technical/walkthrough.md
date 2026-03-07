@@ -2944,3 +2944,54 @@ ZDB="${ZDB_BIN:-$(cargo metadata --format-version=1 --no-deps | sed -n 's/.*"tar
 TMPDIR="$(mktemp -d)"
 REMOTE_DIR="$(mktemp -d)"
 ```
+
+The important detail is the absolute `ZDB_BIN`. `tests/smoke.sh` changes into a temporary directory before invoking the CLI, so a relative path like `target/debug/zdb` would work only from the repository root and then break as soon as the smoke script moves into its sandbox. Passing the workspace-absolute path preserves the single-build optimization and keeps the smoke scripts portable across Linux, macOS, and Windows.
+
+```bash
+sed -n '892,909p' zdb-core/src/git_ops.rs
+```
+
+```output
+    use super::*;
+    use tempfile::TempDir;
+
+    fn temp_repo() -> (TempDir, GitRepo) {
+        let dir = TempDir::new().unwrap();
+        let repo = GitRepo::init(dir.path()).unwrap();
+        (dir, repo)
+    }
+
+    fn native_absolute_path() -> &'static str {
+        if cfg!(windows) {
+            r"C:\Windows\System32\drivers\etc\hosts"
+        } else {
+            "/etc/passwd"
+        }
+    }
+
+    #[test]
+```
+
+```bash
+sed -n '1231,1245p' zdb-core/src/git_ops.rs
+```
+
+```output
+    #[test]
+    fn absolute_path_write_rejected() {
+        let (_dir, repo) = temp_repo();
+        let err = repo
+            .commit_file(native_absolute_path(), "hacked", "write outside repo")
+            .unwrap_err();
+        assert!(matches!(err, ZettelError::InvalidPath(_)));
+    }
+
+    #[test]
+    fn absolute_path_read_rejected() {
+        let (_dir, repo) = temp_repo();
+        let err = repo.read_file(native_absolute_path()).unwrap_err();
+        assert!(matches!(err, ZettelError::InvalidPath(_)));
+    }
+```
+
+The path-validation logic itself did not change. What changed is the test fixture: the absolute-path regression tests now call `native_absolute_path()` so Windows exercises a real Windows absolute path instead of Unix-only literals like `/etc/passwd`. That keeps the `validate_path()` contract portable without weakening the repository-boundary checks described earlier in the walkthrough.

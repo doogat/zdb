@@ -4975,6 +4975,7 @@ version = "0.2.0"
 dependencies = [
  "assert_cmd",
  "predicates",
+ "rand 0.8.5",
  "reqwest",
  "serde_json",
  "tempfile",
