@@ -56,3 +56,7 @@ harness = false
 [[bench]]
 name = "growth"
 harness = false
+
+[[bench]]
+name = "large_scale"
+harness = false
