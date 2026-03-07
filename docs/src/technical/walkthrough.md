@@ -2588,3 +2588,251 @@ pub fn rename_zettel(
 The `zdb rename <id> <new-path>` command resolves the current path from the index, calls `rename_zettel()`, and prints the report:
 
 - **`zdb rename <id> <new-path>`** — Move a zettel and rewrite all backlinks pointing to it
+
+## 18. Multi-Device Simulation Tests — `tests/e2e/multi_device.rs`
+
+
+The multi-device e2e tests validate sync correctness under adversarial conditions: concurrent edits, delete-vs-edit conflicts, and chaotic random operations across multiple nodes. All tests use the `MultiNodeSetup` harness from `common.rs`, which creates isolated git repos linked through a bare "hub" remote.
+
+### Test Harness Additions
+
+The `MultiNodeSetup` gained a `delete` helper alongside its existing `create`, `update`, `read`, and `sync` methods:
+
+```bash
+sed -n '444,450p' tests/e2e/common.rs
+```
+
+```rust
+    /// Delete a zettel
+    pub fn delete(node: &Path, id: &str) {
+        ZdbTestRepo::zdb_at(node)
+            .args(["delete", id])
+            .assert()
+            .success();
+    }
+```
+
+### Concurrent Edits — `concurrent_edits_same_zettel`
+
+Three nodes all edit the same zettel independently, then sync. The test asserts CRDT determinism — all nodes converge to identical content regardless of sync order:
+
+```bash
+sed -n '317,343p' tests/e2e/multi_device.rs
+```
+
+```rust
+fn concurrent_edits_same_zettel() {
+    let setup = MultiNodeSetup::new(3);
+
+    // Node0 creates a zettel, sync to all
+    let id = MultiNodeSetup::create(&setup.nodes[0], "Shared zettel", "original body");
+    MultiNodeSetup::push(&setup.nodes[0]);
+    MultiNodeSetup::sync(&setup.nodes[1]);
+    MultiNodeSetup::sync(&setup.nodes[2]);
+
+    // All 3 nodes edit the same zettel without syncing between edits
+    MultiNodeSetup::update(&setup.nodes[0], &id, "Edit from node0", "body from node0");
+    MultiNodeSetup::update(&setup.nodes[1], &id, "Edit from node1", "body from node1");
+    MultiNodeSetup::update(&setup.nodes[2], &id, "Edit from node2", "body from node2");
+
+    // Sync cascade: 3 rounds to ensure full convergence
+    for _ in 0..3 {
+        sync_round_robin(&setup);
+    }
+
+    // All nodes must converge to identical content (CRDT determinism)
+    let content0 = MultiNodeSetup::read(&setup.nodes[0], &id);
+    let content1 = MultiNodeSetup::read(&setup.nodes[1], &id);
+    let content2 = MultiNodeSetup::read(&setup.nodes[2], &id);
+
+    assert_eq!(content0, content1, "node0 and node1 diverged");
+    assert_eq!(content1, content2, "node1 and node2 diverged");
+}
+```
+
+### Delete-vs-Edit — `delete_vs_edit_multi_node`
+
+Tests the "edit wins" conflict policy across 3 nodes. Node1 deletes a zettel while node2 edits it. After sync, the edit survives with a `resurrected: true` frontmatter marker:
+
+```bash
+sed -n '348,387p' tests/e2e/multi_device.rs
+```
+
+```rust
+fn delete_vs_edit_multi_node() {
+    let setup = MultiNodeSetup::new(3);
+
+    // Node0 creates a zettel, sync to all
+    let id = MultiNodeSetup::create(&setup.nodes[0], "Will conflict", "original body");
+    MultiNodeSetup::push(&setup.nodes[0]);
+    MultiNodeSetup::sync(&setup.nodes[1]);
+    MultiNodeSetup::sync(&setup.nodes[2]);
+
+    // Node1 deletes the zettel
+    MultiNodeSetup::delete(&setup.nodes[1], &id);
+
+    // Node2 edits the zettel
+    MultiNodeSetup::update(&setup.nodes[2], &id, "Edited after delete", "surviving body");
+
+    // Node1 pushes delete, then node2 syncs (triggers delete-vs-edit conflict)
+    MultiNodeSetup::push(&setup.nodes[1]);
+    MultiNodeSetup::sync(&setup.nodes[2]);
+
+    // Full sync to propagate resolution
+    for _ in 0..3 {
+        sync_round_robin(&setup);
+    }
+
+    // Edit wins: zettel should exist on all nodes with node2's content
+    for (i, node) in setup.nodes.iter().enumerate() {
+        let out = MultiNodeSetup::read(node, &id);
+        assert!(
+            out.contains("Edited after delete") || out.contains("surviving body"),
+            "node {i}: edit should win over delete, got: {out}"
+        );
+    }
+
+    // Check resurrected marker in frontmatter
+    let out = MultiNodeSetup::read(&setup.nodes[2], &id);
+    assert!(
+        out.contains("resurrected: true"),
+        "resurrected marker missing from frontmatter: {out}"
+    );
+}
+```
+
+### Chaos Convergence — `chaos_convergence`
+
+The stress test: 4 nodes each perform 5 random operations (create or update), then sync until convergence. Uses a seeded RNG (`StdRng::seed_from_u64(42)`) for deterministic replay. Two helper functions read zettel files directly from disk to compare state across nodes:
+
+```bash
+sed -n '392,413p' tests/e2e/multi_device.rs
+```
+
+```rust
+fn list_zettels(node: &std::path::Path) -> Vec<String> {
+    let zk_dir = node.join("zettelkasten");
+    let mut files: Vec<String> = std::fs::read_dir(&zk_dir)
+        .unwrap()
+        .filter_map(|e| {
+            let e = e.unwrap();
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.ends_with(".md") && !name.starts_with('_') {
+                Some(name)
+            } else {
+                None
+            }
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+/// Read a zettel file directly from disk for comparison.
+fn read_zettel_file(node: &std::path::Path, filename: &str) -> String {
+    std::fs::read_to_string(node.join("zettelkasten").join(filename)).unwrap()
+}
+```
+
+The test runs in four phases: seed each node with one zettel, sync all, random operations, then converge and verify. The convergence check asserts both the zettel file set and file contents are identical across all 4 nodes:
+
+```bash
+sed -n '416,509p' tests/e2e/multi_device.rs
+```
+
+```rust
+fn chaos_convergence() {
+    let setup = MultiNodeSetup::new(4);
+    let mut rng = StdRng::seed_from_u64(42);
+
+    // Each node tracks its locally-known zettel IDs (for updates)
+    let mut local_ids: Vec<Vec<String>> = vec![vec![]; 4];
+
+    // Phase 1: each node creates an initial zettel so there's something to operate on
+    for (i, node) in setup.nodes.iter().enumerate() {
+        let id = MultiNodeSetup::create(node, &format!("Init {i}"), &format!("body {i}"));
+        local_ids[i].push(id);
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+
+    // Sync all so every node knows every zettel
+    for _ in 0..3 {
+        sync_round_robin(&setup);
+    }
+
+    // Propagate all IDs to all nodes' known lists
+    let all_ids: Vec<String> = local_ids.iter().flatten().cloned().collect();
+    for ids in &mut local_ids {
+        *ids = all_ids.clone();
+    }
+
+    // Phase 2: each node performs 5 random ops (create or update only)
+    for i in 0..4 {
+        for _ in 0..5 {
+            let op: u8 = rng.gen_range(0..3);
+            match op {
+                0 => {
+                    // Create
+                    let id = MultiNodeSetup::create(
+                        &setup.nodes[i],
+                        &format!("Chaos {i}"),
+                        &format!("chaos body {i}"),
+                    );
+                    local_ids[i].push(id);
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+                1 if !local_ids[i].is_empty() => {
+                    // Update a random known zettel
+                    let idx = rng.gen_range(0..local_ids[i].len());
+                    let id = local_ids[i][idx].clone();
+                    MultiNodeSetup::update(
+                        &setup.nodes[i],
+                        &id,
+                        &format!("Updated by {i}"),
+                        &format!("updated body {i}"),
+                    );
+                }
+                _ => {
+                    // Create (fallback when no IDs to update)
+                    let id = MultiNodeSetup::create(
+                        &setup.nodes[i],
+                        &format!("Chaos fallback {i}"),
+                        &format!("fallback body {i}"),
+                    );
+                    local_ids[i].push(id);
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+            }
+        }
+    }
+
+    // Phase 3: converge with multiple sync rounds
+    for _ in 0..5 {
+        sync_round_robin(&setup);
+    }
+
+    // Phase 4: verify all nodes have identical zettel set and content
+    let files_node0 = list_zettels(&setup.nodes[0]);
+    assert!(!files_node0.is_empty(), "node 0 should have zettels");
+
+    for (i, node) in setup.nodes.iter().enumerate().skip(1) {
+        let files = list_zettels(node);
+        assert_eq!(
+            files_node0, files,
+            "node 0 and node {i} have different zettel sets"
+        );
+    }
+
+    // Verify file contents match across all nodes
+    for filename in &files_node0 {
+        let content0 = read_zettel_file(&setup.nodes[0], filename);
+        for (i, node) in setup.nodes.iter().enumerate().skip(1) {
+            let content = read_zettel_file(node, filename);
+            assert_eq!(
+                content0, content,
+                "node 0 and node {i} diverged on {filename}"
+            );
+        }
+    }
+}
+```
