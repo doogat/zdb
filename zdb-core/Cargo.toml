@@ -39,6 +39,7 @@ nosql = ["redb", "serde_json"]
 criterion = { version = "0.5", features = ["html_reports"] }
 proptest = "1"
 tempfile = "3"
+walkdir = "2"
 
 [[bench]]
 name = "crud"
@@ -50,4 +51,8 @@ harness = false
 
 [[bench]]
 name = "sync"
+harness = false
+
+[[bench]]
+name = "growth"
 harness = false
