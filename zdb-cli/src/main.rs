@@ -441,7 +441,7 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
             let index = open_index(&cli.repo)?;
             index.rebuild_if_stale(&repo)?;
             let path = index.resolve_path(&id)?;
-            let broken = index.backlinking_zettel_paths(&path)?;
+            let broken = index.backlinking_zettel_paths(&id)?;
             repo.delete_file(&path, &format!("delete zettel {id}"))?;
             index.remove_zettel(&id)?;
             redb_remove_zettel(&cli.repo, &id);
