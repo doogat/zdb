@@ -7,4 +7,5 @@ mod sql_lifecycle;
 mod subscriptions;
 mod sync_crdt;
 mod rename;
+mod delete_backlinks;
 mod search_links;
