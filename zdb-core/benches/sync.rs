@@ -7,7 +7,8 @@ use zdb_core::git_ops::GitRepo;
 use zdb_core::indexer::Index;
 use zdb_core::sync_manager::{register_node, SyncManager};
 
-const ZETTEL_COUNT: usize = 1000;
+const ZETTEL_COUNT_1K: usize = 1000;
+const ZETTEL_COUNT_5K: usize = 5000;
 
 fn zettel_content(i: usize) -> String {
     format!(
@@ -24,12 +25,13 @@ fn setup_sync_pair(
     bare_dir: &Path,
     dir_a: &Path,
     dir_b: &Path,
+    count: usize,
 ) -> (GitRepo, Index, GitRepo, Index) {
     git2::Repository::init_bare(bare_dir).unwrap();
 
     // Repo A: init, populate, push
     let repo_a = GitRepo::init(dir_a).unwrap();
-    let files: Vec<(String, String)> = (0..ZETTEL_COUNT)
+    let files: Vec<(String, String)> = (0..count)
         .map(|i| (zettel_path(i), zettel_content(i)))
         .collect();
     let refs: Vec<(&str, &str)> = files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
@@ -57,17 +59,47 @@ fn setup_sync_pair(
 }
 
 fn bench_sync_fast_forward(c: &mut Criterion) {
-    c.bench_function("sync/fast_forward", |b| {
+    c.bench_function("sync/fast_forward_1k", |b| {
         b.iter_batched(
             || {
                 let bare = TempDir::new().unwrap();
                 let da = TempDir::new().unwrap();
                 let db = TempDir::new().unwrap();
                 let (repo_a, _idx_a, repo_b, index_b) =
-                    setup_sync_pair(bare.path(), da.path(), db.path());
+                    setup_sync_pair(bare.path(), da.path(), db.path(), ZETTEL_COUNT_1K);
 
                 // A adds 10 new zettels and pushes
-                let new_files: Vec<(String, String)> = (ZETTEL_COUNT..ZETTEL_COUNT + 10)
+                let new_files: Vec<(String, String)> = (ZETTEL_COUNT_1K..ZETTEL_COUNT_1K + 10)
+                    .map(|i| (zettel_path(i), zettel_content(i)))
+                    .collect();
+                let refs: Vec<(&str, &str)> =
+                    new_files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+                repo_a.commit_files(&refs, "add 10").unwrap();
+                repo_a.push("origin", "master").unwrap();
+
+                (bare, da, db, repo_b, index_b)
+            },
+            |(_bare, _da, _db, repo_b, index_b)| {
+                let mut mgr = SyncManager::open(&repo_b).unwrap();
+                mgr.sync("origin", "master", &index_b).unwrap();
+            },
+            BatchSize::PerIteration,
+        );
+    });
+}
+
+fn bench_sync_fast_forward_5k(c: &mut Criterion) {
+    c.bench_function("sync/fast_forward_5k", |b| {
+        b.iter_batched(
+            || {
+                let bare = TempDir::new().unwrap();
+                let da = TempDir::new().unwrap();
+                let db = TempDir::new().unwrap();
+                let (repo_a, _idx_a, repo_b, index_b) =
+                    setup_sync_pair(bare.path(), da.path(), db.path(), ZETTEL_COUNT_5K);
+
+                // A adds 10 new zettels and pushes
+                let new_files: Vec<(String, String)> = (ZETTEL_COUNT_5K..ZETTEL_COUNT_5K + 10)
                     .map(|i| (zettel_path(i), zettel_content(i)))
                     .collect();
                 let refs: Vec<(&str, &str)> =
@@ -92,7 +124,7 @@ fn bench_compact(c: &mut Criterion) {
             || {
                 let dir = TempDir::new().unwrap();
                 let repo = GitRepo::init(dir.path()).unwrap();
-                let files: Vec<(String, String)> = (0..ZETTEL_COUNT)
+                let files: Vec<(String, String)> = (0..ZETTEL_COUNT_1K)
                     .map(|i| (zettel_path(i), zettel_content(i)))
                     .collect();
                 let refs: Vec<(&str, &str)> =
@@ -110,5 +142,5 @@ fn bench_compact(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_sync_fast_forward, bench_compact);
+criterion_group!(benches, bench_sync_fast_forward, bench_sync_fast_forward_5k, bench_compact);
 criterion_main!(benches);
