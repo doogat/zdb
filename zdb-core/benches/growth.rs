@@ -1,9 +1,10 @@
-use std::path::Path;
 use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 use tempfile::TempDir;
 use zdb_core::git_ops::GitRepo;
+
+include!("helpers.rs");
 
 /// Simulate repo growth: create zettels, then modify them over time.
 /// NFR-02 / AC-08: repo growth < 50MB/year at 5K zettels.
@@ -15,34 +16,6 @@ use zdb_core::git_ops::GitRepo;
 const INITIAL_ZETTELS: usize = 5000;
 const DAYS: usize = 365;
 const EDITS_PER_DAY: usize = 10;
-
-fn zettel_content(i: usize) -> String {
-    let word = match i % 5 {
-        0 => "architecture",
-        1 => "refactoring",
-        2 => "deployment",
-        3 => "performance",
-        _ => "documentation",
-    };
-    format!(
-        "---\ntitle: Note about {word} {i}\ndate: 2026-01-01\ntags:\n  - bench\n  - {word}\n---\n\
-         This zettel discusses {word} in the context of item {i}.\n\
-         ---\n- source:: bench-{i}"
-    )
-}
-
-fn zettel_path(i: usize) -> String {
-    format!("zettelkasten/{:014}.md", 20260101000000u64 + i as u64)
-}
-
-fn dir_size(path: &Path) -> u64 {
-    walkdir::WalkDir::new(path)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
-        .sum()
-}
 
 fn bench_growth(c: &mut Criterion) {
     let mut group = c.benchmark_group("growth");

@@ -2,6 +2,7 @@
 name = "zdb-core"
 version = "0.2.0"
 edition = "2021"
+autobenches = false
 
 [lib]
 crate-type = ["lib", "cdylib"]
