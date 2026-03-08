@@ -21,7 +21,7 @@ All measurements on 200 zettels, macOS, release build. Full benchmark suite: `ca
 | NoSQL | get zettel | 60 µs |
 | pgwire | SELECT by id | 62 µs |
 
-All protocols satisfy NFR-01 / AC-06 (query < 10 ms at 5K) with margin.
+All protocols return well under 10 ms at 200 zettels. Core-library benchmarks validate NFR-01 at 5K; server-level 5K benchmarks are pending.
 
 ### Concurrent reads (list 20 zettels, GraphQL)
 
@@ -124,7 +124,7 @@ These are the supported performance boundaries for the single-actor design.
 | Parameter | Limit | Notes |
 |-----------|-------|-------|
 | Concurrent readers (no writes) | Up to 16 | Latency grows linearly; p99 stays under 50 ms for list queries |
-| Single-request latency | < 3 ms (list), < 300 µs (get/search) | All protocols, 200 zettels |
+| Single-request latency | < 3 ms (list), < 300 µs (get/search) | Measured at 200 zettels; 5K server benchmarks pending |
 | Throughput (read-only) | ~360 req/s (list), ~15K req/s (search) | Actor-serialized ceiling |
 | Write frequency | Human-speed (< 1 write/sec) | Reads remain responsive at this rate |
 
