@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use crate::common::{ServerGuard, ZdbTestRepo};
 
 #[test]
@@ -85,4 +86,79 @@ fn sync_mutation_with_remote() {
     assert!(sync["commitsTransferred"].is_i64());
     assert!(sync["conflictsResolved"].is_i64());
     assert!(sync["resurrected"].is_i64());
+}
+
+#[test]
+fn sync_during_writes_serialized_through_actor() {
+    use tempfile::TempDir;
+
+    // Set up a bare remote
+    let remote_dir = TempDir::new().unwrap();
+    let status = std::process::Command::new("git")
+        .args(["init", "--bare"])
+        .arg(remote_dir.path())
+        .status()
+        .expect("failed to spawn git init");
+    assert!(status.success(), "git init --bare failed");
+
+    let repo = ZdbTestRepo::init();
+
+    // Add remote + register node
+    let status = std::process::Command::new("git")
+        .current_dir(repo.path())
+        .args(["remote", "add", "origin"])
+        .arg(remote_dir.path())
+        .status()
+        .expect("failed to spawn git remote add");
+    assert!(status.success(), "git remote add failed");
+    repo.zdb()
+        .args(["register-node", "TestNode"])
+        .assert()
+        .success();
+
+    let status = std::process::Command::new("git")
+        .current_dir(repo.path())
+        .args(["push", "-u", "origin", "master"])
+        .status()
+        .expect("failed to spawn git push");
+    assert!(status.success(), "git push failed");
+
+    let server = Arc::new(ServerGuard::start(&repo));
+
+    // Spawn concurrent writers + sync
+    let mut handles = Vec::new();
+
+    for i in 0..5 {
+        let srv = Arc::clone(&server);
+        handles.push(std::thread::spawn(move || {
+            let result = srv.graphql_with_vars(
+                r#"mutation($input: CreateZettelInput!) { createZettel(input: $input) { id } }"#,
+                serde_json::json!({ "input": {
+                    "title": format!("Concurrent Write {i}"),
+                    "content": format!("body {i}"),
+                } }),
+            );
+            assert!(
+                result.get("errors").is_none(),
+                "concurrent write {i} failed: {result}"
+            );
+        }));
+    }
+
+    // Sync concurrently with writes
+    let srv = Arc::clone(&server);
+    handles.push(std::thread::spawn(move || {
+        let result = srv.graphql(
+            r#"mutation { sync { direction commitsTransferred conflictsResolved resurrected } }"#,
+        );
+        assert!(
+            result.get("errors").is_none(),
+            "concurrent sync failed: {result}"
+        );
+    }));
+
+    // All must complete without panic or error
+    for h in handles {
+        h.join().expect("thread panicked during concurrent mutations");
+    }
 }
