@@ -1,6 +1,6 @@
 # Doogat ZettelDB
 
-Hybrid Git-CRDT based Zettelkasten Decentralized Database
+Doogat ZettelDB is a database engine that pairs decentralized Git-backed storage with conflict-free sync and flexible multi-protocol data access.
 
 ## Development
 
