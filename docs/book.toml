@@ -1,7 +1,6 @@
 [book]
 authors = ["Tomáš Bouška"]
 language = "en"
-multilingual = false
 src = "src"
 title = "Doogat ZettelDB Documentation"
 
