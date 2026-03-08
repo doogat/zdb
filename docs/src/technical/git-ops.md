@@ -51,7 +51,7 @@ Future format changes increment `CURRENT_FORMAT_VERSION` and add a migration ste
 | `list_zettels()` | Walk HEAD tree, return all `zettelkasten/*.md` paths |
 | `head_oid()` | Get current HEAD commit OID |
 
-Note: `read_file` reads from the Git tree, not the filesystem. This ensures consistency with the committed state.
+Note: `read_file` reads from the Git tree, not the filesystem. This ensures consistency with the committed state and avoids platform-specific working-tree transforms such as CRLF checkout conversion on Windows.
 
 All commit methods (`commit_files`, `commit_merge`, `delete_file`) and successful merge paths (`merge_remote`) write the commit-graph file via `git commit-graph write --reachable`. This accelerates `merge_base()` and log traversal. Best-effort: silently ignored if `git` CLI unavailable.
 

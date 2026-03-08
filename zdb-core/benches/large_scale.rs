@@ -38,7 +38,10 @@ fn populated_repo_and_index(repo_dir: &Path, db_path: &Path) -> (GitRepo, Index)
         let files: Vec<(String, String)> = (start..end)
             .map(|i| (zettel_path(i), zettel_content(i)))
             .collect();
-        let refs: Vec<(&str, &str)> = files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+        let refs: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(p, c)| (p.as_str(), c.as_str()))
+            .collect();
         repo.commit_files(&refs, &format!("batch {start}")).unwrap();
     }
 
@@ -65,7 +68,9 @@ fn bench_fts_50k(c: &mut Criterion) {
     group.bench_function("sql_select_50k", |b| {
         b.iter(|| {
             index
-                .query_raw("SELECT id, title FROM zettels WHERE title LIKE '%architecture%' LIMIT 10")
+                .query_raw(
+                    "SELECT id, title FROM zettels WHERE title LIKE '%architecture%' LIMIT 10",
+                )
                 .unwrap();
         });
     });

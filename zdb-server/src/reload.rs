@@ -25,15 +25,13 @@ impl SchemaReloader {
     pub fn new(actor: ActorHandle) -> (Arc<Self>, Arc<ArcSwap<Schema>>) {
         // Placeholder schema — replaced by store_initial before serving requests
         let placeholder = Schema::build("Query", None, None)
-            .register(
-                async_graphql::dynamic::Object::new("Query").field(
-                    async_graphql::dynamic::Field::new(
-                        "_placeholder",
-                        async_graphql::dynamic::TypeRef::named(TypeRef::BOOLEAN),
-                        |_| FieldFuture::new(async { Ok(None::<async_graphql::dynamic::FieldValue>) }),
-                    ),
+            .register(async_graphql::dynamic::Object::new("Query").field(
+                async_graphql::dynamic::Field::new(
+                    "_placeholder",
+                    async_graphql::dynamic::TypeRef::named(TypeRef::BOOLEAN),
+                    |_| FieldFuture::new(async { Ok(None::<async_graphql::dynamic::FieldValue>) }),
                 ),
-            )
+            ))
             .finish()
             .expect("placeholder schema");
         let shared = Arc::new(ArcSwap::from_pointee(placeholder));
@@ -97,18 +95,15 @@ impl SchemaReloader {
                 }
             };
 
-            let new_schema = match schema::build_schema(
-                actor.clone(),
-                type_schemas,
-                Some(Arc::clone(&this)),
-            ) {
-                Ok(s) => s,
-                Err(e) => {
-                    log::error!("schema reload: build failed: {e}");
-                    this.done.notify_waiters();
-                    continue;
-                }
-            };
+            let new_schema =
+                match schema::build_schema(actor.clone(), type_schemas, Some(Arc::clone(&this))) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log::error!("schema reload: build failed: {e}");
+                        this.done.notify_waiters();
+                        continue;
+                    }
+                };
             this.shared.store(Arc::new(new_schema));
             this.version.fetch_add(1, Ordering::Relaxed);
             log::info!(

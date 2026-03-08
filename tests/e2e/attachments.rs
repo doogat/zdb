@@ -6,9 +6,11 @@ fn attach_and_list() {
     let repo = ZdbTestRepo::init();
 
     // Create a zettel
-    let out = repo.zdb()
+    let out = repo
+        .zdb()
         .args(["create", "--title", "Test Zettel", "--body", "Some body"])
-        .output().unwrap();
+        .output()
+        .unwrap();
     let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
 
     // Create a temp file to attach
@@ -34,7 +36,10 @@ fn attach_and_list() {
 
     // Verify via SQL
     repo.zdb()
-        .args(["query", &format!("SELECT name, mime FROM _zdb_attachments WHERE zettel_id = '{id}'")])
+        .args([
+            "query",
+            &format!("SELECT name, mime FROM _zdb_attachments WHERE zettel_id = '{id}'"),
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("test-doc.txt"));
@@ -46,9 +51,11 @@ fn attach_and_list() {
 fn detach_removes_file() {
     let repo = ZdbTestRepo::init();
 
-    let out = repo.zdb()
+    let out = repo
+        .zdb()
         .args(["create", "--title", "Detach Test", "--body", "body"])
-        .output().unwrap();
+        .output()
+        .unwrap();
     let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
 
     let tmp = tempfile::NamedTempFile::new().unwrap();
@@ -86,9 +93,11 @@ fn detach_removes_file() {
 fn multiple_attachments() {
     let repo = ZdbTestRepo::init();
 
-    let out = repo.zdb()
+    let out = repo
+        .zdb()
         .args(["create", "--title", "Multi", "--body", "body"])
-        .output().unwrap();
+        .output()
+        .unwrap();
     let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
 
     let dir = tempfile::TempDir::new().unwrap();
@@ -102,23 +111,16 @@ fn multiple_attachments() {
     }
 
     // All three listed
-    let out = repo.zdb()
-        .args(["attachments", &id])
-        .output().unwrap();
+    let out = repo.zdb().args(["attachments", &id]).output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("a.txt"));
     assert!(stdout.contains("b.pdf"));
     assert!(stdout.contains("c.png"));
 
     // Detach one
-    repo.zdb()
-        .args(["detach", &id, "b.pdf"])
-        .assert()
-        .success();
+    repo.zdb().args(["detach", &id, "b.pdf"]).assert().success();
 
-    let out = repo.zdb()
-        .args(["attachments", &id])
-        .output().unwrap();
+    let out = repo.zdb().args(["attachments", &id]).output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("a.txt"));
     assert!(!stdout.contains("b.pdf"));
@@ -129,9 +131,11 @@ fn multiple_attachments() {
 fn reindex_preserves_attachments() {
     let repo = ZdbTestRepo::init();
 
-    let out = repo.zdb()
+    let out = repo
+        .zdb()
         .args(["create", "--title", "Reindex Test", "--body", "body"])
-        .output().unwrap();
+        .output()
+        .unwrap();
     let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
 
     let tmp = tempfile::NamedTempFile::new().unwrap();
@@ -145,14 +149,14 @@ fn reindex_preserves_attachments() {
         .success();
 
     // Reindex
-    repo.zdb()
-        .args(["reindex"])
-        .assert()
-        .success();
+    repo.zdb().args(["reindex"]).assert().success();
 
     // Attachment still queryable
     repo.zdb()
-        .args(["query", &format!("SELECT name FROM _zdb_attachments WHERE zettel_id = '{id}'")])
+        .args([
+            "query",
+            &format!("SELECT name FROM _zdb_attachments WHERE zettel_id = '{id}'"),
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("reindex.txt"));
@@ -164,9 +168,11 @@ fn reindex_preserves_attachments() {
 fn attach_overwrites_same_name() {
     let repo = ZdbTestRepo::init();
 
-    let out = repo.zdb()
+    let out = repo
+        .zdb()
         .args(["create", "--title", "Overwrite", "--body", "body"])
-        .output().unwrap();
+        .output()
+        .unwrap();
     let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
 
     let dir = tempfile::TempDir::new().unwrap();
@@ -185,9 +191,7 @@ fn attach_overwrites_same_name() {
         .success();
 
     // Only one attachment, with updated size
-    let out = repo.zdb()
-        .args(["attachments", &id])
-        .output().unwrap();
+    let out = repo.zdb().args(["attachments", &id]).output().unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     let lines: Vec<&str> = stdout.lines().collect();
     assert_eq!(lines.len(), 1);
@@ -198,9 +202,11 @@ fn attach_overwrites_same_name() {
 fn detach_nonexistent_errors() {
     let repo = ZdbTestRepo::init();
 
-    let out = repo.zdb()
+    let out = repo
+        .zdb()
         .args(["create", "--title", "No attach", "--body", "body"])
-        .output().unwrap();
+        .output()
+        .unwrap();
     let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
 
     repo.zdb()

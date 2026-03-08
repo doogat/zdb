@@ -35,11 +35,7 @@ pub fn export_bundle(
         .ok_or_else(|| ZettelError::NotFound(format!("node {target_uuid}")))?;
 
     // Determine basis for delta
-    let basis_args: Vec<String> = target
-        .known_heads
-        .iter()
-        .map(|h| format!("^{h}"))
-        .collect();
+    let basis_args: Vec<String> = target.known_heads.iter().map(|h| format!("^{h}")).collect();
 
     let local_uuid = sync_mgr.local_uuid()?;
     let manifest = BundleManifest {
@@ -88,8 +84,8 @@ pub fn import_bundle(
 
     // Read manifest
     let manifest_str = std::fs::read_to_string(work_dir.path().join("manifest.toml"))?;
-    let _manifest: BundleManifest = toml::from_str(&manifest_str)
-        .map_err(|e| ZettelError::Toml(e.to_string()))?;
+    let _manifest: BundleManifest =
+        toml::from_str(&manifest_str).map_err(|e| ZettelError::Toml(e.to_string()))?;
 
     // Unbundle git objects
     let git_bundle_path = work_dir.path().join("objects.bundle");
@@ -107,7 +103,11 @@ pub fn import_bundle(
 
         // Fetch the bundled refs
         let output = std::process::Command::new("git")
-            .args(["fetch", git_bundle_path.to_str().unwrap(), "refs/heads/*:refs/remotes/bundle/*"])
+            .args([
+                "fetch",
+                git_bundle_path.to_str().unwrap(),
+                "refs/heads/*:refs/remotes/bundle/*",
+            ])
             .current_dir(&repo.path)
             .output()?;
         if !output.status.success() {
@@ -122,7 +122,12 @@ pub fn import_bundle(
     // --allow-unrelated-histories: needed when importing into a freshly init'd repo
     // whose initial commit has a different root than the bundle's history.
     let merge_output = std::process::Command::new("git")
-        .args(["merge", "refs/remotes/bundle/master", "--no-edit", "--allow-unrelated-histories"])
+        .args([
+            "merge",
+            "refs/remotes/bundle/master",
+            "--no-edit",
+            "--allow-unrelated-histories",
+        ])
         .current_dir(&repo.path)
         .output()?;
 
@@ -132,9 +137,7 @@ pub fn import_bundle(
             // Use sync_mgr's conflict resolution
             sync_mgr.resolve_post_merge_conflicts(index)?
         } else {
-            return Err(ZettelError::Git(format!(
-                "git merge failed: {stderr}"
-            )));
+            return Err(ZettelError::Git(format!("git merge failed: {stderr}")));
         }
     } else {
         0
@@ -183,8 +186,8 @@ pub fn verify_bundle(bundle_path: &Path) -> Result<BundleManifest> {
     verify_extracted_checksum(work_dir.path())?;
 
     let manifest_str = std::fs::read_to_string(work_dir.path().join("manifest.toml"))?;
-    let manifest: BundleManifest = toml::from_str(&manifest_str)
-        .map_err(|e| ZettelError::Toml(e.to_string()))?;
+    let manifest: BundleManifest =
+        toml::from_str(&manifest_str).map_err(|e| ZettelError::Toml(e.to_string()))?;
 
     Ok(manifest)
 }
@@ -221,13 +224,17 @@ fn build_tar_bundle(
     let work_dir = make_temp_dir()?;
 
     // Write manifest
-    let manifest_toml = toml::to_string_pretty(manifest)
-        .map_err(|e| ZettelError::Toml(e.to_string()))?;
+    let manifest_toml =
+        toml::to_string_pretty(manifest).map_err(|e| ZettelError::Toml(e.to_string()))?;
     std::fs::write(work_dir.path().join("manifest.toml"), &manifest_toml)?;
 
     // Create git bundle
     let bundle_path = work_dir.path().join("objects.bundle");
-    let mut args = vec!["bundle".to_string(), "create".to_string(), bundle_path.to_str().unwrap().to_string()];
+    let mut args = vec![
+        "bundle".to_string(),
+        "create".to_string(),
+        bundle_path.to_str().unwrap().to_string(),
+    ];
     if basis_args.is_empty() {
         args.push("--all".to_string());
     } else {
@@ -311,9 +318,7 @@ fn compute_bundle_checksum(dir: &Path) -> Result<String> {
 }
 
 fn hash_dir_recursive(hasher: &mut Sha256, dir: &Path) -> Result<()> {
-    let mut entries: Vec<_> = std::fs::read_dir(dir)?
-        .filter_map(|e| e.ok())
-        .collect();
+    let mut entries: Vec<_> = std::fs::read_dir(dir)?.filter_map(|e| e.ok()).collect();
     entries.sort_by_key(|e| e.file_name());
 
     for entry in entries {
@@ -333,7 +338,9 @@ fn hash_dir_recursive(hasher: &mut Sha256, dir: &Path) -> Result<()> {
 fn verify_extracted_checksum(dir: &Path) -> Result<()> {
     let checksum_path = dir.join("checksum.sha256");
     if !checksum_path.exists() {
-        return Err(ZettelError::Validation("bundle missing checksum.sha256".into()));
+        return Err(ZettelError::Validation(
+            "bundle missing checksum.sha256".into(),
+        ));
     }
     let expected = std::fs::read_to_string(&checksum_path)?.trim().to_string();
     let actual = compute_bundle_checksum(dir)?;
@@ -358,7 +365,12 @@ mod tests {
     #[test]
     fn full_bundle_export_and_verify() {
         let (_dir, repo) = temp_repo();
-        repo.commit_file("zettelkasten/20260301000000.md", "---\ntitle: test\n---\nBody", "add").unwrap();
+        repo.commit_file(
+            "zettelkasten/20260301000000.md",
+            "---\ntitle: test\n---\nBody",
+            "add",
+        )
+        .unwrap();
         crate::sync_manager::register_node(&repo, "Node1").unwrap();
         let mgr = SyncManager::open(&repo).unwrap();
 
@@ -374,7 +386,12 @@ mod tests {
     #[test]
     fn checksum_verification_catches_tampering() {
         let (_dir, repo) = temp_repo();
-        repo.commit_file("zettelkasten/20260301000000.md", "---\ntitle: test\n---\n", "add").unwrap();
+        repo.commit_file(
+            "zettelkasten/20260301000000.md",
+            "---\ntitle: test\n---\n",
+            "add",
+        )
+        .unwrap();
         crate::sync_manager::register_node(&repo, "Node1").unwrap();
         let mgr = SyncManager::open(&repo).unwrap();
 
@@ -402,23 +419,36 @@ mod tests {
             let entry = entry.unwrap();
             let name = entry.file_name();
             if entry.file_type().unwrap().is_dir() {
-                builder.append_dir_all(name.to_string_lossy().as_ref(), entry.path()).unwrap();
+                builder
+                    .append_dir_all(name.to_string_lossy().as_ref(), entry.path())
+                    .unwrap();
             } else {
-                builder.append_path_with_name(entry.path(), name.to_string_lossy().as_ref()).unwrap();
+                builder
+                    .append_path_with_name(entry.path(), name.to_string_lossy().as_ref())
+                    .unwrap();
             }
         }
         builder.finish().unwrap();
 
         let result = verify_bundle(&tampered_output);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("checksum mismatch"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("checksum mismatch"));
     }
 
     #[test]
     fn full_bundle_import_on_new_repo() {
         // Node 1: create content and export
         let (_dir1, repo1) = temp_repo();
-        repo1.commit_file("zettelkasten/20260301000000.md", "---\ntitle: test\n---\nBody", "add").unwrap();
+        repo1
+            .commit_file(
+                "zettelkasten/20260301000000.md",
+                "---\ntitle: test\n---\nBody",
+                "add",
+            )
+            .unwrap();
         crate::sync_manager::register_node(&repo1, "Node1").unwrap();
         let mgr1 = SyncManager::open(&repo1).unwrap();
 

@@ -189,21 +189,20 @@ impl GitRepo {
             None => vec![],
         };
 
-        let oid = self.repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)?;
+        let oid = self
+            .repo
+            .commit(Some("HEAD"), &sig, &sig, message, &tree, &parents)?;
         Ok(oid)
     }
 
     fn signature(&self) -> Result<Signature<'_>> {
-        self.repo.signature().or_else(|_| {
-            Signature::now("zdb", "zdb@local").map_err(|e| e.into())
-        })
+        self.repo
+            .signature()
+            .or_else(|_| Signature::now("zdb", "zdb@local").map_err(|e| e.into()))
     }
 
     fn head_commit(&self) -> Option<git2::Commit<'_>> {
-        self.repo
-            .head()
-            .ok()
-            .and_then(|h| h.peel_to_commit().ok())
+        self.repo.head().ok().and_then(|h| h.peel_to_commit().ok())
     }
 
     /// Get current HEAD as a domain-level CommitHash.
@@ -218,7 +217,12 @@ impl GitRepo {
     }
 
     /// Write binary content to a file, stage it, and commit.
-    pub fn commit_binary_file(&self, rel_path: &str, bytes: &[u8], message: &str) -> Result<CommitHash> {
+    pub fn commit_binary_file(
+        &self,
+        rel_path: &str,
+        bytes: &[u8],
+        message: &str,
+    ) -> Result<CommitHash> {
         validate_path(&self.path, rel_path)?;
         let full_path = self.path.join(rel_path);
         if let Some(parent) = full_path.parent() {
@@ -233,9 +237,12 @@ impl GitRepo {
         let tree = self.repo.find_tree(tree_oid)?;
         let sig = self.signature()?;
 
-        let parent = self.head_commit()
+        let parent = self
+            .head_commit()
             .ok_or_else(|| ZettelError::Git("repo has no initial commit".into()))?;
-        let oid = self.repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
+        let oid = self
+            .repo
+            .commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
         self.write_commit_graph();
         Ok(CommitHash(oid.to_string()))
     }
@@ -263,9 +270,12 @@ impl GitRepo {
         let tree = self.repo.find_tree(tree_oid)?;
         let sig = self.signature()?;
 
-        let parent = self.head_commit()
+        let parent = self
+            .head_commit()
             .ok_or_else(|| ZettelError::Git("repo has no initial commit".into()))?;
-        let oid = self.repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
+        let oid = self
+            .repo
+            .commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
         self.write_commit_graph();
         Ok(CommitHash(oid.to_string()))
     }
@@ -298,7 +308,8 @@ impl GitRepo {
         let tree = self.repo.find_tree(tree_oid)?;
         let sig = self.signature()?;
 
-        let our_commit = self.head_commit()
+        let our_commit = self
+            .head_commit()
             .ok_or_else(|| ZettelError::Git("repo has no initial commit".into()))?;
         let theirs_oid = Oid::from_str(&theirs.0)?;
         let their_commit = self.repo.find_commit(theirs_oid)?;
@@ -356,7 +367,9 @@ impl GitRepo {
     #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
     pub fn merge_remote(&self, remote: &str, branch: &str) -> Result<MergeResult> {
         let fetch_head_ref = format!("refs/remotes/{remote}/{branch}");
-        let reference = self.repo.find_reference(&fetch_head_ref)
+        let reference = self
+            .repo
+            .find_reference(&fetch_head_ref)
             .map_err(|_| ZettelError::NotFound(fetch_head_ref.clone()))?;
         let annotated = self.repo.reference_to_annotated_commit(&reference)?;
 
@@ -368,20 +381,23 @@ impl GitRepo {
 
         if analysis.is_fast_forward() {
             let target_oid = annotated.id();
-            let mut reference = self.repo.find_reference("refs/heads/master")
+            let mut reference = self
+                .repo
+                .find_reference("refs/heads/master")
                 .or_else(|_| self.repo.find_reference("HEAD"))?;
             reference.set_target(target_oid, "fast-forward")?;
             self.repo.set_head("refs/heads/master")?;
-            self.repo.checkout_head(Some(
-                git2::build::CheckoutBuilder::new().force(),
-            ))?;
+            self.repo
+                .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))?;
             self.write_commit_graph();
             return Ok(MergeResult::FastForward(CommitHash(target_oid.to_string())));
         }
 
         // Normal merge
         let their_commit = self.repo.find_commit(annotated.id())?;
-        let our_commit = self.head_commit().ok_or_else(|| ZettelError::Parse("no HEAD".into()))?;
+        let our_commit = self
+            .head_commit()
+            .ok_or_else(|| ZettelError::Parse("no HEAD".into()))?;
         let _ancestor = self.repo.merge_base(our_commit.id(), their_commit.id())?;
 
         let mut merge_index = self.repo.merge_commits(&our_commit, &their_commit, None)?;
@@ -390,7 +406,10 @@ impl GitRepo {
             let conflicts = self.extract_conflicts(&merge_index, &our_commit, &their_commit)?;
             // Clean up merge state
             self.repo.cleanup_state()?;
-            return Ok(MergeResult::Conflicts(conflicts, CommitHash(their_commit.id().to_string())));
+            return Ok(MergeResult::Conflicts(
+                conflicts,
+                CommitHash(their_commit.id().to_string()),
+            ));
         }
 
         // Clean merge — write tree and commit
@@ -405,9 +424,8 @@ impl GitRepo {
             &tree,
             &[&our_commit, &their_commit],
         )?;
-        self.repo.checkout_head(Some(
-            git2::build::CheckoutBuilder::new().force(),
-        ))?;
+        self.repo
+            .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))?;
         self.write_commit_graph();
         Ok(MergeResult::Clean(CommitHash(oid.to_string())))
     }
@@ -421,7 +439,9 @@ impl GitRepo {
         let mut conflicts = Vec::new();
         for conflict in index.conflicts()? {
             let conflict = conflict?;
-            let path = conflict.our.as_ref()
+            let path = conflict
+                .our
+                .as_ref()
                 .or(conflict.their.as_ref())
                 .and_then(|e| String::from_utf8(e.path.clone()).ok())
                 .unwrap_or_default();
@@ -451,7 +471,14 @@ impl GitRepo {
             let ours_hlc = self.find_hlc_for_path(ours_commit, &path);
             let theirs_hlc = self.find_hlc_for_path(theirs_commit, &path);
 
-            conflicts.push(ConflictFile { path, ancestor, ours, theirs, ours_hlc, theirs_hlc });
+            conflicts.push(ConflictFile {
+                path,
+                ancestor,
+                ours,
+                theirs,
+                ours_hlc,
+                theirs_hlc,
+            });
         }
         Ok(conflicts)
     }
@@ -470,9 +497,12 @@ impl GitRepo {
         let tree_oid = index.write_tree()?;
         let tree = self.repo.find_tree(tree_oid)?;
         let sig = self.signature()?;
-        let parent = self.head_commit()
+        let parent = self
+            .head_commit()
             .ok_or_else(|| ZettelError::Git("repo has no initial commit".into()))?;
-        let oid = self.repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
+        let oid = self
+            .repo
+            .commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
         self.write_commit_graph();
         Ok(CommitHash(oid.to_string()))
     }
@@ -497,9 +527,12 @@ impl GitRepo {
         let tree_oid = index.write_tree()?;
         let tree = self.repo.find_tree(tree_oid)?;
         let sig = self.signature()?;
-        let parent = self.head_commit()
+        let parent = self
+            .head_commit()
             .ok_or_else(|| ZettelError::Git("repo has no initial commit".into()))?;
-        let oid = self.repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
+        let oid = self
+            .repo
+            .commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
         self.write_commit_graph();
         Ok(CommitHash(oid.to_string()))
     }
@@ -560,9 +593,12 @@ impl GitRepo {
         let tree_oid = index.write_tree()?;
         let tree = self.repo.find_tree(tree_oid)?;
         let sig = self.signature()?;
-        let parent = self.head_commit()
+        let parent = self
+            .head_commit()
             .ok_or_else(|| ZettelError::Git("repo has no initial commit".into()))?;
-        let oid = self.repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
+        let oid = self
+            .repo
+            .commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
         self.write_commit_graph();
         Ok(CommitHash(oid.to_string()))
     }
@@ -606,9 +642,12 @@ impl GitRepo {
         let tree_oid = index.write_tree()?;
         let tree = self.repo.find_tree(tree_oid)?;
         let sig = self.signature()?;
-        let parent = self.head_commit()
+        let parent = self
+            .head_commit()
             .ok_or_else(|| ZettelError::Git("repo has no initial commit".into()))?;
-        let oid = self.repo.commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
+        let oid = self
+            .repo
+            .commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
         self.write_commit_graph();
         Ok(CommitHash(oid.to_string()))
     }
@@ -633,7 +672,6 @@ impl GitRepo {
         }
     }
 
-
     /// Write the commit-graph file for faster traversal (merge-base, log).
     /// Best-effort: silently ignored if `git` CLI unavailable.
     fn write_commit_graph(&self) {
@@ -649,8 +687,8 @@ impl GitRepo {
     pub fn load_config(&self) -> Result<RepoConfig> {
         match self.read_file(CONFIG_FILE) {
             Ok(content) => {
-                let config: RepoConfig = toml::from_str(&content)
-                    .map_err(|e| ZettelError::Toml(e.to_string()))?;
+                let config: RepoConfig =
+                    toml::from_str(&content).map_err(|e| ZettelError::Toml(e.to_string()))?;
                 Ok(config)
             }
             Err(_) => Ok(RepoConfig::default()),
@@ -663,12 +701,15 @@ impl GitRepo {
         validate_path(&self.path, rel_path)?;
         let head = self.repo.head()?.peel_to_commit()?;
         let tree = head.tree()?;
-        let entry = tree.get_path(Path::new(rel_path))
+        let entry = tree
+            .get_path(Path::new(rel_path))
             .map_err(|_| ZettelError::NotFound(rel_path.to_string()))?;
-        let blob = self.repo.find_blob(entry.id())
+        let blob = self
+            .repo
+            .find_blob(entry.id())
             .map_err(|_| ZettelError::NotFound(rel_path.to_string()))?;
-        let content = std::str::from_utf8(blob.content())
-            .map_err(|e| ZettelError::Parse(e.to_string()))?;
+        let content =
+            std::str::from_utf8(blob.content()).map_err(|e| ZettelError::Parse(e.to_string()))?;
         Ok(content.to_string())
     }
 
@@ -730,25 +771,35 @@ impl GitRepo {
     }
 
     /// Diff two commit OIDs, returning changed zettel paths with their change kind.
-    pub fn diff_paths(&self, old_oid: &str, new_oid: &str) -> Result<Vec<(crate::types::DiffKind, String)>> {
+    pub fn diff_paths(
+        &self,
+        old_oid: &str,
+        new_oid: &str,
+    ) -> Result<Vec<(crate::types::DiffKind, String)>> {
         use crate::types::DiffKind;
 
-        let old_commit = self.repo.find_commit(git2::Oid::from_str(old_oid)
-            .map_err(|e| ZettelError::Git(e.to_string()))?)
+        let old_commit = self
+            .repo
+            .find_commit(git2::Oid::from_str(old_oid).map_err(|e| ZettelError::Git(e.to_string()))?)
             .map_err(|e| ZettelError::Git(e.to_string()))?;
-        let new_commit = self.repo.find_commit(git2::Oid::from_str(new_oid)
-            .map_err(|e| ZettelError::Git(e.to_string()))?)
+        let new_commit = self
+            .repo
+            .find_commit(git2::Oid::from_str(new_oid).map_err(|e| ZettelError::Git(e.to_string()))?)
             .map_err(|e| ZettelError::Git(e.to_string()))?;
 
         let old_tree = old_commit.tree()?;
         let new_tree = new_commit.tree()?;
 
-        let diff = self.repo.diff_tree_to_tree(Some(&old_tree), Some(&new_tree), None)?;
+        let diff = self
+            .repo
+            .diff_tree_to_tree(Some(&old_tree), Some(&new_tree), None)?;
 
         let mut changes = Vec::new();
         diff.foreach(
             &mut |delta, _| {
-                let path = delta.new_file().path()
+                let path = delta
+                    .new_file()
+                    .path()
                     .or_else(|| delta.old_file().path())
                     .and_then(|p| p.to_str())
                     .map(|s| s.to_string());
@@ -769,8 +820,11 @@ impl GitRepo {
                 }
                 true
             },
-            None, None, None,
-        ).map_err(|e| ZettelError::Git(e.to_string()))?;
+            None,
+            None,
+            None,
+        )
+        .map_err(|e| ZettelError::Git(e.to_string()))?;
 
         Ok(changes)
     }
@@ -789,7 +843,11 @@ impl crate::traits::ZettelSource for GitRepo {
         self.head_oid()
     }
 
-    fn diff_paths(&self, old_oid: &str, new_oid: &str) -> Result<Vec<(crate::types::DiffKind, String)>> {
+    fn diff_paths(
+        &self,
+        old_oid: &str,
+        new_oid: &str,
+    ) -> Result<Vec<(crate::types::DiffKind, String)>> {
         self.diff_paths(old_oid, new_oid)
     }
 }
@@ -811,7 +869,12 @@ impl crate::traits::ZettelStore for GitRepo {
         self.delete_files(paths, msg)
     }
 
-    fn commit_batch(&self, writes: &[(&str, &str)], deletes: &[&str], msg: &str) -> Result<CommitHash> {
+    fn commit_batch(
+        &self,
+        writes: &[(&str, &str)],
+        deletes: &[&str],
+        msg: &str,
+    ) -> Result<CommitHash> {
         self.commit_batch(writes, deletes, msg)
     }
 }
@@ -829,7 +892,11 @@ pub fn rename_zettel(
     new_path: &str,
 ) -> Result<RenameReport> {
     // Step 1: move the file
-    repo.rename_file(old_path, new_path, &format!("rename: {old_path} → {new_path}"))?;
+    repo.rename_file(
+        old_path,
+        new_path,
+        &format!("rename: {old_path} → {new_path}"),
+    )?;
 
     // Extract the bare ID from the old path (filename without .md)
     let old_id = Path::new(old_path)
@@ -865,7 +932,8 @@ pub fn rename_zettel(
         let mut rewritten = content.clone();
 
         // Rewrite path-qualified links (without .md, as wikilinks typically omit it)
-        rewritten = crate::parser::rewrite_wikilinks(&rewritten, old_target_for_path, new_target_for_path);
+        rewritten =
+            crate::parser::rewrite_wikilinks(&rewritten, old_target_for_path, new_target_for_path);
 
         // Rewrite bare ID links
         if !old_id.is_empty() {
@@ -880,8 +948,14 @@ pub fn rename_zettel(
 
     // Step 4: commit all rewrites in one batch
     if !writes.is_empty() {
-        let write_refs: Vec<(&str, &str)> = writes.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
-        repo.commit_files(&write_refs, &format!("refactor: rewrite wikilinks after rename {old_path}"))?;
+        let write_refs: Vec<(&str, &str)> = writes
+            .iter()
+            .map(|(p, c)| (p.as_str(), c.as_str()))
+            .collect();
+        repo.commit_files(
+            &write_refs,
+            &format!("refactor: rewrite wikilinks after rename {old_path}"),
+        )?;
     }
 
     Ok(report)
@@ -939,7 +1013,8 @@ mod tests {
     #[test]
     fn commit_and_read_file() {
         let (_dir, repo) = temp_repo();
-        repo.commit_file("zettelkasten/test.md", "hello world", "add test").unwrap();
+        repo.commit_file("zettelkasten/test.md", "hello world", "add test")
+            .unwrap();
         let content = repo.read_file("zettelkasten/test.md").unwrap();
         assert_eq!(content, "hello world");
     }
@@ -961,7 +1036,8 @@ mod tests {
         repo.commit_files(
             &[("zettelkasten/a.md", "aaa"), ("zettelkasten/b.md", "bbb")],
             "add two files",
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(repo.read_file("zettelkasten/a.md").unwrap(), "aaa");
         assert_eq!(repo.read_file("zettelkasten/b.md").unwrap(), "bbb");
     }
@@ -977,7 +1053,8 @@ mod tests {
     fn list_zettels_finds_md_files() {
         let (_dir, repo) = temp_repo();
         repo.commit_file("zettelkasten/a.md", "a", "add a").unwrap();
-        repo.commit_file("zettelkasten/sub/b.md", "b", "add b").unwrap();
+        repo.commit_file("zettelkasten/sub/b.md", "b", "add b")
+            .unwrap();
         repo.commit_file("reference/c.md", "c", "add c").unwrap();
 
         let zettels = repo.list_zettels().unwrap();
@@ -1014,7 +1091,9 @@ mod tests {
             let tree_oid = index.write_tree().unwrap();
             let tree = raw_repo.find_tree(tree_oid).unwrap();
             let parent = raw_repo.head().unwrap().peel_to_commit().unwrap();
-            raw_repo.commit(Some("HEAD"), &sig, &sig, "bump version", &tree, &[&parent]).unwrap();
+            raw_repo
+                .commit(Some("HEAD"), &sig, &sig, "bump version", &tree, &[&parent])
+                .unwrap();
         }
 
         let err = GitRepo::open(dir.path()).err().expect("should fail");
@@ -1054,7 +1133,8 @@ mod tests {
     fn load_config_custom_values() {
         let (_dir, repo) = temp_repo();
         let custom = "[compaction]\nstale_ttl_days = 30\nthreshold_mb = 5\n";
-        repo.commit_file(".zetteldb.toml", custom, "custom config").unwrap();
+        repo.commit_file(".zetteldb.toml", custom, "custom config")
+            .unwrap();
         let config = repo.load_config().unwrap();
         assert_eq!(config.compaction.stale_ttl_days, 30);
         assert_eq!(config.compaction.threshold_mb, 5);
@@ -1072,11 +1152,15 @@ mod tests {
             std::fs::write(dir.path().join("zettelkasten/.gitkeep"), "").unwrap();
             let sig = Signature::now("zdb", "zdb@local").unwrap();
             let mut index = raw_repo.index().unwrap();
-            index.add_all(["*"].iter(), IndexAddOption::DEFAULT, None).unwrap();
+            index
+                .add_all(["*"].iter(), IndexAddOption::DEFAULT, None)
+                .unwrap();
             index.write().unwrap();
             let tree_oid = index.write_tree().unwrap();
             let tree = raw_repo.find_tree(tree_oid).unwrap();
-            raw_repo.commit(Some("HEAD"), &sig, &sig, "init", &tree, &[]).unwrap();
+            raw_repo
+                .commit(Some("HEAD"), &sig, &sig, "init", &tree, &[])
+                .unwrap();
         }
 
         // open() should auto-upgrade
@@ -1093,12 +1177,15 @@ mod tests {
         // Repo A
         let dir_a = TempDir::new().unwrap();
         let repo_a = GitRepo::init(dir_a.path()).unwrap();
-        repo_a.add_remote("origin", bare_dir.path().to_str().unwrap()).unwrap();
+        repo_a
+            .add_remote("origin", bare_dir.path().to_str().unwrap())
+            .unwrap();
         repo_a.push("origin", "master").unwrap();
 
         // Repo B (clone)
         let dir_b = TempDir::new().unwrap();
-        let repo_b_raw = Repository::clone(bare_dir.path().to_str().unwrap(), dir_b.path()).unwrap();
+        let repo_b_raw =
+            Repository::clone(bare_dir.path().to_str().unwrap(), dir_b.path()).unwrap();
         drop(repo_b_raw);
         let repo_b = GitRepo::open(dir_b.path()).unwrap();
 
@@ -1109,7 +1196,9 @@ mod tests {
     fn push_and_fetch_cycle() {
         let (_da, repo_a, _db, repo_b, _bare) = setup_two_repos();
 
-        repo_a.commit_file("zettelkasten/test.md", "hello", "add test").unwrap();
+        repo_a
+            .commit_file("zettelkasten/test.md", "hello", "add test")
+            .unwrap();
         repo_a.push("origin", "master").unwrap();
 
         repo_b.fetch("origin", "master").unwrap();
@@ -1133,10 +1222,14 @@ mod tests {
         let (_da, repo_a, _db, repo_b, _bare) = setup_two_repos();
 
         // Both create same file with different content
-        repo_a.commit_file("zettelkasten/note.md", "version A", "A edits").unwrap();
+        repo_a
+            .commit_file("zettelkasten/note.md", "version A", "A edits")
+            .unwrap();
         repo_a.push("origin", "master").unwrap();
 
-        repo_b.commit_file("zettelkasten/note.md", "version B", "B edits").unwrap();
+        repo_b
+            .commit_file("zettelkasten/note.md", "version B", "B edits")
+            .unwrap();
         repo_b.fetch("origin", "master").unwrap();
 
         let result = repo_b.merge_remote("origin", "master").unwrap();
@@ -1168,14 +1261,18 @@ mod tests {
     #[test]
     fn commit_batch_writes_and_deletes() {
         let (_dir, repo) = temp_repo();
-        repo.commit_file("zettelkasten/old.md", "old content", "add old").unwrap();
+        repo.commit_file("zettelkasten/old.md", "old content", "add old")
+            .unwrap();
         repo.commit_batch(
             &[("zettelkasten/new.md", "new content")],
             &["zettelkasten/old.md"],
             "batch op",
         )
         .unwrap();
-        assert_eq!(repo.read_file("zettelkasten/new.md").unwrap(), "new content");
+        assert_eq!(
+            repo.read_file("zettelkasten/new.md").unwrap(),
+            "new content"
+        );
         assert!(repo.read_file("zettelkasten/old.md").is_err());
     }
 
@@ -1183,14 +1280,11 @@ mod tests {
     #[cfg(unix)]
     fn symlink_read_rejected() {
         let (dir, repo) = temp_repo();
-        repo.commit_file("zettelkasten/real.md", "content", "add").unwrap();
+        repo.commit_file("zettelkasten/real.md", "content", "add")
+            .unwrap();
         // Create a symlink on disk pointing to the real file
         let link = dir.path().join("zettelkasten/link.md");
-        std::os::unix::fs::symlink(
-            dir.path().join("zettelkasten/real.md"),
-            &link,
-        )
-        .unwrap();
+        std::os::unix::fs::symlink(dir.path().join("zettelkasten/real.md"), &link).unwrap();
         let err = repo.read_file("zettelkasten/link.md").unwrap_err();
         assert!(matches!(err, ZettelError::InvalidPath(_)));
     }
@@ -1205,7 +1299,8 @@ mod tests {
     #[test]
     fn normal_path_accepted() {
         let (_dir, repo) = temp_repo();
-        repo.commit_file("zettelkasten/normal.md", "ok", "add").unwrap();
+        repo.commit_file("zettelkasten/normal.md", "ok", "add")
+            .unwrap();
         assert_eq!(repo.read_file("zettelkasten/normal.md").unwrap(), "ok");
     }
 
@@ -1213,13 +1308,10 @@ mod tests {
     #[cfg(unix)]
     fn symlink_write_rejected() {
         let (dir, repo) = temp_repo();
-        repo.commit_file("zettelkasten/real.md", "original", "add").unwrap();
+        repo.commit_file("zettelkasten/real.md", "original", "add")
+            .unwrap();
         let link = dir.path().join("zettelkasten/link.md");
-        std::os::unix::fs::symlink(
-            dir.path().join("zettelkasten/real.md"),
-            &link,
-        )
-        .unwrap();
+        std::os::unix::fs::symlink(dir.path().join("zettelkasten/real.md"), &link).unwrap();
         let err = repo
             .commit_file("zettelkasten/link.md", "hacked", "overwrite")
             .unwrap_err();
@@ -1249,25 +1341,55 @@ mod tests {
         let (_dir, repo) = temp_repo();
 
         // Create initial zettel and record HEAD
-        repo.commit_file("zettelkasten/20240101000000.md", "---\ntitle: A\n---\nBody A.", "add a").unwrap();
-        repo.commit_file("zettelkasten/20240102000000.md", "---\ntitle: B\n---\nBody B.", "add b").unwrap();
+        repo.commit_file(
+            "zettelkasten/20240101000000.md",
+            "---\ntitle: A\n---\nBody A.",
+            "add a",
+        )
+        .unwrap();
+        repo.commit_file(
+            "zettelkasten/20240102000000.md",
+            "---\ntitle: B\n---\nBody B.",
+            "add b",
+        )
+        .unwrap();
         let old_head = repo.head_oid().unwrap().to_string();
 
         // Modify one, delete one, add one
-        repo.commit_file("zettelkasten/20240101000000.md", "---\ntitle: A modified\n---\nBody A modified.", "modify a").unwrap();
-        repo.delete_file("zettelkasten/20240102000000.md", "delete b").unwrap();
-        repo.commit_file("zettelkasten/20240103000000.md", "---\ntitle: C\n---\nBody C.", "add c").unwrap();
+        repo.commit_file(
+            "zettelkasten/20240101000000.md",
+            "---\ntitle: A modified\n---\nBody A modified.",
+            "modify a",
+        )
+        .unwrap();
+        repo.delete_file("zettelkasten/20240102000000.md", "delete b")
+            .unwrap();
+        repo.commit_file(
+            "zettelkasten/20240103000000.md",
+            "---\ntitle: C\n---\nBody C.",
+            "add c",
+        )
+        .unwrap();
         let new_head = repo.head_oid().unwrap().to_string();
 
         let changes = repo.diff_paths(&old_head, &new_head).unwrap();
         assert_eq!(changes.len(), 3);
 
         use crate::types::DiffKind;
-        let modified = changes.iter().find(|(_, p)| p.contains("20240101")).unwrap();
+        let modified = changes
+            .iter()
+            .find(|(_, p)| p.contains("20240101"))
+            .unwrap();
         assert_eq!(modified.0, DiffKind::Modified);
-        let deleted = changes.iter().find(|(_, p)| p.contains("20240102")).unwrap();
+        let deleted = changes
+            .iter()
+            .find(|(_, p)| p.contains("20240102"))
+            .unwrap();
         assert_eq!(deleted.0, DiffKind::Deleted);
-        let added = changes.iter().find(|(_, p)| p.contains("20240103")).unwrap();
+        let added = changes
+            .iter()
+            .find(|(_, p)| p.contains("20240103"))
+            .unwrap();
         assert_eq!(added.0, DiffKind::Added);
     }
 
@@ -1276,8 +1398,14 @@ mod tests {
         let (_dir, repo) = temp_repo();
         let old_head = repo.head_oid().unwrap().to_string();
 
-        repo.commit_file("zettelkasten/20240101000000.md", "---\ntitle: Z\n---\n", "add zettel").unwrap();
-        repo.commit_file("README.md", "# Hello", "add readme").unwrap();
+        repo.commit_file(
+            "zettelkasten/20240101000000.md",
+            "---\ntitle: Z\n---\n",
+            "add zettel",
+        )
+        .unwrap();
+        repo.commit_file("README.md", "# Hello", "add readme")
+            .unwrap();
         let new_head = repo.head_oid().unwrap().to_string();
 
         let changes = repo.diff_paths(&old_head, &new_head).unwrap();
@@ -1288,7 +1416,10 @@ mod tests {
     #[test]
     fn diff_paths_unreachable_oid_returns_error() {
         let (_dir, repo) = temp_repo();
-        let result = repo.diff_paths("0000000000000000000000000000000000000000", &repo.head_oid().unwrap().to_string());
+        let result = repo.diff_paths(
+            "0000000000000000000000000000000000000000",
+            &repo.head_oid().unwrap().to_string(),
+        );
         assert!(result.is_err());
     }
 
@@ -1296,14 +1427,26 @@ mod tests {
     fn merge_conflicts_populate_hlc() {
         let (_da, repo_a, _db, repo_b, _bare) = setup_two_repos();
 
-        let hlc_a = crate::hlc::Hlc { wall_ms: 5000, counter: 0, node: "aaa".into() };
+        let hlc_a = crate::hlc::Hlc {
+            wall_ms: 5000,
+            counter: 0,
+            node: "aaa".into(),
+        };
         let msg_a = crate::hlc::append_hlc_trailer("A edits", &hlc_a);
-        repo_a.commit_file("zettelkasten/note.md", "version A", &msg_a).unwrap();
+        repo_a
+            .commit_file("zettelkasten/note.md", "version A", &msg_a)
+            .unwrap();
         repo_a.push("origin", "master").unwrap();
 
-        let hlc_b = crate::hlc::Hlc { wall_ms: 6000, counter: 0, node: "bbb".into() };
+        let hlc_b = crate::hlc::Hlc {
+            wall_ms: 6000,
+            counter: 0,
+            node: "bbb".into(),
+        };
         let msg_b = crate::hlc::append_hlc_trailer("B edits", &hlc_b);
-        repo_b.commit_file("zettelkasten/note.md", "version B", &msg_b).unwrap();
+        repo_b
+            .commit_file("zettelkasten/note.md", "version B", &msg_b)
+            .unwrap();
         repo_b.fetch("origin", "master").unwrap();
 
         let result = repo_b.merge_remote("origin", "master").unwrap();
@@ -1320,9 +1463,18 @@ mod tests {
     #[test]
     fn find_hlc_for_path_returns_hlc_when_trailer_present() {
         let (_dir, repo) = temp_repo();
-        let hlc = crate::hlc::Hlc { wall_ms: 1000, counter: 1, node: "abc".into() };
+        let hlc = crate::hlc::Hlc {
+            wall_ms: 1000,
+            counter: 1,
+            node: "abc".into(),
+        };
         let msg = crate::hlc::append_hlc_trailer("add zettel", &hlc);
-        repo.commit_file("zettelkasten/20260226120000.md", "---\ntitle: test\n---\n", &msg).unwrap();
+        repo.commit_file(
+            "zettelkasten/20260226120000.md",
+            "---\ntitle: test\n---\n",
+            &msg,
+        )
+        .unwrap();
         let head = repo.head_commit().unwrap();
         let result = repo.find_hlc_for_path(&head, "zettelkasten/20260226120000.md");
         assert!(result.is_some());
@@ -1332,7 +1484,12 @@ mod tests {
     #[test]
     fn find_hlc_for_path_returns_none_without_trailer() {
         let (_dir, repo) = temp_repo();
-        repo.commit_file("zettelkasten/20260226120000.md", "---\ntitle: test\n---\n", "add zettel").unwrap();
+        repo.commit_file(
+            "zettelkasten/20260226120000.md",
+            "---\ntitle: test\n---\n",
+            "add zettel",
+        )
+        .unwrap();
         let head = repo.head_commit().unwrap();
         let result = repo.find_hlc_for_path(&head, "zettelkasten/20260226120000.md");
         assert!(result.is_none());
@@ -1341,9 +1498,14 @@ mod tests {
     #[test]
     fn find_hlc_for_path_returns_none_for_untouched_path() {
         let (_dir, repo) = temp_repo();
-        let hlc = crate::hlc::Hlc { wall_ms: 2000, counter: 0, node: "xyz".into() };
+        let hlc = crate::hlc::Hlc {
+            wall_ms: 2000,
+            counter: 0,
+            node: "xyz".into(),
+        };
         let msg = crate::hlc::append_hlc_trailer("add zettel", &hlc);
-        repo.commit_file("zettelkasten/20260226120000.md", "test", &msg).unwrap();
+        repo.commit_file("zettelkasten/20260226120000.md", "test", &msg)
+            .unwrap();
         let head = repo.head_commit().unwrap();
         let result = repo.find_hlc_for_path(&head, "zettelkasten/99990101000000.md");
         assert!(result.is_none());
@@ -1352,29 +1514,37 @@ mod tests {
     #[test]
     fn rename_file_moves_and_commits() {
         let (dir, repo) = temp_repo();
-        repo.commit_file("zettelkasten/20260301120000.md", "hello", "add").unwrap();
-        let hash = repo.rename_file(
-            "zettelkasten/20260301120000.md",
-            "zettelkasten/contact/20260301120000.md",
-            "rename",
-        ).unwrap();
+        repo.commit_file("zettelkasten/20260301120000.md", "hello", "add")
+            .unwrap();
+        let hash = repo
+            .rename_file(
+                "zettelkasten/20260301120000.md",
+                "zettelkasten/contact/20260301120000.md",
+                "rename",
+            )
+            .unwrap();
         assert!(!hash.0.is_empty());
         assert!(!dir.path().join("zettelkasten/20260301120000.md").exists());
-        assert!(dir.path().join("zettelkasten/contact/20260301120000.md").exists());
-        let content = std::fs::read_to_string(
-            dir.path().join("zettelkasten/contact/20260301120000.md"),
-        ).unwrap();
+        assert!(dir
+            .path()
+            .join("zettelkasten/contact/20260301120000.md")
+            .exists());
+        let content =
+            std::fs::read_to_string(dir.path().join("zettelkasten/contact/20260301120000.md"))
+                .unwrap();
         assert_eq!(content, "hello");
     }
 
     #[test]
     fn rename_file_errors_on_missing_source() {
         let (_dir, repo) = temp_repo();
-        let err = repo.rename_file(
-            "zettelkasten/nonexistent.md",
-            "zettelkasten/new.md",
-            "rename",
-        ).unwrap_err();
+        let err = repo
+            .rename_file(
+                "zettelkasten/nonexistent.md",
+                "zettelkasten/new.md",
+                "rename",
+            )
+            .unwrap_err();
         assert!(matches!(err, ZettelError::NotFound(_)));
     }
 
@@ -1383,11 +1553,9 @@ mod tests {
         let (_dir, repo) = temp_repo();
         repo.commit_file("zettelkasten/a.md", "a", "add a").unwrap();
         repo.commit_file("zettelkasten/b.md", "b", "add b").unwrap();
-        let err = repo.rename_file(
-            "zettelkasten/a.md",
-            "zettelkasten/b.md",
-            "rename",
-        ).unwrap_err();
+        let err = repo
+            .rename_file("zettelkasten/a.md", "zettelkasten/b.md", "rename")
+            .unwrap_err();
         assert!(matches!(err, ZettelError::InvalidPath(_)));
     }
 }

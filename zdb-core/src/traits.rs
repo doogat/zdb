@@ -20,7 +20,12 @@ pub trait ZettelStore: ZettelSource {
     fn commit_files(&self, files: &[(&str, &str)], msg: &str) -> Result<CommitHash>;
     fn delete_file(&self, path: &str, msg: &str) -> Result<CommitHash>;
     fn delete_files(&self, paths: &[&str], msg: &str) -> Result<CommitHash>;
-    fn commit_batch(&self, writes: &[(&str, &str)], deletes: &[&str], msg: &str) -> Result<CommitHash>;
+    fn commit_batch(
+        &self,
+        writes: &[(&str, &str)],
+        deletes: &[&str],
+        msg: &str,
+    ) -> Result<CommitHash>;
 }
 
 /// Query and mutation operations on the zettel index.
@@ -28,7 +33,12 @@ pub trait ZettelIndex {
     fn index_zettel(&self, zettel: &ParsedZettel) -> Result<()>;
     fn remove_zettel(&self, id: &str) -> Result<()>;
     fn search(&self, query: &str) -> Result<Vec<SearchResult>>;
-    fn search_paginated(&self, query: &str, limit: usize, offset: usize) -> Result<PaginatedSearchResult>;
+    fn search_paginated(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<PaginatedSearchResult>;
     fn resolve_path(&self, id: &str) -> Result<String>;
     fn query_raw(&self, sql: &str) -> Result<Vec<Vec<String>>>;
     fn find_typedef_path(&self, type_name: &str) -> Result<Option<String>>;

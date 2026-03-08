@@ -3,9 +3,11 @@ use zdb_core::indexer::Index;
 use zdb_core::sync_manager::{self, SyncManager};
 
 fn setup_two_nodes() -> (
-    tempfile::TempDir, GitRepo,  // Node A
-    tempfile::TempDir, GitRepo,  // Node B
-    tempfile::TempDir,           // Bare remote
+    tempfile::TempDir,
+    GitRepo, // Node A
+    tempfile::TempDir,
+    GitRepo,           // Node B
+    tempfile::TempDir, // Bare remote
 ) {
     // Bare remote
     let bare_dir = tempfile::TempDir::new().unwrap();
@@ -14,7 +16,9 @@ fn setup_two_nodes() -> (
     // Node A
     let dir_a = tempfile::TempDir::new().unwrap();
     let repo_a = GitRepo::init(dir_a.path()).unwrap();
-    repo_a.add_remote("origin", bare_dir.path().to_str().unwrap()).unwrap();
+    repo_a
+        .add_remote("origin", bare_dir.path().to_str().unwrap())
+        .unwrap();
     repo_a.push("origin", "master").unwrap();
     sync_manager::register_node(&repo_a, "NodeA").unwrap();
     repo_a.push("origin", "master").unwrap();
@@ -39,7 +43,9 @@ fn two_node_sync_no_conflicts() {
 
     // A creates a zettel
     let content = "---\nid: 20260226120000\ntitle: Note From A\ntags:\n  - test\n---\nBody from A.";
-    repo_a.commit_file("zettelkasten/20260226120000.md", content, "A creates note").unwrap();
+    repo_a
+        .commit_file("zettelkasten/20260226120000.md", content, "A creates note")
+        .unwrap();
     repo_a.push("origin", "master").unwrap();
 
     // B syncs
@@ -66,7 +72,9 @@ fn two_node_sync_with_conflict_resolution() {
 
     // Both nodes start with same zettel
     let original = "---\nid: 20260226120000\ntitle: Original\ntags:\n  - shared\n---\nOriginal body.\n---\n- source:: Wikipedia";
-    repo_a.commit_file("zettelkasten/20260226120000.md", original, "add original").unwrap();
+    repo_a
+        .commit_file("zettelkasten/20260226120000.md", original, "add original")
+        .unwrap();
     repo_a.push("origin", "master").unwrap();
 
     // B gets the original
@@ -81,12 +89,16 @@ fn two_node_sync_with_conflict_resolution() {
     repo_a.merge_remote("origin", "master").unwrap();
 
     let a_edit = "---\nid: 20260226120000\ntitle: Title From A\ntags:\n  - shared\n---\nBody edited by A.\n---\n- source:: Wikipedia\n- edited-by:: A";
-    repo_a.commit_file("zettelkasten/20260226120000.md", a_edit, "A edits").unwrap();
+    repo_a
+        .commit_file("zettelkasten/20260226120000.md", a_edit, "A edits")
+        .unwrap();
     repo_a.push("origin", "master").unwrap();
 
     // B edits: changes same body line AND adds different reference field
     let b_edit = "---\nid: 20260226120000\ntitle: Title From B\ntags:\n  - shared\n---\nBody edited by B.\n---\n- source:: Wikipedia\n- edited-by:: B";
-    repo_b.commit_file("zettelkasten/20260226120000.md", b_edit, "B edits").unwrap();
+    repo_b
+        .commit_file("zettelkasten/20260226120000.md", b_edit, "B edits")
+        .unwrap();
 
     // B syncs — should resolve conflict via CRDT
     let report = mgr_b.sync("origin", "master", &index_b).unwrap();

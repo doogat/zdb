@@ -32,8 +32,8 @@ pub fn register_node(repo: &GitRepo, name: &str) -> Result<NodeConfig> {
     };
 
     // Write .nodes/{uuid}.toml
-    let toml_content = toml::to_string_pretty(&node)
-        .map_err(|e| ZettelError::Parse(e.to_string()))?;
+    let toml_content =
+        toml::to_string_pretty(&node).map_err(|e| ZettelError::Parse(e.to_string()))?;
     let node_path = format!(".nodes/{uuid}.toml");
     repo.commit_file(&node_path, &toml_content, &format!("register node {name}"))?;
 
@@ -56,7 +56,10 @@ fn add_resurrected_marker(content: &str) -> String {
         if zones.reference_section.is_empty() {
             format!("---\n{fm}\n---\n{}", zones.body)
         } else {
-            format!("---\n{fm}\n---\n{}\n---\n{}", zones.body, zones.reference_section)
+            format!(
+                "---\n{fm}\n---\n{}\n---\n{}",
+                zones.body, zones.reference_section
+            )
         }
     } else {
         // Can't parse — return as-is
@@ -190,10 +193,8 @@ impl<'a> SyncManager<'a> {
 
                 // Tick HLC for merge commit
                 let hlc = self.tick_hlc();
-                let merge_msg = crate::hlc::append_hlc_trailer(
-                    "resolve merge conflicts via CRDT",
-                    &hlc,
-                );
+                let merge_msg =
+                    crate::hlc::append_hlc_trailer("resolve merge conflicts via CRDT", &hlc);
 
                 // Write resolved files and create merge commit with both parents
                 let files: Vec<(&str, &str)> = resolved
@@ -241,13 +242,16 @@ impl<'a> SyncManager<'a> {
         strategy: Option<&str>,
     ) -> Vec<crate::types::ResolvedFile> {
         // Step 2: CRDT
-        tracing::debug!(strategy = strategy.unwrap_or("preset:default"), "cascade_step2_crdt");
+        tracing::debug!(
+            strategy = strategy.unwrap_or("preset:default"),
+            "cascade_step2_crdt"
+        );
         match crdt_resolver::resolve_conflicts(conflicts.clone(), strategy) {
             Ok(resolved) => {
                 // Validate each resolved file
-                let all_valid = resolved.iter().all(|r| {
-                    parser::parse(&r.content, &r.path).is_ok()
-                });
+                let all_valid = resolved
+                    .iter()
+                    .all(|r| parser::parse(&r.content, &r.path).is_ok());
                 if all_valid {
                     return resolved;
                 }
@@ -275,7 +279,11 @@ impl<'a> SyncManager<'a> {
         }
     }
 
-    fn validate_clean_merge_or_fallback(&self, merge_hash: CommitHash, index: &Index) -> Result<usize> {
+    fn validate_clean_merge_or_fallback(
+        &self,
+        merge_hash: CommitHash,
+        index: &Index,
+    ) -> Result<usize> {
         let merge_oid = git2::Oid::from_str(&merge_hash.0)?;
         let merge_commit = self.repo.repo.find_commit(merge_oid)?;
         if merge_commit.parent_count() < 2 {
@@ -307,21 +315,19 @@ impl<'a> SyncManager<'a> {
 
         let conflicts: Vec<ConflictFile> = affected
             .iter()
-            .map(|path| {
-                ConflictFile {
-                    path: path.clone(),
-                    ancestor: ancestor_commit
-                        .as_ref()
-                        .and_then(|c| self.read_file_from_commit(c, path)),
-                    ours: self
-                        .read_file_from_commit(&ours_commit, path)
-                        .unwrap_or_default(),
-                    theirs: self
-                        .read_file_from_commit(&theirs_commit, path)
-                        .unwrap_or_default(),
-                    ours_hlc: self.repo.find_hlc_for_path(&ours_commit, path),
-                    theirs_hlc: self.repo.find_hlc_for_path(&theirs_commit, path),
-                }
+            .map(|path| ConflictFile {
+                path: path.clone(),
+                ancestor: ancestor_commit
+                    .as_ref()
+                    .and_then(|c| self.read_file_from_commit(c, path)),
+                ours: self
+                    .read_file_from_commit(&ours_commit, path)
+                    .unwrap_or_default(),
+                theirs: self
+                    .read_file_from_commit(&theirs_commit, path)
+                    .unwrap_or_default(),
+                ours_hlc: self.repo.find_hlc_for_path(&ours_commit, path),
+                theirs_hlc: self.repo.find_hlc_for_path(&theirs_commit, path),
             })
             .collect();
 
@@ -386,7 +392,9 @@ impl<'a> SyncManager<'a> {
         let tree = commit.tree().ok()?;
         let entry = tree.get_path(std::path::Path::new(rel_path)).ok()?;
         let blob = self.repo.repo.find_blob(entry.id()).ok()?;
-        std::str::from_utf8(blob.content()).ok().map(|s| s.to_string())
+        std::str::from_utf8(blob.content())
+            .ok()
+            .map(|s| s.to_string())
     }
 
     /// Try to determine crdt_strategy for a set of conflict files by looking up the
@@ -458,9 +466,10 @@ impl<'a> SyncManager<'a> {
         let toml_content = self.repo.read_file(&node_path)?;
         let mut node: NodeConfig = toml::from_str(&toml_content)?;
         node.status = status;
-        let updated = toml::to_string_pretty(&node)
-            .map_err(|e| ZettelError::Parse(e.to_string()))?;
-        self.repo.commit_file(&node_path, &updated, &format!("update node {uuid} status"))?;
+        let updated =
+            toml::to_string_pretty(&node).map_err(|e| ZettelError::Parse(e.to_string()))?;
+        self.repo
+            .commit_file(&node_path, &updated, &format!("update node {uuid} status"))?;
         Ok(())
     }
 
@@ -486,10 +495,11 @@ impl<'a> SyncManager<'a> {
         self.node.known_heads = vec![head];
         self.node.last_sync = Some(chrono::Utc::now().to_rfc3339());
 
-        let toml_content = toml::to_string_pretty(&self.node)
-            .map_err(|e| ZettelError::Parse(e.to_string()))?;
+        let toml_content =
+            toml::to_string_pretty(&self.node).map_err(|e| ZettelError::Parse(e.to_string()))?;
         let node_path = format!(".nodes/{}.toml", self.node.uuid);
-        self.repo.commit_file(&node_path, &toml_content, "update sync state")?;
+        self.repo
+            .commit_file(&node_path, &toml_content, "update sync state")?;
 
         Ok(())
     }
@@ -587,7 +597,8 @@ mod tests {
         // Write an old-style node config without status/created fields
         let uuid = "test-uuid-1234";
         let old_toml = format!("uuid = \"{uuid}\"\nname = \"OldNode\"\nknown_heads = []\n");
-        repo.commit_file(&format!(".nodes/{uuid}.toml"), &old_toml, "old node").unwrap();
+        repo.commit_file(&format!(".nodes/{uuid}.toml"), &old_toml, "old node")
+            .unwrap();
         std::fs::write(repo.path.join(".git/zdb-node"), uuid).unwrap();
 
         let mgr = SyncManager::open(&repo).unwrap();
@@ -626,26 +637,39 @@ mod tests {
         repo.commit_file(path, ours, "ours edit").unwrap();
         let ours_hash = repo.head_oid().unwrap();
 
-        let ancestor_commit = repo.repo.find_commit(git2::Oid::from_str(&ancestor_hash.0).unwrap()).unwrap();
+        let ancestor_commit = repo
+            .repo
+            .find_commit(git2::Oid::from_str(&ancestor_hash.0).unwrap())
+            .unwrap();
         repo.repo.branch("theirs", &ancestor_commit, true).unwrap();
         repo.repo.set_head("refs/heads/theirs").unwrap();
-        repo.repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force())).unwrap();
+        repo.repo
+            .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
         repo.commit_file(path, theirs, "theirs edit").unwrap();
         let theirs_hash = repo.head_oid().unwrap();
 
         repo.repo.set_head("refs/heads/master").unwrap();
-        repo.repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force())).unwrap();
+        repo.repo
+            .checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
         assert_eq!(repo.head_oid().unwrap(), ours_hash);
 
         let merge_hash = repo
-            .commit_merge(&[(path, merged_invalid)], "synthetic clean merge", &theirs_hash)
+            .commit_merge(
+                &[(path, merged_invalid)],
+                "synthetic clean merge",
+                &theirs_hash,
+            )
             .unwrap();
 
         let db_path = dir.path().join(".zdb/index.db");
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
         let index = crate::indexer::Index::open(&db_path).unwrap();
         let mgr = SyncManager::open(&repo).unwrap();
-        let resolved = mgr.validate_clean_merge_or_fallback(merge_hash, &index).unwrap();
+        let resolved = mgr
+            .validate_clean_merge_or_fallback(merge_hash, &index)
+            .unwrap();
         assert_eq!(resolved, 1);
 
         let repaired = repo.read_file(path).unwrap();

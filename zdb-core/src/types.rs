@@ -30,8 +30,12 @@ impl Default for CompactionConfig {
     }
 }
 
-fn default_stale_ttl_days() -> u32 { 90 }
-fn default_threshold_mb() -> u32 { 1 }
+fn default_stale_ttl_days() -> u32 {
+    90
+}
+fn default_threshold_mb() -> u32 {
+    1
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrdtConfig {
@@ -48,7 +52,9 @@ impl Default for CrdtConfig {
     }
 }
 
-fn default_crdt_strategy() -> String { "preset:default".to_string() }
+fn default_crdt_strategy() -> String {
+    "preset:default".to_string()
+}
 
 /// Domain-level value type, decoupled from serde_yaml::Value.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -328,9 +334,19 @@ pub struct TableSchema {
 
 #[derive(Debug, Clone)]
 pub enum ConsistencyWarning {
-    MalformedYaml { path: String, error: String },
-    CrossZoneDuplicate { path: String, key: String },
-    MissingRequired { path: String, type_name: String, field: String },
+    MalformedYaml {
+        path: String,
+        error: String,
+    },
+    CrossZoneDuplicate {
+        path: String,
+        key: String,
+    },
+    MissingRequired {
+        path: String,
+        type_name: String,
+        field: String,
+    },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -375,7 +391,11 @@ pub struct AttachmentInfo {
 impl AttachmentInfo {
     /// Detect MIME type from a filename's extension.
     pub fn mime_from_filename(filename: &str) -> &'static str {
-        let ext = filename.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+        let ext = filename
+            .rsplit('.')
+            .next()
+            .unwrap_or("")
+            .to_ascii_lowercase();
         match ext.as_str() {
             "jpg" | "jpeg" => "image/jpeg",
             "png" => "image/png",
@@ -412,18 +432,36 @@ mod tests {
 
     #[test]
     fn mime_from_filename_common_types() {
-        assert_eq!(AttachmentInfo::mime_from_filename("photo.jpg"), "image/jpeg");
-        assert_eq!(AttachmentInfo::mime_from_filename("photo.JPEG"), "image/jpeg");
+        assert_eq!(
+            AttachmentInfo::mime_from_filename("photo.jpg"),
+            "image/jpeg"
+        );
+        assert_eq!(
+            AttachmentInfo::mime_from_filename("photo.JPEG"),
+            "image/jpeg"
+        );
         assert_eq!(AttachmentInfo::mime_from_filename("icon.png"), "image/png");
-        assert_eq!(AttachmentInfo::mime_from_filename("doc.pdf"), "application/pdf");
+        assert_eq!(
+            AttachmentInfo::mime_from_filename("doc.pdf"),
+            "application/pdf"
+        );
         assert_eq!(AttachmentInfo::mime_from_filename("data.csv"), "text/csv");
         assert_eq!(AttachmentInfo::mime_from_filename("page.html"), "text/html");
-        assert_eq!(AttachmentInfo::mime_from_filename("notes.md"), "text/markdown");
+        assert_eq!(
+            AttachmentInfo::mime_from_filename("notes.md"),
+            "text/markdown"
+        );
     }
 
     #[test]
     fn mime_from_filename_fallback() {
-        assert_eq!(AttachmentInfo::mime_from_filename("file.xyz"), "application/octet-stream");
-        assert_eq!(AttachmentInfo::mime_from_filename("noext"), "application/octet-stream");
+        assert_eq!(
+            AttachmentInfo::mime_from_filename("file.xyz"),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            AttachmentInfo::mime_from_filename("noext"),
+            "application/octet-stream"
+        );
     }
 }

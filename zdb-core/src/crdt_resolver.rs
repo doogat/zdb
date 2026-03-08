@@ -27,10 +27,7 @@ pub fn resolve_conflicts(
             "preset:last-writer-wins" => return resolve_lww(conflicts),
             "preset:append-log" => return resolve_append_log(conflicts),
             other => {
-                tracing::warn!(
-                    "crdt_strategy '{}' not recognized; using default",
-                    other
-                );
+                tracing::warn!("crdt_strategy '{}' not recognized; using default", other);
             }
         }
     }
@@ -121,20 +118,33 @@ pub fn merge_frontmatter(ancestor: &str, ours: &str, theirs: &str) -> Result<(St
     }
 
     let mut doc_ours = doc.fork();
-    let ours_map_id = doc_ours.get(&automerge::ROOT, "frontmatter")?
+    let ours_map_id = doc_ours
+        .get(&automerge::ROOT, "frontmatter")?
         .map(|(_, id)| id)
         .ok_or_else(|| ZettelError::Parse("missing frontmatter map".into()))?;
-    apply_scalar_diff(&mut doc_ours, &ours_map_id, &ancestor_scalars, &ours_scalars)?;
+    apply_scalar_diff(
+        &mut doc_ours,
+        &ours_map_id,
+        &ancestor_scalars,
+        &ours_scalars,
+    )?;
 
     let mut doc_theirs = doc.fork();
-    let theirs_map_id = doc_theirs.get(&automerge::ROOT, "frontmatter")?
+    let theirs_map_id = doc_theirs
+        .get(&automerge::ROOT, "frontmatter")?
         .map(|(_, id)| id)
         .ok_or_else(|| ZettelError::Parse("missing frontmatter map".into()))?;
-    apply_scalar_diff(&mut doc_theirs, &theirs_map_id, &ancestor_scalars, &theirs_scalars)?;
+    apply_scalar_diff(
+        &mut doc_theirs,
+        &theirs_map_id,
+        &ancestor_scalars,
+        &theirs_scalars,
+    )?;
 
     doc_ours.merge(&mut doc_theirs)?;
 
-    let merged_map_id = doc_ours.get(&automerge::ROOT, "frontmatter")?
+    let merged_map_id = doc_ours
+        .get(&automerge::ROOT, "frontmatter")?
         .map(|(_, id)| id)
         .ok_or_else(|| ZettelError::Parse("missing frontmatter map after merge".into()))?;
 
@@ -162,8 +172,12 @@ fn partition_fm(
     let mut lists = BTreeMap::new();
     for (k, v) in map {
         match v {
-            FmValue::Scalar(s) => { scalars.insert(k.clone(), s.clone()); }
-            FmValue::List(l) => { lists.insert(k.clone(), l.clone()); }
+            FmValue::Scalar(s) => {
+                scalars.insert(k.clone(), s.clone());
+            }
+            FmValue::List(l) => {
+                lists.insert(k.clone(), l.clone());
+            }
         }
     }
     (scalars, lists)
@@ -177,21 +191,40 @@ fn merge_list_fields(
 ) -> BTreeMap<String, FmValue> {
     use std::collections::HashSet;
     let mut result = BTreeMap::new();
-    let all_keys: HashSet<&String> = ancestor.keys().chain(ours.keys()).chain(theirs.keys()).collect();
+    let all_keys: HashSet<&String> = ancestor
+        .keys()
+        .chain(ours.keys())
+        .chain(theirs.keys())
+        .collect();
 
     for key in all_keys {
-        let a: HashSet<&str> = ancestor.get(key).map(|v| v.iter().map(|s| s.as_str()).collect()).unwrap_or_default();
-        let o: HashSet<&str> = ours.get(key).map(|v| v.iter().map(|s| s.as_str()).collect()).unwrap_or_default();
-        let t: HashSet<&str> = theirs.get(key).map(|v| v.iter().map(|s| s.as_str()).collect()).unwrap_or_default();
+        let a: HashSet<&str> = ancestor
+            .get(key)
+            .map(|v| v.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_default();
+        let o: HashSet<&str> = ours
+            .get(key)
+            .map(|v| v.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_default();
+        let t: HashSet<&str> = theirs
+            .get(key)
+            .map(|v| v.iter().map(|s| s.as_str()).collect())
+            .unwrap_or_default();
 
         // Key presence: if both removed it, skip. If one removed, honor removal.
         let ours_present = ours.contains_key(key);
         let theirs_present = theirs.contains_key(key);
         let ancestor_present = ancestor.contains_key(key);
 
-        if ancestor_present && !ours_present && !theirs_present { continue; } // both removed
-        if ancestor_present && !ours_present { continue; }  // ours removed
-        if ancestor_present && !theirs_present { continue; } // theirs removed
+        if ancestor_present && !ours_present && !theirs_present {
+            continue;
+        } // both removed
+        if ancestor_present && !ours_present {
+            continue;
+        } // ours removed
+        if ancestor_present && !theirs_present {
+            continue;
+        } // theirs removed
 
         // Three-way set merge: start with ancestor, add new items from each side, remove items removed by each side
         let ours_added: HashSet<&str> = o.difference(&a).copied().collect();
@@ -202,19 +235,28 @@ fn merge_list_fields(
         let mut merged: HashSet<&str> = a.clone();
         merged.extend(ours_added);
         merged.extend(theirs_added);
-        for r in &ours_removed { merged.remove(r); }
-        for r in &theirs_removed { merged.remove(r); }
+        for r in &ours_removed {
+            merged.remove(r);
+        }
+        for r in &theirs_removed {
+            merged.remove(r);
+        }
 
         // Preserve original order from ours, then append new items from theirs
         let ours_list = ours.get(key).map(|v| v.as_slice()).unwrap_or_default();
-        let mut ordered: Vec<String> = ours_list.iter()
+        let mut ordered: Vec<String> = ours_list
+            .iter()
             .filter(|s| merged.contains(s.as_str()))
             .cloned()
             .collect();
         // Add items from merged that aren't already in ordered
         let extra: Vec<String> = {
             let ordered_set: HashSet<&str> = ordered.iter().map(|s| s.as_str()).collect();
-            merged.iter().filter(|s| !ordered_set.contains(*s)).map(|s| s.to_string()).collect()
+            merged
+                .iter()
+                .filter(|s| !ordered_set.contains(*s))
+                .map(|s| s.to_string())
+                .collect()
         };
         ordered.extend(extra);
 
@@ -237,16 +279,25 @@ fn yaml_to_map(yaml: &str) -> Result<BTreeMap<String, FmValue>> {
             };
             let val = match &v {
                 serde_yaml::Value::Sequence(seq) => {
-                    let items: Vec<String> = seq.iter().map(|item| {
-                        match item {
+                    let items: Vec<String> = seq
+                        .iter()
+                        .map(|item| match item {
                             serde_yaml::Value::String(s) => s.clone(),
-                            other => serde_yaml::to_string(other).unwrap_or_default().trim().to_string(),
-                        }
-                    }).collect();
+                            other => serde_yaml::to_string(other)
+                                .unwrap_or_default()
+                                .trim()
+                                .to_string(),
+                        })
+                        .collect();
                     FmValue::List(items)
                 }
                 serde_yaml::Value::String(s) => FmValue::Scalar(s.clone()),
-                other => FmValue::Scalar(serde_yaml::to_string(other).unwrap_or_default().trim().to_string()),
+                other => FmValue::Scalar(
+                    serde_yaml::to_string(other)
+                        .unwrap_or_default()
+                        .trim()
+                        .to_string(),
+                ),
             };
             map.insert(key, val);
         }
@@ -259,15 +310,16 @@ fn map_to_yaml(map: &BTreeMap<String, FmValue>) -> String {
     for (k, v) in map {
         match v {
             FmValue::Scalar(s) => {
-                let clean_v = if let Some(unquoted) = s.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
-                    if yaml_needs_quotes(unquoted) {
-                        s.as_str()
+                let clean_v =
+                    if let Some(unquoted) = s.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+                        if yaml_needs_quotes(unquoted) {
+                            s.as_str()
+                        } else {
+                            unquoted
+                        }
                     } else {
-                        unquoted
-                    }
-                } else {
-                    s.as_str()
-                };
+                        s.as_str()
+                    };
                 out.push_str(&format!("{k}: {clean_v}\n"));
             }
             FmValue::List(items) => {
@@ -323,14 +375,16 @@ pub fn merge_body(ancestor: &str, ours: &str, theirs: &str) -> Result<String> {
 
     // Fork for ours
     let mut doc_ours = doc.fork();
-    let ours_text_id = doc_ours.get(&automerge::ROOT, "body")?
+    let ours_text_id = doc_ours
+        .get(&automerge::ROOT, "body")?
         .map(|(_, id)| id)
         .ok_or_else(|| ZettelError::Parse("missing body text".into()))?;
     apply_text_diff(&mut doc_ours, &ours_text_id, ancestor, ours)?;
 
     // Fork for theirs
     let mut doc_theirs = doc.fork();
-    let theirs_text_id = doc_theirs.get(&automerge::ROOT, "body")?
+    let theirs_text_id = doc_theirs
+        .get(&automerge::ROOT, "body")?
         .map(|(_, id)| id)
         .ok_or_else(|| ZettelError::Parse("missing body text".into()))?;
     apply_text_diff(&mut doc_theirs, &theirs_text_id, ancestor, theirs)?;
@@ -339,7 +393,8 @@ pub fn merge_body(ancestor: &str, ours: &str, theirs: &str) -> Result<String> {
     doc_ours.merge(&mut doc_theirs)?;
 
     // Extract merged text
-    let merged_text_id = doc_ours.get(&automerge::ROOT, "body")?
+    let merged_text_id = doc_ours
+        .get(&automerge::ROOT, "body")?
         .map(|(_, id)| id)
         .ok_or_else(|| ZettelError::Parse("missing body text after merge".into()))?;
     let merged = doc_ours.text(&merged_text_id)?;
@@ -381,7 +436,11 @@ fn apply_text_diff(
                         continue;
                     }
                 }
-                ops.push(Op { pos: orig_pos, delete: 1, insert: String::new() });
+                ops.push(Op {
+                    pos: orig_pos,
+                    delete: 1,
+                    insert: String::new(),
+                });
                 orig_pos += 1;
             }
             ChangeTag::Insert => {
@@ -391,7 +450,11 @@ fn apply_text_diff(
                         continue;
                     }
                 }
-                ops.push(Op { pos: orig_pos, delete: 0, insert: ch.to_string() });
+                ops.push(Op {
+                    pos: orig_pos,
+                    delete: 0,
+                    insert: ch.to_string(),
+                });
             }
         }
     }
@@ -427,7 +490,12 @@ pub fn merge_reference(ancestor: &str, ours: &str, theirs: &str) -> Result<Strin
     // Fork for theirs — apply diffs
     let mut doc_theirs = doc.fork();
     let theirs_list = refs_list_id(&mut doc_theirs)?;
-    apply_list_diff(&mut doc_theirs, &theirs_list, &ancestor_lines, &theirs_lines)?;
+    apply_list_diff(
+        &mut doc_theirs,
+        &theirs_list,
+        &ancestor_lines,
+        &theirs_lines,
+    )?;
 
     // Merge
     doc_ours.merge(&mut doc_theirs)?;
@@ -450,7 +518,11 @@ pub fn merge_reference(ancestor: &str, ours: &str, theirs: &str) -> Result<Strin
 }
 
 fn ref_lines(content: &str) -> Vec<String> {
-    content.lines().filter(|l| !l.trim().is_empty()).map(String::from).collect()
+    content
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(String::from)
+        .collect()
 }
 
 fn refs_list_id(doc: &mut AutoCommit) -> Result<automerge::ObjId> {
@@ -652,7 +724,11 @@ fn merge_log_section(ancestor: &str, ours: &str, theirs: &str) -> String {
     let mut merged = Vec::new();
 
     // Add all unique entries (by dedup key)
-    for entry in ours_entries.iter().chain(theirs_entries.iter()).chain(ancestor_entries.iter()) {
+    for entry in ours_entries
+        .iter()
+        .chain(theirs_entries.iter())
+        .chain(ancestor_entries.iter())
+    {
         let key = entry_dedup_key(entry);
         if seen.insert(key) {
             merged.push(entry.clone());
@@ -924,7 +1000,8 @@ mod tests {
     fn full_pipeline_resolve() {
         let ancestor = "---\ntitle: Original\n---\nOriginal body.\n---\n- source:: Wikipedia";
         let ours = "---\ntitle: Changed\n---\nOurs body.\n---\n- source:: Wikipedia";
-        let theirs = "---\ntitle: Original\n---\nOriginal body.\n---\n- source:: Wikipedia\n- author:: Bob";
+        let theirs =
+            "---\ntitle: Original\n---\nOriginal body.\n---\n- source:: Wikipedia\n- author:: Bob";
 
         let conflicts = vec![ConflictFile {
             path: "zettelkasten/20260226120000.md".into(),
@@ -976,8 +1053,16 @@ mod tests {
 
     #[test]
     fn lww_picks_later_hlc() {
-        let ours_hlc = Hlc { wall_ms: 100, counter: 0, node: "aaaaaaaa".into() };
-        let theirs_hlc = Hlc { wall_ms: 200, counter: 0, node: "bbbbbbbb".into() };
+        let ours_hlc = Hlc {
+            wall_ms: 100,
+            counter: 0,
+            node: "aaaaaaaa".into(),
+        };
+        let theirs_hlc = Hlc {
+            wall_ms: 200,
+            counter: 0,
+            node: "bbbbbbbb".into(),
+        };
         let conflicts = vec![ConflictFile {
             path: "zettelkasten/test.md".into(),
             ancestor: None,
@@ -993,8 +1078,16 @@ mod tests {
 
     #[test]
     fn lww_deterministic_tiebreak() {
-        let ours_hlc = Hlc { wall_ms: 100, counter: 0, node: "aaaaaaaa".into() };
-        let theirs_hlc = Hlc { wall_ms: 100, counter: 0, node: "zzzzzzzz".into() };
+        let ours_hlc = Hlc {
+            wall_ms: 100,
+            counter: 0,
+            node: "aaaaaaaa".into(),
+        };
+        let theirs_hlc = Hlc {
+            wall_ms: 100,
+            counter: 0,
+            node: "zzzzzzzz".into(),
+        };
         let conflicts = vec![ConflictFile {
             path: "zettelkasten/test.md".into(),
             ancestor: None,
@@ -1026,7 +1119,8 @@ mod tests {
 
     #[test]
     fn append_log_different_entries_both_survive() {
-        let ancestor = "---\ntitle: Project\ntype: project\n---\n## Log\n- [x] 2026-01-01 Setup project";
+        let ancestor =
+            "---\ntitle: Project\ntype: project\n---\n## Log\n- [x] 2026-01-01 Setup project";
         let ours = "---\ntitle: Project\ntype: project\n---\n## Log\n- [x] 2026-01-01 Setup project\n- [x] 2026-01-05 Laptop entry";
         let theirs = "---\ntitle: Project\ntype: project\n---\n## Log\n- [x] 2026-01-01 Setup project\n- [x] 2026-01-03 Desktop entry";
 
@@ -1046,7 +1140,10 @@ mod tests {
         // Sorted chronologically: desktop (01-03) before laptop (01-05)
         let desktop_pos = content.find("Desktop entry").unwrap();
         let laptop_pos = content.find("Laptop entry").unwrap();
-        assert!(desktop_pos < laptop_pos, "entries not sorted chronologically");
+        assert!(
+            desktop_pos < laptop_pos,
+            "entries not sorted chronologically"
+        );
     }
 
     #[test]

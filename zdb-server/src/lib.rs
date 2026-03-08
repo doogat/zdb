@@ -16,9 +16,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use arc_swap::ArcSwap;
-use axum::{middleware, Extension, Router};
 use async_graphql::dynamic::Schema;
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
+use axum::{middleware, Extension, Router};
 
 use actor::ActorHandle;
 use auth::AuthToken;
@@ -44,9 +44,8 @@ pub async fn run(
 
     // Actor
     let event_bus = EventBus::new();
-    let actor = ActorHandle::spawn(repo_path, event_bus).map_err(|e| {
-        std::io::Error::other(e.to_string())
-    })?;
+    let actor = ActorHandle::spawn(repo_path, event_bus)
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
 
     // Fetch type schemas for dynamic schema generation
     let type_schemas = actor.get_type_schemas().await.unwrap_or_default();
@@ -68,7 +67,10 @@ pub async fn run(
     let mut app = Router::new()
         .route("/graphql", axum::routing::post(graphql_handler))
         .route("/ws", axum::routing::get(ws::ws_handler))
-        .route("/attachments/{zettel_id}/{filename}", axum::routing::get(serve_attachment))
+        .route(
+            "/attachments/{zettel_id}/{filename}",
+            axum::routing::get(serve_attachment),
+        )
         .nest("/rest", rest::router())
         .nest("/nosql", nosql_api::router())
         .layer(Extension(attachment_root));
@@ -96,7 +98,10 @@ pub async fn run(
         tokio::spawn(async move {
             maintenance::maintenance_loop(maint_actor, interval).await;
         });
-        eprintln!("maintenance: enabled (interval {}s)", cfg.maintenance_interval_secs);
+        eprintln!(
+            "maintenance: enabled (interval {}s)",
+            cfg.maintenance_interval_secs
+        );
     }
 
     let pg_actor = rest_actor.clone();
@@ -115,13 +120,7 @@ pub async fn run(
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-    let pg = pgwire::start(
-        pg_actor,
-        pg_token,
-        pg_reloader,
-        &cfg.bind,
-        cfg.pg_port,
-    );
+    let pg = pgwire::start(pg_actor, pg_token, pg_reloader, &cfg.bind, cfg.pg_port);
 
     tokio::select! {
         r = axum::serve(listener, app) => r?,
@@ -159,11 +158,7 @@ async fn serve_attachment(
     match tokio::fs::read(&file_path).await {
         Ok(bytes) => {
             let mime = zdb_core::types::AttachmentInfo::mime_from_filename(&filename);
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, mime)],
-                bytes,
-            ).into_response()
+            (StatusCode::OK, [(header::CONTENT_TYPE, mime)], bytes).into_response()
         }
         Err(_) => (StatusCode::NOT_FOUND, "attachment not found").into_response(),
     }

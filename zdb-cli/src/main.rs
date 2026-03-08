@@ -1,3 +1,4 @@
+use std::io::{self, Write};
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
@@ -9,6 +10,37 @@ use zdb_core::sql_engine::{SqlEngine, SqlResult};
 use zdb_core::sync_manager::{self, SyncManager};
 
 mod updater;
+
+macro_rules! out {
+    ($($arg:tt)*) => {
+        write_stdout(format_args!($($arg)*))
+    };
+}
+
+macro_rules! outln {
+    ($($arg:tt)*) => {
+        writeln_stdout(format_args!($($arg)*))
+    };
+}
+
+fn write_stdout(args: std::fmt::Arguments<'_>) -> zdb_core::error::Result<()> {
+    let mut stdout = io::stdout().lock();
+    stdout.write_fmt(args)?;
+    stdout.flush()?;
+    Ok(())
+}
+
+fn writeln_stdout(args: std::fmt::Arguments<'_>) -> zdb_core::error::Result<()> {
+    let mut stdout = io::stdout().lock();
+    stdout.write_fmt(args)?;
+    stdout.write_all(b"\n")?;
+    stdout.flush()?;
+    Ok(())
+}
+
+fn is_broken_pipe(err: &zdb_core::error::ZettelError) -> bool {
+    matches!(err, zdb_core::error::ZettelError::Io(io_err) if io_err.kind() == io::ErrorKind::BrokenPipe)
+}
 
 #[derive(Parser)]
 #[command(name = "zdb", version, about = "Decentralized Zettelkasten")]
@@ -257,6 +289,9 @@ fn main() {
     }
 
     if let Err(e) = run(cli) {
+        if is_broken_pipe(&e) {
+            return;
+        }
         eprintln!("error: {e}");
         std::process::exit(1);
     }
@@ -357,10 +392,15 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
         Command::Init { path } => {
             let p = path.unwrap_or_else(|| cli.repo.clone());
             GitRepo::init(&p)?;
-            println!("initialized zettelkasten at {}", p.display());
+            outln!("initialized zettelkasten at {}", p.display())?;
         }
 
-        Command::Create { title, tags, r#type, body } => {
+        Command::Create {
+            title,
+            tags,
+            r#type,
+            body,
+        } => {
             let repo = GitRepo::open(&cli.repo)?;
             let id = unique_id(&cli.repo);
             let tags_list: Vec<String> = tags
@@ -401,7 +441,7 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
             index.index_zettel(&parsed)?;
             redb_index_zettel(&cli.repo, &parsed);
 
-            println!("{id_str}");
+            outln!("{id_str}")?;
         }
 
         Command::Read { id } => {
@@ -410,10 +450,16 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
             index.rebuild_if_stale(&repo)?;
             let path = index.resolve_path(&id)?;
             let content = repo.read_file(&path)?;
-            print!("{content}");
+            out!("{content}")?;
         }
 
-        Command::Update { id, title, tags, r#type, body } => {
+        Command::Update {
+            id,
+            title,
+            tags,
+            r#type,
+            body,
+        } => {
             let repo = GitRepo::open(&cli.repo)?;
             let index = open_index(&cli.repo)?;
             index.rebuild_if_stale(&repo)?;
@@ -421,19 +467,25 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
             let content = repo.read_file(&path)?;
             let mut parsed = parser::parse(&content, &path)?;
 
-            if let Some(t) = title { parsed.meta.title = Some(t); }
+            if let Some(t) = title {
+                parsed.meta.title = Some(t);
+            }
             if let Some(t) = tags {
                 parsed.meta.tags = t.split(',').map(|s| s.trim().to_string()).collect();
             }
-            if let Some(t) = r#type { parsed.meta.zettel_type = Some(t); }
-            if let Some(b) = body { parsed.body = b; }
+            if let Some(t) = r#type {
+                parsed.meta.zettel_type = Some(t);
+            }
+            if let Some(b) = body {
+                parsed.body = b;
+            }
 
             let new_content = parser::serialize(&parsed);
             repo.commit_file(&path, &new_content, &format!("update zettel {id}"))?;
             index.index_zettel(&parsed)?;
             redb_index_zettel(&cli.repo, &parsed);
 
-            println!("updated {id}");
+            outln!("updated {id}")?;
         }
 
         Command::Delete { id } => {
@@ -462,8 +514,12 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
             let mut mgr = SyncManager::open(&repo)?;
 
             let report = mgr.sync(&remote, &branch, &index)?;
-            println!("sync: {} | commits: {} | conflicts resolved: {}",
-                report.direction, report.commits_transferred, report.conflicts_resolved);
+            outln!(
+                "sync: {} | commits: {} | conflicts resolved: {}",
+                report.direction,
+                report.commits_transferred,
+                report.conflicts_resolved
+            )?;
         }
 
         Command::Query { sql } => {
@@ -476,30 +532,34 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
                 match result {
                     SqlResult::Rows { rows, .. } => {
                         for row in rows {
-                            println!("{}", row.join(" | "));
+                            outln!("{}", row.join(" | "))?;
                         }
                     }
-                    SqlResult::Affected(n) => println!("{n} row(s) affected"),
-                    SqlResult::Ok(msg) => println!("{msg}"),
+                    SqlResult::Affected(n) => outln!("{n} row(s) affected")?,
+                    SqlResult::Ok(msg) => outln!("{msg}")?,
                 }
             }
         }
 
-        Command::Search { query, limit, offset } => {
+        Command::Search {
+            query,
+            limit,
+            offset,
+        } => {
             let repo = GitRepo::open(&cli.repo)?;
             let index = open_index(&cli.repo)?;
             index.rebuild_if_stale(&repo)?;
 
             let result = index.search_paginated(&query, limit, offset)?;
             if result.hits.is_empty() {
-                println!("no results");
+                outln!("no results")?;
             } else {
                 let start = offset + 1;
                 let end = offset + result.hits.len();
-                println!("Showing {start}-{end} of {} results", result.total_count);
+                outln!("Showing {start}-{end} of {} results", result.total_count)?;
                 for r in &result.hits {
-                    println!("[{}] {} ({})", r.id, r.title, r.path);
-                    println!("  {}", r.snippet);
+                    outln!("[{}] {} ({})", r.id, r.title, r.path)?;
+                    outln!("  {}", r.snippet)?;
                 }
             }
         }
@@ -507,7 +567,7 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
         Command::RegisterNode { name } => {
             let repo = GitRepo::open(&cli.repo)?;
             let node = sync_manager::register_node(&repo, &name)?;
-            println!("registered node {} ({})", node.name, node.uuid);
+            outln!("registered node {} ({})", node.name, node.uuid)?;
         }
 
         Command::Status => {
@@ -538,34 +598,40 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
                 0
             };
 
-            println!("head: {head}");
-            println!("node: {}", node_uuid.trim());
-            println!("index stale: {stale}");
-            println!("registered nodes: {node_count}");
+            outln!("head: {head}")?;
+            outln!("node: {}", node_uuid.trim())?;
+            outln!("index stale: {stale}")?;
+            outln!("registered nodes: {node_count}")?;
             if !stale_nodes.is_empty() {
-                println!("stale nodes: {}", stale_nodes.join(", "));
+                outln!("stale nodes: {}", stale_nodes.join(", "))?;
             }
 
             // Check for resurrected zettels
             if db_path.exists() {
                 let index = Index::open(&db_path)?;
-                let resurrected = index.query_raw(
-                    "SELECT z.id, z.title FROM zettels z \
+                let resurrected = index
+                    .query_raw(
+                        "SELECT z.id, z.title FROM zettels z \
                      JOIN _zdb_fields f ON f.zettel_id = z.id \
-                     WHERE f.key = 'resurrected' AND f.value = 'true'"
-                ).unwrap_or_default();
+                     WHERE f.key = 'resurrected' AND f.value = 'true'",
+                    )
+                    .unwrap_or_default();
                 if !resurrected.is_empty() {
-                    println!("resurrected zettels:");
+                    outln!("resurrected zettels:")?;
                     for row in &resurrected {
-                        println!("  {} {}", row[0], row.get(1).map(|s| s.as_str()).unwrap_or(""));
+                        outln!(
+                            "  {} {}",
+                            row[0],
+                            row.get(1).map(|s| s.as_str()).unwrap_or("")
+                        )?;
                     }
                 }
 
                 let broken = index.broken_backlinks().unwrap_or_default();
                 if !broken.is_empty() {
-                    println!("broken backlinks:");
+                    outln!("broken backlinks:")?;
                     for (src_id, target_path) in &broken {
-                        println!("  {src_id} -> {target_path}");
+                        outln!("  {src_id} -> {target_path}")?;
                     }
                 }
             }
@@ -577,13 +643,16 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
                 let mgr = SyncManager::open(&repo)?;
                 let nodes = mgr.list_nodes()?;
                 if nodes.is_empty() {
-                    println!("no registered nodes");
+                    outln!("no registered nodes")?;
                 } else {
                     for n in &nodes {
-                        println!("{} {} ({:?}) last_sync: {}",
-                            n.uuid, n.name,
+                        outln!(
+                            "{} {} ({:?}) last_sync: {}",
+                            n.uuid,
+                            n.name,
                             n.status,
-                            n.last_sync.as_deref().unwrap_or("never"));
+                            n.last_sync.as_deref().unwrap_or("never")
+                        )?;
                     }
                 }
             }
@@ -591,9 +660,9 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
                 let repo = GitRepo::open(&cli.repo)?;
                 let mgr = SyncManager::open(&repo)?;
                 mgr.retire_node(&uuid)?;
-                println!("retired node {uuid}");
+                outln!("retired node {uuid}")?;
             }
-        }
+        },
 
         Command::Compact { force, dry_run } => {
             let repo = GitRepo::open(&cli.repo)?;
@@ -604,19 +673,26 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
                 let temp_dir = cli.repo.join(".crdt/temp");
                 let temp_count = if temp_dir.exists() {
                     std::fs::read_dir(&temp_dir)
-                        .map(|d| d.filter_map(|e| e.ok()).filter(|e| e.file_name().to_string_lossy() != ".gitkeep").count())
+                        .map(|d| {
+                            d.filter_map(|e| e.ok())
+                                .filter(|e| e.file_name().to_string_lossy() != ".gitkeep")
+                                .count()
+                        })
                         .unwrap_or(0)
                 } else {
                     0
                 };
-                println!("shared head: {:?}", head);
-                println!("crdt temp files: {temp_count}");
-                println!("(dry run — no changes made)");
+                outln!("shared head: {:?}", head)?;
+                outln!("crdt temp files: {temp_count}")?;
+                outln!("(dry run — no changes made)")?;
             } else {
                 let report = compaction::compact(&repo, &mgr, force)?;
-                println!("files removed: {} | crdt compacted: {} | gc: {}",
-                    report.files_removed, report.crdt_docs_compacted,
-                    if report.gc_success { "ok" } else { "failed" });
+                outln!(
+                    "files removed: {} | crdt compacted: {} | gc: {}",
+                    report.files_removed,
+                    report.crdt_docs_compacted,
+                    if report.gc_success { "ok" } else { "failed" }
+                )?;
             }
         }
 
@@ -624,9 +700,9 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
             let repo = GitRepo::open(&cli.repo)?;
             let index = open_index(&cli.repo)?;
             let report = index.rebuild(&repo)?;
-            println!("indexed {} zettels", report.indexed);
+            outln!("indexed {} zettels", report.indexed)?;
             if !report.warnings.is_empty() {
-                println!("{} warning(s)", report.warnings.len());
+                outln!("{} warning(s)", report.warnings.len())?;
             }
         }
 
@@ -635,28 +711,32 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
             let index = open_index(&cli.repo)?;
             let old_path = index.resolve_path(&id)?;
             let report = git_ops::rename_zettel(&repo, &index, &old_path, &new_path)?;
-            println!("{} backlinks updated", report.updated.len());
+            outln!("{} backlinks updated", report.updated.len())?;
             if !report.unresolvable.is_empty() {
-                println!("unresolvable:");
+                outln!("unresolvable:")?;
                 for u in &report.unresolvable {
-                    println!("  {u}");
+                    outln!("  {u}")?;
                 }
             }
         }
 
         Command::Bundle { action } => match action {
-            BundleAction::Export { target, full, output } => {
+            BundleAction::Export {
+                target,
+                full,
+                output,
+            } => {
                 let repo = GitRepo::open(&cli.repo)?;
                 let mgr = SyncManager::open(&repo)?;
                 if full {
                     let path = zdb_core::bundle::export_full_bundle(&repo, &mgr, &output)?;
-                    println!("exported full bundle to {}", path.display());
+                    outln!("exported full bundle to {}", path.display())?;
                 } else if let Some(target_uuid) = target {
                     let path = zdb_core::bundle::export_bundle(&repo, &mgr, &target_uuid, &output)?;
-                    println!("exported delta bundle to {}", path.display());
+                    outln!("exported delta bundle to {}", path.display())?;
                 } else {
                     return Err(zdb_core::error::ZettelError::Validation(
-                        "specify --target <uuid> or --full".into()
+                        "specify --target <uuid> or --full".into(),
                     ));
                 }
             }
@@ -665,7 +745,10 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
                 let mut mgr = SyncManager::open(&repo)?;
                 let index = open_index(&cli.repo)?;
                 let report = zdb_core::bundle::import_bundle(&repo, &mut mgr, &index, &path)?;
-                println!("imported: conflicts resolved: {}", report.conflicts_resolved);
+                outln!(
+                    "imported: conflicts resolved: {}",
+                    report.conflicts_resolved
+                )?;
             }
         },
 
@@ -675,13 +758,19 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
             index.rebuild_if_stale(&repo)?;
 
             let bytes = std::fs::read(&file)?;
-            let filename = file.file_name()
-                .and_then(|n| n.to_str())
-                .ok_or_else(|| zdb_core::error::ZettelError::Validation("invalid filename".into()))?;
+            let filename = file.file_name().and_then(|n| n.to_str()).ok_or_else(|| {
+                zdb_core::error::ZettelError::Validation("invalid filename".into())
+            })?;
             let mime = zdb_core::types::AttachmentInfo::mime_from_filename(filename);
             let zid = zdb_core::types::ZettelId(id);
-            let info = zdb_core::attachments::attach_file(&repo, &index, &zid, filename, &bytes, mime)?;
-            println!("attached {} ({}, {} bytes)", info.name, info.mime, info.size);
+            let info =
+                zdb_core::attachments::attach_file(&repo, &index, &zid, filename, &bytes, mime)?;
+            outln!(
+                "attached {} ({}, {} bytes)",
+                info.name,
+                info.mime,
+                info.size
+            )?;
         }
 
         Command::Detach { id, filename } => {
@@ -691,7 +780,7 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
 
             let zid = zdb_core::types::ZettelId(id);
             zdb_core::attachments::detach_file(&repo, &index, &zid, &filename)?;
-            println!("detached {}", filename);
+            outln!("detached {}", filename)?;
         }
 
         Command::Attachments { id } => {
@@ -699,10 +788,10 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
             let zid = zdb_core::types::ZettelId(id);
             let list = zdb_core::attachments::list_attachments(&repo, &zid)?;
             if list.is_empty() {
-                println!("no attachments");
+                outln!("no attachments")?;
             } else {
                 for a in &list {
-                    println!("{}\t{}\t{} bytes", a.name, a.mime, a.size);
+                    outln!("{}\t{}\t{} bytes", a.name, a.mime, a.size)?;
                 }
             }
         }
@@ -716,7 +805,7 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
             match ri.get(&id)? {
                 Some(z) => {
                     let content = parser::serialize(&z);
-                    print!("{content}");
+                    out!("{content}")?;
                 }
                 None => {
                     eprintln!("not found: {id}");
@@ -736,11 +825,11 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
                 ri.scan_by_tag(&t)?
             } else {
                 return Err(zdb_core::error::ZettelError::Validation(
-                    "specify --type or --tag".into()
+                    "specify --type or --tag".into(),
                 ));
             };
             for id in &ids {
-                println!("{id}");
+                outln!("{id}")?;
             }
         }
 
@@ -751,18 +840,28 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
             ri.rebuild(&repo)?;
             let ids = ri.backlinks(&id)?;
             for bl in &ids {
-                println!("{bl}");
+                outln!("{bl}")?;
             }
         }
 
-        Command::Serve { port, pg_port, bind, playground } => {
+        Command::Serve {
+            port,
+            pg_port,
+            bind,
+            playground,
+        } => {
             let repo_path = std::fs::canonicalize(&cli.repo)?;
-            let rt = tokio::runtime::Runtime::new()
-                .map_err(zdb_core::error::ZettelError::Io)?;
+            let rt = tokio::runtime::Runtime::new().map_err(zdb_core::error::ZettelError::Io)?;
             rt.block_on(async {
-                zdb_server::run(repo_path, Some(port), Some(pg_port), Some(&bind), playground)
-                    .await
-                    .map_err(zdb_core::error::ZettelError::Io)
+                zdb_server::run(
+                    repo_path,
+                    Some(port),
+                    Some(pg_port),
+                    Some(&bind),
+                    playground,
+                )
+                .await
+                .map_err(zdb_core::error::ZettelError::Io)
             })?;
         }
 
@@ -783,15 +882,15 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
 
                 let id = unique_id(&cli.repo);
                 let zettel = zdb_core::sql_engine::build_typedef_zettel(&id, &schema);
-                print!("{}", parser::serialize(&zettel));
+                out!("{}", parser::serialize(&zettel))?;
             }
             TypeAction::Install { name } => {
-                let content = zdb_core::bundled_types::get_bundled_type(&name)
-                    .ok_or_else(|| {
-                        zdb_core::error::ZettelError::SqlEngine(
-                            format!("unknown bundled type \"{name}\". available: {:?}",
-                                zdb_core::bundled_types::list_bundled_types())
-                        )
+                let content =
+                    zdb_core::bundled_types::get_bundled_type(&name).ok_or_else(|| {
+                        zdb_core::error::ZettelError::SqlEngine(format!(
+                            "unknown bundled type \"{name}\". available: {:?}",
+                            zdb_core::bundled_types::list_bundled_types()
+                        ))
                     })?;
 
                 let repo = GitRepo::open(&cli.repo)?;
@@ -807,10 +906,30 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
                 let parsed = parser::parse(&full_content, &path)?;
                 index.index_zettel(&parsed)?;
 
-                println!("installed type \"{name}\" as {id}");
+                outln!("installed type \"{name}\" as {id}")?;
             }
         },
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_broken_pipe;
+
+    #[test]
+    fn detects_broken_pipe_io_error() {
+        let err = zdb_core::error::ZettelError::Io(std::io::Error::new(
+            std::io::ErrorKind::BrokenPipe,
+            "pipe closed",
+        ));
+        assert!(is_broken_pipe(&err));
+    }
+
+    #[test]
+    fn ignores_non_broken_pipe_errors() {
+        let err = zdb_core::error::ZettelError::Io(std::io::Error::other("boom"));
+        assert!(!is_broken_pipe(&err));
+    }
 }

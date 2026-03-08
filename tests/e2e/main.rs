@@ -1,12 +1,12 @@
 mod attachments;
 mod common;
+mod delete_backlinks;
 mod multi_device;
 mod pgwire;
+mod rename;
+mod search_links;
 mod serve;
+mod server_mutations;
 mod sql_lifecycle;
 mod subscriptions;
 mod sync_crdt;
-mod rename;
-mod delete_backlinks;
-mod search_links;
-mod server_mutations;

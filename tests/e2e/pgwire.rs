@@ -16,7 +16,9 @@ fn pgwire_connect_auth_ok() {
             .connect(tokio_postgres::NoTls)
             .await
             .unwrap();
-        tokio::spawn(async move { connection.await.ok(); });
+        tokio::spawn(async move {
+            connection.await.ok();
+        });
 
         let messages = client.simple_query("SELECT 1").await.unwrap();
         let row = messages
@@ -77,9 +79,14 @@ fn pgwire_select_with_columns() {
             .connect(tokio_postgres::NoTls)
             .await
             .unwrap();
-        tokio::spawn(async move { connection.await.ok(); });
+        tokio::spawn(async move {
+            connection.await.ok();
+        });
 
-        let messages = client.simple_query("SELECT id, title FROM zettels").await.unwrap();
+        let messages = client
+            .simple_query("SELECT id, title FROM zettels")
+            .await
+            .unwrap();
         let row = messages
             .iter()
             .find_map(|m| match m {
@@ -109,14 +116,25 @@ fn pgwire_ddl_create_table() {
             .connect(tokio_postgres::NoTls)
             .await
             .unwrap();
-        tokio::spawn(async move { connection.await.ok(); });
+        tokio::spawn(async move {
+            connection.await.ok();
+        });
 
-        client.simple_query("CREATE TABLE book (title TEXT NOT NULL)").await.unwrap();
+        client
+            .simple_query("CREATE TABLE book (title TEXT NOT NULL)")
+            .await
+            .unwrap();
     });
 
     let result = server.graphql(r#"{ books { items { id title } totalCount } }"#);
-    assert!(result.get("errors").is_none(), "books query failed: {result}");
-    assert!(result["data"]["books"]["items"].as_array().unwrap().is_empty());
+    assert!(
+        result.get("errors").is_none(),
+        "books query failed: {result}"
+    );
+    assert!(result["data"]["books"]["items"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     assert_eq!(result["data"]["books"]["totalCount"].as_i64().unwrap(), 0);
 }
 
@@ -135,9 +153,14 @@ fn pgwire_insert_update_delete() {
             .connect(tokio_postgres::NoTls)
             .await
             .unwrap();
-        tokio::spawn(async move { connection.await.ok(); });
+        tokio::spawn(async move {
+            connection.await.ok();
+        });
 
-        client.simple_query("CREATE TABLE book (title TEXT NOT NULL)").await.unwrap();
+        client
+            .simple_query("CREATE TABLE book (title TEXT NOT NULL)")
+            .await
+            .unwrap();
 
         let inserted = client
             .simple_query("INSERT INTO book (title) VALUES ('Dune')")
@@ -190,10 +213,7 @@ fn pgwire_insert_update_delete() {
         assert_eq!(updated, 1);
 
         let deleted = client
-            .simple_query(&format!(
-                "DELETE FROM book WHERE id = '{}'",
-                inserted_id
-            ))
+            .simple_query(&format!("DELETE FROM book WHERE id = '{}'", inserted_id))
             .await
             .unwrap()
             .into_iter()

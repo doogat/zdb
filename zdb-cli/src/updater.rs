@@ -7,8 +7,7 @@ use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-const GITHUB_RELEASES_API: &str =
-    "https://api.github.com/repos/doogat/zdb/releases/latest";
+const GITHUB_RELEASES_API: &str = "https://api.github.com/repos/doogat/zdb/releases/latest";
 const CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60); // 1 hour
 const MAX_DOWNLOAD_BYTES: u64 = 100 * 1024 * 1024; // 100 MB
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -80,17 +79,29 @@ fn should_check() -> bool {
 
 fn target_triple() -> Option<&'static str> {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    { return Some("aarch64-apple-darwin"); }
+    {
+        return Some("aarch64-apple-darwin");
+    }
     #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    { return Some("x86_64-apple-darwin"); }
+    {
+        return Some("x86_64-apple-darwin");
+    }
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    { return Some("x86_64-unknown-linux-gnu"); }
+    {
+        return Some("x86_64-unknown-linux-gnu");
+    }
     #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-    { return Some("aarch64-unknown-linux-gnu"); }
+    {
+        return Some("aarch64-unknown-linux-gnu");
+    }
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-    { return Some("x86_64-pc-windows-msvc"); }
+    {
+        return Some("x86_64-pc-windows-msvc");
+    }
     #[cfg(all(target_os = "windows", target_arch = "aarch64"))]
-    { return Some("aarch64-pc-windows-msvc"); }
+    {
+        return Some("aarch64-pc-windows-msvc");
+    }
     #[allow(unreachable_code)]
     None
 }
@@ -357,11 +368,7 @@ fn download_and_replace(url: &str, expected_version: &Version) -> Result<(), Str
 
 mod hex {
     pub fn encode(bytes: impl AsRef<[u8]>) -> String {
-        bytes
-            .as_ref()
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect()
+        bytes.as_ref().iter().map(|b| format!("{b:02x}")).collect()
     }
 }
 
@@ -428,7 +435,10 @@ mod tests {
     #[test]
     fn target_triple_returns_some() {
         let triple = target_triple();
-        assert!(triple.is_some(), "target_triple() returned None on this platform");
+        assert!(
+            triple.is_some(),
+            "target_triple() returned None on this platform"
+        );
         let t = triple.unwrap();
         assert!(t.contains("apple") || t.contains("linux") || t.contains("windows"));
     }
@@ -500,7 +510,9 @@ mod tests {
 
     #[test]
     fn current_version_parses() {
-        let v: Version = CURRENT_VERSION.parse().expect("CARGO_PKG_VERSION should be valid semver");
+        let v: Version = CURRENT_VERSION
+            .parse()
+            .expect("CARGO_PKG_VERSION should be valid semver");
         assert!(v.major == 0 || v.major >= 1);
     }
 }

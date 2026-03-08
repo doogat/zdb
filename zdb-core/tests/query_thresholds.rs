@@ -43,7 +43,10 @@ fn setup(count: usize) -> (TempDir, Index) {
         let files: Vec<(String, String)> = (start..end)
             .map(|i| (zettel_path(i), zettel_content(i)))
             .collect();
-        let refs: Vec<(&str, &str)> = files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+        let refs: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(p, c)| (p.as_str(), c.as_str()))
+            .collect();
         repo.commit_files(&refs, &format!("batch {start}")).unwrap();
     }
 

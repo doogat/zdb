@@ -70,12 +70,18 @@ fn concurrent_creates() {
 
     // All nodes see all 3
     for (i, node) in setup.nodes.iter().enumerate() {
-        assert!(MultiNodeSetup::read(node, &id0).contains("Concurrent 0"),
-            "node {i} missing zettel from node 0");
-        assert!(MultiNodeSetup::read(node, &id1).contains("Concurrent 1"),
-            "node {i} missing zettel from node 1");
-        assert!(MultiNodeSetup::read(node, &id2).contains("Concurrent 2"),
-            "node {i} missing zettel from node 2");
+        assert!(
+            MultiNodeSetup::read(node, &id0).contains("Concurrent 0"),
+            "node {i} missing zettel from node 0"
+        );
+        assert!(
+            MultiNodeSetup::read(node, &id1).contains("Concurrent 1"),
+            "node {i} missing zettel from node 1"
+        );
+        assert!(
+            MultiNodeSetup::read(node, &id2).contains("Concurrent 2"),
+            "node {i} missing zettel from node 2"
+        );
     }
 }
 
@@ -131,8 +137,10 @@ fn network_partition_and_reconnect() {
     for node in &setup.nodes {
         // The updated note should exist
         let out = MultiNodeSetup::read(node, &id0);
-        assert!(out.contains("Partition edit") || out.contains("Shared note"),
-            "merged note should be accessible");
+        assert!(
+            out.contains("Partition edit") || out.contains("Shared note"),
+            "merged note should be accessible"
+        );
         // The offline-created note should exist
         let out2 = MultiNodeSetup::read(node, &id2);
         assert!(out2.contains("Offline note"));
@@ -271,7 +279,10 @@ fn bundle_full_bootstrap() {
 
     // Verify the zettel exists on node3
     let out = MultiNodeSetup::read(&path3, &id);
-    assert!(out.contains("Bundle test"), "bootstrapped node should have the zettel");
+    assert!(
+        out.contains("Bundle test"),
+        "bootstrapped node should have the zettel"
+    );
 }
 
 // ── Test: air-gapped delta transfer ──────────────────────────────
@@ -308,7 +319,10 @@ fn airgapped_delta_transfer() {
 
     // Node1 should now see the delta note
     let out = MultiNodeSetup::read(&setup.nodes[1], &id1);
-    assert!(out.contains("Delta note"), "delta transfer should bring new zettel");
+    assert!(
+        out.contains("Delta note"),
+        "delta transfer should bring new zettel"
+    );
 }
 
 // ── Test: concurrent edits to same zettel ────────────────────────
@@ -358,7 +372,12 @@ fn delete_vs_edit_multi_node() {
     MultiNodeSetup::delete(&setup.nodes[1], &id);
 
     // Node2 edits the zettel
-    MultiNodeSetup::update(&setup.nodes[2], &id, "Edited after delete", "surviving body");
+    MultiNodeSetup::update(
+        &setup.nodes[2],
+        &id,
+        "Edited after delete",
+        "surviving body",
+    );
 
     // Node1 pushes delete, then node2 syncs (triggers delete-vs-edit conflict)
     MultiNodeSetup::push(&setup.nodes[1]);
@@ -409,7 +428,10 @@ fn list_zettels(node: &std::path::Path) -> Vec<String> {
 
 /// Read a zettel file directly from disk for comparison.
 fn read_zettel_file(node: &std::path::Path, filename: &str) -> String {
-    std::fs::read_to_string(node.join("zettelkasten").join(filename)).unwrap()
+    // Compare canonical zettel content instead of raw working tree bytes so
+    // platform-specific checkout EOL conversion does not look like divergence.
+    let id = filename.strip_suffix(".md").unwrap_or(filename);
+    MultiNodeSetup::read(node, id).replace("\r\n", "\n")
 }
 
 #[test]

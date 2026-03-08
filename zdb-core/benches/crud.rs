@@ -21,7 +21,10 @@ fn populated_repo(dir: &Path) -> GitRepo {
     let files: Vec<(String, String)> = (0..ZETTEL_COUNT)
         .map(|i| (zettel_path(i), zettel_content(i)))
         .collect();
-    let refs: Vec<(&str, &str)> = files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, c)| (p.as_str(), c.as_str()))
+        .collect();
     repo.commit_files(&refs, "seed").unwrap();
     repo
 }
@@ -35,7 +38,10 @@ fn bench_create(c: &mut Criterion) {
                 (dir, repo)
             },
             |(_dir, repo)| {
-                let path = format!("zettelkasten/{:014}.md", 20260101000000u64 + ZETTEL_COUNT as u64);
+                let path = format!(
+                    "zettelkasten/{:014}.md",
+                    20260101000000u64 + ZETTEL_COUNT as u64
+                );
                 repo.commit_file(&path, &zettel_content(ZETTEL_COUNT), "create")
                     .unwrap();
             },
@@ -103,8 +109,10 @@ fn bench_batch_commit(c: &mut Criterion) {
                 let files: Vec<(String, String)> = (ZETTEL_COUNT..ZETTEL_COUNT + 10)
                     .map(|i| (zettel_path(i), zettel_content(i)))
                     .collect();
-                let refs: Vec<(&str, &str)> =
-                    files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+                let refs: Vec<(&str, &str)> = files
+                    .iter()
+                    .map(|(p, c)| (p.as_str(), c.as_str()))
+                    .collect();
                 repo.commit_files(&refs, "batch").unwrap();
             },
             BatchSize::PerIteration,

@@ -1,13 +1,14 @@
 use crate::common::{read_next, ServerGuard, ZdbTestRepo};
-use tungstenite::http::Request;
 use tungstenite::connect;
+use tungstenite::http::Request;
 
 #[test]
 fn subscribe_mutate_receive() {
     let repo = ZdbTestRepo::init();
     let server = ServerGuard::start(&repo);
 
-    let mut ws = server.ws_subscribe("subscription { zettelChanged { action zettelId zettel { id title } } }");
+    let mut ws = server
+        .ws_subscribe("subscription { zettelChanged { action zettelId zettel { id title } } }");
 
     // Mutate: create a zettel
     let result = server.graphql_with_vars(
@@ -35,7 +36,10 @@ fn subscribe_delete_receive() {
         r#"mutation($input: CreateZettelInput!) { createZettel(input: $input) { id } }"#,
         serde_json::json!({ "input": { "title": "To Delete" } }),
     );
-    let id = result["data"]["createZettel"]["id"].as_str().unwrap().to_string();
+    let id = result["data"]["createZettel"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Subscribe to deletions
     let mut ws = server.ws_subscribe("subscription { zettelDeleted }");
@@ -62,7 +66,10 @@ fn ws_auth_missing_returns_401() {
         .header("Connection", "Upgrade")
         .header("Upgrade", "websocket")
         .header("Sec-WebSocket-Version", "13")
-        .header("Sec-WebSocket-Key", tungstenite::handshake::client::generate_key())
+        .header(
+            "Sec-WebSocket-Key",
+            tungstenite::handshake::client::generate_key(),
+        )
         .body(())
         .unwrap();
 
@@ -82,7 +89,10 @@ fn no_subscriber_mutations_work() {
             r#"mutation($input: CreateZettelInput!) { createZettel(input: $input) { id } }"#,
             serde_json::json!({ "input": { "title": format!("NoSub {i}") } }),
         );
-        assert!(result.get("errors").is_none(), "create {i} failed: {result}");
+        assert!(
+            result.get("errors").is_none(),
+            "create {i} failed: {result}"
+        );
     }
 
     // Verify all created
@@ -103,7 +113,10 @@ fn subscribe_type_filter() {
             r#"mutation($sql: String!) { executeSql(sql: $sql) { message } }"#,
             serde_json::json!({ "sql": sql }),
         );
-        assert!(result.get("errors").is_none(), "CREATE TABLE {table} failed: {result}");
+        assert!(
+            result.get("errors").is_none(),
+            "CREATE TABLE {table} failed: {result}"
+        );
     }
 
     // Subscribe to contactChanged only
@@ -114,14 +127,20 @@ fn subscribe_type_filter() {
         r#"mutation($input: CreateZettelInput!) { createZettel(input: $input) { id } }"#,
         serde_json::json!({ "input": { "title": "My Bookmark", "type": "bookmark" } }),
     );
-    assert!(result.get("errors").is_none(), "create bookmark failed: {result}");
+    assert!(
+        result.get("errors").is_none(),
+        "create bookmark failed: {result}"
+    );
 
     // Create a contact — SHOULD trigger
     let result = server.graphql_with_vars(
         r#"mutation($input: CreateZettelInput!) { createZettel(input: $input) { id } }"#,
         serde_json::json!({ "input": { "title": "Alice", "type": "contact" } }),
     );
-    assert!(result.get("errors").is_none(), "create contact failed: {result}");
+    assert!(
+        result.get("errors").is_none(),
+        "create contact failed: {result}"
+    );
     let contact_id = result["data"]["createZettel"]["id"].as_str().unwrap();
 
     // The first event we get should be the contact, not the bookmark
@@ -145,7 +164,10 @@ fn subscribe_disconnect_reconnect() {
         );
         assert!(result.get("errors").is_none());
         let event = read_next(&mut ws);
-        assert_eq!(event["payload"]["data"]["zettelChanged"]["action"], "created");
+        assert_eq!(
+            event["payload"]["data"]["zettelChanged"]["action"],
+            "created"
+        );
         // ws drops here — disconnect
     }
 
@@ -157,5 +179,8 @@ fn subscribe_disconnect_reconnect() {
     );
     assert!(result.get("errors").is_none());
     let event = read_next(&mut ws);
-    assert_eq!(event["payload"]["data"]["zettelChanged"]["action"], "created");
+    assert_eq!(
+        event["payload"]["data"]["zettelChanged"]["action"],
+        "created"
+    );
 }

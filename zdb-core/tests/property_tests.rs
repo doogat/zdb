@@ -4,8 +4,8 @@
 //! Default case counts: parser 10_000, CRDT 1_000, indexer 500.
 //! Override with PROPTEST_CASES env var (e.g. 100 for CI).
 
-use std::collections::HashMap;
 use proptest::prelude::*;
+use std::collections::HashMap;
 use zdb_core::crdt_resolver;
 use zdb_core::indexer::Index;
 use zdb_core::parser;
@@ -23,16 +23,21 @@ fn safe_word() -> impl Strategy<Value = String> {
 
 /// Safe sentence for body text (no `---` on its own line, no `::` to avoid inline fields).
 fn safe_sentence() -> impl Strategy<Value = String> {
-    prop::collection::vec("[a-zA-Z0-9 ,\\.!?]{1,60}", 1..=3)
-        .prop_map(|parts| parts.join(" "))
+    prop::collection::vec("[a-zA-Z0-9 ,\\.!?]{1,60}", 1..=3).prop_map(|parts| parts.join(" "))
 }
 
 /// Generate a 14-digit timestamp ID.
 fn arb_zettel_id() -> impl Strategy<Value = String> {
     // YYYYMMDDHHmmss — constrain to valid-ish ranges
-    (2020u32..2030, 1u32..=12, 1u32..=28, 0u32..=23, 0u32..=59, 0u32..=59).prop_map(
-        |(y, mo, d, h, mi, s)| format!("{y:04}{mo:02}{d:02}{h:02}{mi:02}{s:02}"),
+    (
+        2020u32..2030,
+        1u32..=12,
+        1u32..=28,
+        0u32..=23,
+        0u32..=59,
+        0u32..=59,
     )
+        .prop_map(|(y, mo, d, h, mi, s)| format!("{y:04}{mo:02}{d:02}{h:02}{mi:02}{s:02}"))
 }
 
 /// Generate a Value for extra frontmatter fields (leaf types only for safety).
@@ -257,9 +262,7 @@ fn arb_conflict_divergent_fm() -> impl Strategy<Value = ConflictFile> {
             meta_a.title = Some(new_title);
             let mut meta_b = meta;
             let extra_key = format!("xConflict{extra_key}");
-            meta_b
-                .extra
-                .insert(extra_key, Value::String(extra_val));
+            meta_b.extra.insert(extra_key, Value::String(extra_val));
             let ours = build_zettel_markdown(&meta_a, "Body text.", "");
             let theirs = build_zettel_markdown(&meta_b, "Body text.", "");
 
@@ -579,18 +582,18 @@ impl ZettelSource for MockSource {
         Ok(CommitHash(self.head.clone()))
     }
 
-    fn diff_paths(&self, _old_oid: &str, _new_oid: &str) -> zdb_core::error::Result<Vec<(zdb_core::types::DiffKind, String)>> {
+    fn diff_paths(
+        &self,
+        _old_oid: &str,
+        _new_oid: &str,
+    ) -> zdb_core::error::Result<Vec<(zdb_core::types::DiffKind, String)>> {
         Ok(Vec::new())
     }
 }
 
 /// Generate a set of random zettels as (path, content) pairs with unique IDs.
 fn arb_zettel_set(count: std::ops::Range<usize>) -> impl Strategy<Value = Vec<(String, String)>> {
-    prop::collection::vec(
-        (arb_zettel_meta(), arb_body()),
-        count,
-    )
-    .prop_map(|items| {
+    prop::collection::vec((arb_zettel_meta(), arb_body()), count).prop_map(|items| {
         items
             .into_iter()
             .enumerate()

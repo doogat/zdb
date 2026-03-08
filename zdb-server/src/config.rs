@@ -33,7 +33,11 @@ struct ServerSection {
 
 impl ServerConfig {
     /// Load config from ~/.config/zetteldb/config.toml, with CLI overrides.
-    pub fn load(port_override: Option<u16>, pg_port_override: Option<u16>, bind_override: Option<&str>) -> Self {
+    pub fn load(
+        port_override: Option<u16>,
+        pg_port_override: Option<u16>,
+        bind_override: Option<&str>,
+    ) -> Self {
         let config_dir = config_dir();
         let file_cfg = Self::read_file(&config_dir);
 
@@ -66,7 +70,14 @@ impl ServerConfig {
             .unwrap_or(3600)
             .max(60);
 
-        Self { port, pg_port, bind, token_file, maintenance_enabled, maintenance_interval_secs }
+        Self {
+            port,
+            pg_port,
+            bind,
+            token_file,
+            maintenance_enabled,
+            maintenance_interval_secs,
+        }
     }
 
     fn read_file(config_dir: &std::path::Path) -> FileConfig {

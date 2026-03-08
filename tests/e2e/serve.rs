@@ -80,16 +80,12 @@ fn crud_lifecycle() {
     assert_eq!(updated["body"].as_str().unwrap(), "Updated body");
 
     // Delete
-    let result = server.graphql(&format!(
-        r#"mutation {{ deleteZettel(id: "{id}") }}"#
-    ));
+    let result = server.graphql(&format!(r#"mutation {{ deleteZettel(id: "{id}") }}"#));
     assert!(result.get("errors").is_none(), "delete failed: {result}");
     assert_eq!(result["data"]["deleteZettel"], true);
 
     // Verify deleted
-    let result = server.graphql(&format!(
-        r#"{{ zettel(id: "{id}") {{ id }} }}"#
-    ));
+    let result = server.graphql(&format!(r#"{{ zettel(id: "{id}") {{ id }} }}"#));
     assert!(result["errors"].is_array());
 }
 
@@ -119,13 +115,17 @@ fn search_and_list() {
 
     // List by tag
     let result = server.graphql(r#"{ zettels(tag: "alpha") { id title } }"#);
-    assert!(result.get("errors").is_none(), "list by tag failed: {result}");
+    assert!(
+        result.get("errors").is_none(),
+        "list by tag failed: {result}"
+    );
     let list = result["data"]["zettels"].as_array().unwrap();
     assert_eq!(list.len(), 1);
     assert_eq!(list[0]["title"].as_str().unwrap(), "Alpha Note");
 
     // Search
-    let result = server.graphql(r#"{ search(query: "searchable") { hits { id title snippet } totalCount } }"#);
+    let result = server
+        .graphql(r#"{ search(query: "searchable") { hits { id title snippet } totalCount } }"#);
     assert!(result.get("errors").is_none(), "search failed: {result}");
     let hits = result["data"]["search"]["hits"].as_array().unwrap();
     assert!(!hits.is_empty());
@@ -150,7 +150,8 @@ fn sql_query() {
     assert!(r.get("errors").is_none(), "create failed: {r}");
 
     // SQL query
-    let result = server.graphql(r#"{ sql(query: "SELECT id, title FROM zettels") { rows message } }"#);
+    let result =
+        server.graphql(r#"{ sql(query: "SELECT id, title FROM zettels") { rows message } }"#);
     assert!(result.get("errors").is_none(), "sql query failed: {result}");
     let sql = &result["data"]["sql"];
     let rows = sql["rows"].as_array().unwrap();
@@ -196,7 +197,10 @@ fn rest_crud_lifecycle() {
     );
     assert_eq!(resp.status(), 200);
     let updated: serde_json::Value = resp.json().unwrap();
-    assert_eq!(updated["data"]["title"].as_str().unwrap(), "Updated REST Note");
+    assert_eq!(
+        updated["data"]["title"].as_str().unwrap(),
+        "Updated REST Note"
+    );
     assert_eq!(updated["data"]["body"].as_str().unwrap(), "Updated body");
 
     // Delete
@@ -244,7 +248,10 @@ fn rest_filter_by_tag() {
     let repo = ZdbTestRepo::init();
     let server = ServerGuard::start(&repo);
 
-    server.rest_post("/zettels", serde_json::json!({ "title": "Tagged", "tags": ["alpha"] }));
+    server.rest_post(
+        "/zettels",
+        serde_json::json!({ "title": "Tagged", "tags": ["alpha"] }),
+    );
     server.rest_post("/zettels", serde_json::json!({ "title": "Untagged" }));
 
     let resp = server.rest_get("/zettels?tag=alpha");
@@ -280,7 +287,8 @@ fn rest_auth_required() {
     let server = ServerGuard::start(&repo);
 
     // No auth header
-    let resp = server.rest_client()
+    let resp = server
+        .rest_client()
         .get(server.rest_url("/zettels"))
         .timeout(Duration::from_secs(5))
         .send()
@@ -288,7 +296,8 @@ fn rest_auth_required() {
     assert_eq!(resp.status(), 401);
 
     // Wrong token
-    let resp = server.rest_client()
+    let resp = server
+        .rest_client()
         .get(server.rest_url("/zettels"))
         .header("Authorization", "Bearer wrong-token")
         .timeout(Duration::from_secs(5))
@@ -306,7 +315,10 @@ fn hot_schema_reload_create_and_query() {
 
     // Verify schemaVersion works (reloader is in schema data)
     let result = server.graphql(r#"{ schemaVersion }"#);
-    assert!(result.get("errors").is_none(), "initial schemaVersion failed: {result}");
+    assert!(
+        result.get("errors").is_none(),
+        "initial schemaVersion failed: {result}"
+    );
     let v1 = result["data"]["schemaVersion"].as_i64().unwrap();
     assert_eq!(v1, 1, "initial schemaVersion should be 1");
 
@@ -315,20 +327,32 @@ fn hot_schema_reload_create_and_query() {
         r#"mutation($sql: String!) { executeSql(sql: $sql) { message } }"#,
         serde_json::json!({ "sql": "CREATE TABLE book (title TEXT NOT NULL, author TEXT)" }),
     );
-    assert!(result.get("errors").is_none(), "CREATE TABLE failed: {result}");
+    assert!(
+        result.get("errors").is_none(),
+        "CREATE TABLE failed: {result}"
+    );
 
     // Schema reload is synchronous — new type is immediately queryable
     let result = server.graphql(r#"{ books { items { id title } totalCount } }"#);
-    assert!(result.get("errors").is_none(), "books query failed after reload: {result}");
+    assert!(
+        result.get("errors").is_none(),
+        "books query failed after reload: {result}"
+    );
     let books = result["data"]["books"]["items"].as_array().unwrap();
     assert!(books.is_empty());
     assert_eq!(result["data"]["books"]["totalCount"].as_i64().unwrap(), 0);
 
     // Schema version should have incremented
     let result = server.graphql(r#"{ schemaVersion }"#);
-    assert!(result.get("errors").is_none(), "schemaVersion query failed: {result}");
+    assert!(
+        result.get("errors").is_none(),
+        "schemaVersion query failed: {result}"
+    );
     let version = result["data"]["schemaVersion"].as_i64().unwrap();
-    assert!(version > 1, "schemaVersion should be >1 after reload, got {version}");
+    assert!(
+        version > 1,
+        "schemaVersion should be >1 after reload, got {version}"
+    );
 }
 
 #[test]
@@ -338,7 +362,10 @@ fn hot_schema_reload_schema_version_increments() {
 
     // Initial version
     let result = server.graphql(r#"{ schemaVersion }"#);
-    assert!(result.get("errors").is_none(), "schemaVersion failed: {result}");
+    assert!(
+        result.get("errors").is_none(),
+        "schemaVersion failed: {result}"
+    );
     let v1 = result["data"]["schemaVersion"].as_i64().unwrap();
 
     // Create type → triggers reload
@@ -346,11 +373,17 @@ fn hot_schema_reload_schema_version_increments() {
         r#"mutation($sql: String!) { executeSql(sql: $sql) { message } }"#,
         serde_json::json!({ "sql": "CREATE TABLE book (title TEXT NOT NULL)" }),
     );
-    assert!(result.get("errors").is_none(), "CREATE TABLE failed: {result}");
+    assert!(
+        result.get("errors").is_none(),
+        "CREATE TABLE failed: {result}"
+    );
 
     // Version should have incremented
     let result = server.graphql(r#"{ schemaVersion }"#);
-    assert!(result.get("errors").is_none(), "schemaVersion failed: {result}");
+    assert!(
+        result.get("errors").is_none(),
+        "schemaVersion failed: {result}"
+    );
     let v2 = result["data"]["schemaVersion"].as_i64().unwrap();
     assert!(v2 > v1, "schemaVersion should increment: {v1} → {v2}");
 }
@@ -366,7 +399,10 @@ fn hot_schema_reload_multiple_creates() {
             r#"mutation($sql: String!) { executeSql(sql: $sql) { message } }"#,
             serde_json::json!({ "sql": sql }),
         );
-        assert!(result.get("errors").is_none(), "CREATE TABLE {table} failed: {result}");
+        assert!(
+            result.get("errors").is_none(),
+            "CREATE TABLE {table} failed: {result}"
+        );
     }
 
     // All 3 types should be queryable (reload is synchronous)
@@ -376,7 +412,10 @@ fn hot_schema_reload_multiple_creates() {
         (r#"{ songs { items { id } totalCount } }"#, "songs"),
     ] {
         let result = server.graphql(query);
-        assert!(result.get("errors").is_none(), "{name} query failed: {result}");
+        assert!(
+            result.get("errors").is_none(),
+            "{name} query failed: {result}"
+        );
     }
 }
 
@@ -390,18 +429,27 @@ fn drop_table_removes_type_from_schema() {
         r#"mutation($sql: String!) { executeSql(sql: $sql) { message } }"#,
         serde_json::json!({ "sql": "CREATE TABLE book (title TEXT NOT NULL)" }),
     );
-    assert!(result.get("errors").is_none(), "CREATE TABLE failed: {result}");
+    assert!(
+        result.get("errors").is_none(),
+        "CREATE TABLE failed: {result}"
+    );
 
     // DROP TABLE removes typedef zettel and triggers schema reload
     let result = server.graphql_with_vars(
         r#"mutation($sql: String!) { executeSql(sql: $sql) { message } }"#,
         serde_json::json!({ "sql": "DROP TABLE book" }),
     );
-    assert!(result.get("errors").is_none(), "DROP TABLE should not error: {result}");
+    assert!(
+        result.get("errors").is_none(),
+        "DROP TABLE should not error: {result}"
+    );
 
     // Type is no longer in schema
     let result = server.graphql(r#"{ books { items { id } totalCount } }"#);
-    assert!(result.get("errors").is_some(), "books should no longer be queryable after DROP: {result}");
+    assert!(
+        result.get("errors").is_some(),
+        "books should no longer be queryable after DROP: {result}"
+    );
 }
 
 // ── Filtering, sorting, aggregation tests ──────────────────────
@@ -452,7 +500,10 @@ fn filter_gte() {
     let result = server.graphql(
         r#"{ tasks(where: { priority: { gte: 3 } }) { items { id priority } totalCount } }"#,
     );
-    assert!(result.get("errors").is_none(), "filter gte failed: {result}");
+    assert!(
+        result.get("errors").is_none(),
+        "filter gte failed: {result}"
+    );
     let items = result["data"]["tasks"]["items"].as_array().unwrap();
     assert_eq!(items.len(), 2);
     assert_eq!(result["data"]["tasks"]["totalCount"].as_i64().unwrap(), 2);
@@ -470,7 +521,10 @@ fn filter_contains() {
     let result = server.graphql(
         r#"{ tasks(where: { status: { contains: "ope" } }) { items { id status } totalCount } }"#,
     );
-    assert!(result.get("errors").is_none(), "filter contains failed: {result}");
+    assert!(
+        result.get("errors").is_none(),
+        "filter contains failed: {result}"
+    );
     let items = result["data"]["tasks"]["items"].as_array().unwrap();
     assert_eq!(items.len(), 2);
     for item in items {
@@ -488,14 +542,20 @@ fn filter_compound_and_or() {
     let result = server.graphql(
         r#"{ tasks(where: { _or: [{ status: { eq: "open" } }, { status: { eq: "review" } }] }) { items { id } totalCount } }"#,
     );
-    assert!(result.get("errors").is_none(), "filter _or failed: {result}");
+    assert!(
+        result.get("errors").is_none(),
+        "filter _or failed: {result}"
+    );
     assert_eq!(result["data"]["tasks"]["totalCount"].as_i64().unwrap(), 3);
 
     // _and: status=open AND priority>=3 → 1 result
     let result = server.graphql(
         r#"{ tasks(where: { _and: [{ status: { eq: "open" } }, { priority: { gte: 3 } }] }) { items { id } totalCount } }"#,
     );
-    assert!(result.get("errors").is_none(), "filter _and failed: {result}");
+    assert!(
+        result.get("errors").is_none(),
+        "filter _and failed: {result}"
+    );
     assert_eq!(result["data"]["tasks"]["totalCount"].as_i64().unwrap(), 1);
 }
 
@@ -505,14 +565,20 @@ fn order_by() {
     let server = ServerGuard::start(&repo);
     setup_task_type(&server);
 
-    let result = server.graphql(
-        r#"{ tasks(orderBy: { priority: ASC }) { items { priority } totalCount } }"#,
-    );
+    let result = server
+        .graphql(r#"{ tasks(orderBy: { priority: ASC }) { items { priority } totalCount } }"#);
     assert!(result.get("errors").is_none(), "orderBy failed: {result}");
     let items = result["data"]["tasks"]["items"].as_array().unwrap();
     assert_eq!(items.len(), 4);
-    let priorities: Vec<i64> = items.iter().map(|i| i["priority"].as_i64().unwrap()).collect();
-    assert_eq!(priorities, vec![1, 2, 3, 3], "should be sorted ASC: {priorities:?}");
+    let priorities: Vec<i64> = items
+        .iter()
+        .map(|i| i["priority"].as_i64().unwrap())
+        .collect();
+    assert_eq!(
+        priorities,
+        vec![1, 2, 3, 3],
+        "should be sorted ASC: {priorities:?}"
+    );
 }
 
 #[test]
@@ -521,9 +587,7 @@ fn aggregate_query() {
     let server = ServerGuard::start(&repo);
     setup_task_type(&server);
 
-    let result = server.graphql(
-        r#"{ tasksAggregate { count minPriority maxPriority } }"#,
-    );
+    let result = server.graphql(r#"{ tasksAggregate { count minPriority maxPriority } }"#);
     assert!(result.get("errors").is_none(), "aggregate failed: {result}");
     let agg = &result["data"]["tasksAggregate"];
     assert_eq!(agg["count"].as_i64().unwrap(), 4);
@@ -537,11 +601,16 @@ fn aggregate_with_filter() {
     let server = ServerGuard::start(&repo);
     setup_task_type(&server);
 
-    let result = server.graphql(
-        r#"{ tasksAggregate(where: { status: { eq: "open" } }) { count } }"#,
+    let result =
+        server.graphql(r#"{ tasksAggregate(where: { status: { eq: "open" } }) { count } }"#);
+    assert!(
+        result.get("errors").is_none(),
+        "aggregate with filter failed: {result}"
     );
-    assert!(result.get("errors").is_none(), "aggregate with filter failed: {result}");
-    assert_eq!(result["data"]["tasksAggregate"]["count"].as_i64().unwrap(), 2);
+    assert_eq!(
+        result["data"]["tasksAggregate"]["count"].as_i64().unwrap(),
+        2
+    );
 }
 
 #[test]
@@ -554,12 +623,18 @@ fn filter_sql_injection_attempt() {
     let result = server.graphql(
         r#"{ tasks(where: { status: { eq: "'; DROP TABLE task; --" } }) { items { id } totalCount } }"#,
     );
-    assert!(result.get("errors").is_none(), "injection attempt should not error: {result}");
+    assert!(
+        result.get("errors").is_none(),
+        "injection attempt should not error: {result}"
+    );
     assert_eq!(result["data"]["tasks"]["totalCount"].as_i64().unwrap(), 0);
 
     // Verify table still works
     let result = server.graphql(r#"{ tasks { items { id } totalCount } }"#);
-    assert!(result.get("errors").is_none(), "tasks should still work after injection attempt: {result}");
+    assert!(
+        result.get("errors").is_none(),
+        "tasks should still work after injection attempt: {result}"
+    );
     assert_eq!(result["data"]["tasks"]["totalCount"].as_i64().unwrap(), 4);
 }
 
@@ -573,7 +648,10 @@ fn filter_tag_with_where() {
     let result = server.graphql(
         r#"{ tasks(orderBy: { priority: ASC }) { items { id status priority } totalCount } }"#,
     );
-    assert!(result.get("errors").is_none(), "list tasks failed: {result}");
+    assert!(
+        result.get("errors").is_none(),
+        "list tasks failed: {result}"
+    );
     let items = result["data"]["tasks"]["items"].as_array().unwrap();
     assert_eq!(items.len(), 4);
 
@@ -598,19 +676,25 @@ fn filter_tag_with_where() {
     assert_eq!(result["data"]["tasks"]["totalCount"].as_i64().unwrap(), 1);
 
     // tag="urgent" alone: should return both tagged items
-    let result = server.graphql(
-        r#"{ tasks(tag: "urgent") { items { id } totalCount } }"#,
-    );
+    let result = server.graphql(r#"{ tasks(tag: "urgent") { items { id } totalCount } }"#);
     assert!(result.get("errors").is_none(), "tag-only failed: {result}");
-    assert_eq!(result["data"]["tasks"]["items"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        result["data"]["tasks"]["items"].as_array().unwrap().len(),
+        2
+    );
     assert_eq!(result["data"]["tasks"]["totalCount"].as_i64().unwrap(), 2);
 
     // where alone (no tag): should return all matching regardless of tag
-    let result = server.graphql(
-        r#"{ tasks(where: { priority: { gte: 2 } }) { items { id } totalCount } }"#,
+    let result =
+        server.graphql(r#"{ tasks(where: { priority: { gte: 2 } }) { items { id } totalCount } }"#);
+    assert!(
+        result.get("errors").is_none(),
+        "where-only failed: {result}"
     );
-    assert!(result.get("errors").is_none(), "where-only failed: {result}");
-    assert_eq!(result["data"]["tasks"]["items"].as_array().unwrap().len(), 3);
+    assert_eq!(
+        result["data"]["tasks"]["items"].as_array().unwrap().len(),
+        3
+    );
     assert_eq!(result["data"]["tasks"]["totalCount"].as_i64().unwrap(), 3);
 }
 
@@ -635,20 +719,32 @@ fn alter_table_column_visible_in_graphql() {
         r#"mutation($sql: String!) { executeSql(sql: $sql) { message } }"#,
         serde_json::json!({ "sql": "ALTER TABLE note ADD COLUMN priority INTEGER" }),
     );
-    assert!(r.get("errors").is_none(), "ALTER TABLE ADD COLUMN failed: {r}");
+    assert!(
+        r.get("errors").is_none(),
+        "ALTER TABLE ADD COLUMN failed: {r}"
+    );
 
     let r = server.graphql(r#"{ notes { items { id title priority } totalCount } }"#);
-    assert!(r.get("errors").is_none(), "priority column should be visible after ALTER: {r}");
+    assert!(
+        r.get("errors").is_none(),
+        "priority column should be visible after ALTER: {r}"
+    );
 
     // DROP COLUMN — removed column no longer queryable
     let r = server.graphql_with_vars(
         r#"mutation($sql: String!) { executeSql(sql: $sql) { message } }"#,
         serde_json::json!({ "sql": "ALTER TABLE note DROP COLUMN priority" }),
     );
-    assert!(r.get("errors").is_none(), "ALTER TABLE DROP COLUMN failed: {r}");
+    assert!(
+        r.get("errors").is_none(),
+        "ALTER TABLE DROP COLUMN failed: {r}"
+    );
 
     let r = server.graphql(r#"{ notes { items { id title priority } totalCount } }"#);
-    assert!(r.get("errors").is_some(), "priority should not be queryable after DROP: {r}");
+    assert!(
+        r.get("errors").is_some(),
+        "priority should not be queryable after DROP: {r}"
+    );
 }
 
 #[test]
@@ -668,7 +764,8 @@ fn malformed_typedef_preserves_schema() {
     assert!(r.get("errors").is_none(), "widgets query failed: {r}");
 
     // Write a malformed typedef directly (invalid YAML frontmatter)
-    let typedef_content = "---\ntype: _typedef\ntable_name: broken\ncolumns:\n  - bad yaml {{{\n---\n";
+    let typedef_content =
+        "---\ntype: _typedef\ntable_name: broken\ncolumns:\n  - bad yaml {{{\n---\n";
     server.graphql_with_vars(
         r#"mutation($input: CreateZettelInput!) { createZettel(input: $input) { id } }"#,
         serde_json::json!({ "input": { "body": typedef_content, "tags": ["_typedef"] } }),
@@ -676,9 +773,15 @@ fn malformed_typedef_preserves_schema() {
 
     // Previous schema still intact — widgets still queryable
     let r = server.graphql(r#"{ widgets { items { id label } totalCount } }"#);
-    assert!(r.get("errors").is_none(), "widgets should still be queryable after malformed typedef: {r}");
+    assert!(
+        r.get("errors").is_none(),
+        "widgets should still be queryable after malformed typedef: {r}"
+    );
 
     // Server is still responsive
     let r = server.graphql(r#"{ schemaVersion }"#);
-    assert!(r.get("errors").is_none(), "server should still respond: {r}");
+    assert!(
+        r.get("errors").is_none(),
+        "server should still respond: {r}"
+    );
 }

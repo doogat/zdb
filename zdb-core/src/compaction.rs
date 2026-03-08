@@ -8,7 +8,10 @@ use crate::types::CompactionReport;
 
 /// Find the greatest common ancestor commit reachable from all active nodes' known_heads.
 /// Stale and retired nodes are excluded from the calculation.
-pub fn shared_head(repo: &GitRepo, nodes: &[crate::types::NodeConfig]) -> Result<Option<git2::Oid>> {
+pub fn shared_head(
+    repo: &GitRepo,
+    nodes: &[crate::types::NodeConfig],
+) -> Result<Option<git2::Oid>> {
     let heads: Vec<git2::Oid> = nodes
         .iter()
         .filter(|n| n.status == crate::types::NodeStatus::Active)
@@ -213,7 +216,6 @@ pub fn run_gc(repo_path: &Path) -> Result<bool> {
     Ok(output.status.success())
 }
 
-
 /// Full compaction pipeline: threshold check → shared head → cleanup → crdt doc compact → gc.
 #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
 pub fn compact(repo: &GitRepo, sync_mgr: &SyncManager, force: bool) -> Result<CompactionReport> {
@@ -222,7 +224,11 @@ pub fn compact(repo: &GitRepo, sync_mgr: &SyncManager, force: bool) -> Result<Co
         let config = repo.load_config()?;
         let size_mb = crdt_temp_size(repo) as f64 / (1024.0 * 1024.0);
         if size_mb < config.compaction.threshold_mb as f64 {
-            tracing::debug!(size_mb, threshold_mb = config.compaction.threshold_mb, "below_threshold_skip");
+            tracing::debug!(
+                size_mb,
+                threshold_mb = config.compaction.threshold_mb,
+                "below_threshold_skip"
+            );
             return Ok(CompactionReport {
                 files_removed: 0,
                 crdt_docs_compacted: 0,
@@ -306,8 +312,16 @@ mod tests {
         let temp_dir = repo.path.join(".crdt/temp");
 
         // New format: {oid}_{zettel_id}.crdt
-        std::fs::write(temp_dir.join(format!("{}_20260301120000.crdt", c1.0)), "data").unwrap();
-        std::fs::write(temp_dir.join(format!("{}_20260301120100.crdt", c2.0)), "data").unwrap();
+        std::fs::write(
+            temp_dir.join(format!("{}_20260301120000.crdt", c1.0)),
+            "data",
+        )
+        .unwrap();
+        std::fs::write(
+            temp_dir.join(format!("{}_20260301120100.crdt", c2.0)),
+            "data",
+        )
+        .unwrap();
 
         let c2_oid = git2::Oid::from_str(&c2.0).unwrap();
         let removed = cleanup_crdt_temp(&repo, Some(c2_oid)).unwrap();
@@ -317,23 +331,29 @@ mod tests {
     #[test]
     fn parse_crdt_temp_name_formats() {
         // Legacy: bare OID
-        let (oid, zid, is_fm) = parse_crdt_temp_name("abc123def456abc123def456abc123def456abcd").unwrap();
+        let (oid, zid, is_fm) =
+            parse_crdt_temp_name("abc123def456abc123def456abc123def456abcd").unwrap();
         assert!(zid.is_none());
         assert!(!is_fm);
         assert_eq!(oid.to_string(), "abc123def456abc123def456abc123def456abcd");
 
         // Legacy: OID.crdt
-        let (_, zid, is_fm) = parse_crdt_temp_name("abc123def456abc123def456abc123def456abcd.crdt").unwrap();
+        let (_, zid, is_fm) =
+            parse_crdt_temp_name("abc123def456abc123def456abc123def456abcd.crdt").unwrap();
         assert!(zid.is_none());
         assert!(!is_fm);
 
         // New: OID_zettelid.crdt
-        let (_, zid, is_fm) = parse_crdt_temp_name("abc123def456abc123def456abc123def456abcd_20260301120000.crdt").unwrap();
+        let (_, zid, is_fm) =
+            parse_crdt_temp_name("abc123def456abc123def456abc123def456abcd_20260301120000.crdt")
+                .unwrap();
         assert_eq!(zid.as_deref(), Some("20260301120000"));
         assert!(!is_fm);
 
         // Frontmatter: OID_zettelid_fm.crdt
-        let (_, zid, is_fm) = parse_crdt_temp_name("abc123def456abc123def456abc123def456abcd_20260301120000_fm.crdt").unwrap();
+        let (_, zid, is_fm) =
+            parse_crdt_temp_name("abc123def456abc123def456abc123def456abcd_20260301120000_fm.crdt")
+                .unwrap();
         assert_eq!(zid.as_deref(), Some("20260301120000"));
         assert!(is_fm);
     }
@@ -350,11 +370,19 @@ mod tests {
         // Create dummy automerge docs for the same zettel
         let mut doc1 = automerge::AutoCommit::new();
         doc1.put(automerge::ROOT, "key", "val1").unwrap();
-        std::fs::write(temp_dir.join(format!("{}_20260301120000.crdt", c1.0)), doc1.save()).unwrap();
+        std::fs::write(
+            temp_dir.join(format!("{}_20260301120000.crdt", c1.0)),
+            doc1.save(),
+        )
+        .unwrap();
 
         let mut doc2 = automerge::AutoCommit::new();
         doc2.put(automerge::ROOT, "key", "val2").unwrap();
-        std::fs::write(temp_dir.join(format!("{}_20260301120000.crdt", c2.0)), doc2.save()).unwrap();
+        std::fs::write(
+            temp_dir.join(format!("{}_20260301120000.crdt", c2.0)),
+            doc2.save(),
+        )
+        .unwrap();
 
         let compacted = compact_crdt_docs(&repo).unwrap();
         assert_eq!(compacted, 1);
@@ -366,7 +394,10 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy() != ".gitkeep")
             .collect();
         assert_eq!(files.len(), 1);
-        assert!(files[0].file_name().to_string_lossy().starts_with("compacted_"));
+        assert!(files[0]
+            .file_name()
+            .to_string_lossy()
+            .starts_with("compacted_"));
     }
 
     #[test]
@@ -431,11 +462,27 @@ mod tests {
         let bytes = doc.save();
 
         // Two body files for same zettel
-        std::fs::write(temp_dir.join(format!("{}_20260301120000.crdt", c1.0)), &bytes).unwrap();
-        std::fs::write(temp_dir.join(format!("{}_20260301120000.crdt", c2.0)), &bytes).unwrap();
+        std::fs::write(
+            temp_dir.join(format!("{}_20260301120000.crdt", c1.0)),
+            &bytes,
+        )
+        .unwrap();
+        std::fs::write(
+            temp_dir.join(format!("{}_20260301120000.crdt", c2.0)),
+            &bytes,
+        )
+        .unwrap();
         // Two fm files for same zettel
-        std::fs::write(temp_dir.join(format!("{}_20260301120000_fm.crdt", c1.0)), &bytes).unwrap();
-        std::fs::write(temp_dir.join(format!("{}_20260301120000_fm.crdt", c2.0)), &bytes).unwrap();
+        std::fs::write(
+            temp_dir.join(format!("{}_20260301120000_fm.crdt", c1.0)),
+            &bytes,
+        )
+        .unwrap();
+        std::fs::write(
+            temp_dir.join(format!("{}_20260301120000_fm.crdt", c2.0)),
+            &bytes,
+        )
+        .unwrap();
 
         let compacted = compact_crdt_docs(&repo).unwrap();
         // Should compact body and fm independently → 2 groups compacted
@@ -449,7 +496,9 @@ mod tests {
             .collect();
         assert_eq!(files.len(), 2);
         assert!(files.iter().any(|f| f == "compacted_20260301120000.crdt"));
-        assert!(files.iter().any(|f| f == "compacted_20260301120000_fm.crdt"));
+        assert!(files
+            .iter()
+            .any(|f| f == "compacted_20260301120000_fm.crdt"));
     }
 
     #[test]
@@ -460,12 +509,19 @@ mod tests {
         let temp_dir = repo.path.join(".crdt/temp");
 
         // Create _fm.crdt files
-        std::fs::write(temp_dir.join(format!("{}_20260301120000_fm.crdt", c1.0)), "data").unwrap();
-        std::fs::write(temp_dir.join(format!("{}_20260301120000_fm.crdt", c2.0)), "data").unwrap();
+        std::fs::write(
+            temp_dir.join(format!("{}_20260301120000_fm.crdt", c1.0)),
+            "data",
+        )
+        .unwrap();
+        std::fs::write(
+            temp_dir.join(format!("{}_20260301120000_fm.crdt", c2.0)),
+            "data",
+        )
+        .unwrap();
 
         let c2_oid = git2::Oid::from_str(&c2.0).unwrap();
         let removed = cleanup_crdt_temp(&repo, Some(c2_oid)).unwrap();
         assert_eq!(removed, 2);
     }
-
 }

@@ -57,10 +57,7 @@ fn parse_attachments(extra: &BTreeMap<String, Value>, zettel_id: &ZettelId) -> V
                 .and_then(|v| v.as_str())
                 .unwrap_or("application/octet-stream")
                 .to_owned();
-            let size = map
-                .get("size")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.0) as u64;
+            let size = map.get("size").and_then(|v| v.as_f64()).unwrap_or(0.0) as u64;
             Some(AttachmentInfo {
                 path: attachment_path(zettel_id, &name),
                 name,
@@ -149,12 +146,7 @@ pub fn attach_file(
 }
 
 /// Detach a file from a zettel: remove from git, update frontmatter, commit.
-pub fn detach_file(
-    repo: &GitRepo,
-    index: &Index,
-    id: &ZettelId,
-    filename: &str,
-) -> Result<()> {
+pub fn detach_file(repo: &GitRepo, index: &Index, id: &ZettelId, filename: &str) -> Result<()> {
     validate_zettel_id_format(id)?;
     validate_attachment_filename(filename)?;
     let zettel_path = format!("zettelkasten/{}.md", id.0);
@@ -227,8 +219,15 @@ mod tests {
         let id = ZettelId("20260301130000".into());
         create_zettel(&repo, &index, &id.0);
 
-        let info = attach_file(&repo, &index, &id, "photo.jpg", b"\xFF\xD8\xFF", "image/jpeg")
-            .unwrap();
+        let info = attach_file(
+            &repo,
+            &index,
+            &id,
+            "photo.jpg",
+            b"\xFF\xD8\xFF",
+            "image/jpeg",
+        )
+        .unwrap();
         assert_eq!(info.name, "photo.jpg");
         assert_eq!(info.mime, "image/jpeg");
         assert_eq!(info.size, 3);
@@ -299,7 +298,12 @@ mod tests {
     fn reject_invalid_zettel_id_format() {
         let (_dir, repo, _index) = setup();
 
-        for bad_id in &["short", "../../etc/pass", "12345678901234/", "abcdefghijklmn"] {
+        for bad_id in &[
+            "short",
+            "../../etc/pass",
+            "12345678901234/",
+            "abcdefghijklmn",
+        ] {
             let id = ZettelId(bad_id.to_string());
             let err = list_attachments(&repo, &id);
             assert!(err.is_err(), "should reject zettel ID: {bad_id:?}");

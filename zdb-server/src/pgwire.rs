@@ -81,7 +81,13 @@ impl SimpleQueryHandler for ZdbBackend {
                     columns
                         .iter()
                         .map(|name| {
-                            FieldInfo::new(name.clone(), None, None, Type::VARCHAR, FieldFormat::Text)
+                            FieldInfo::new(
+                                name.clone(),
+                                None,
+                                None,
+                                Type::VARCHAR,
+                                FieldFormat::Text,
+                            )
                         })
                         .collect::<Vec<_>>(),
                 );
@@ -225,10 +231,19 @@ mod tests {
 
     #[test]
     fn normalize_ok_tag_maps_ddl_and_insert() {
-        assert_eq!(normalize_ok_tag("CREATE TABLE book", "table book created"), "CREATE TABLE");
+        assert_eq!(
+            normalize_ok_tag("CREATE TABLE book", "table book created"),
+            "CREATE TABLE"
+        );
         assert_eq!(normalize_ok_tag("DROP TABLE book", ""), "DROP TABLE");
-        assert_eq!(normalize_ok_tag("ALTER TABLE book ADD COLUMN year", ""), "ALTER TABLE");
-        assert_eq!(normalize_ok_tag("INSERT INTO books", "20260303123456"), "INSERT 0 1");
+        assert_eq!(
+            normalize_ok_tag("ALTER TABLE book ADD COLUMN year", ""),
+            "ALTER TABLE"
+        );
+        assert_eq!(
+            normalize_ok_tag("INSERT INTO books", "20260303123456"),
+            "INSERT 0 1"
+        );
         assert_eq!(normalize_ok_tag("UNKNOWN STMT", "something"), "OK");
     }
 }

@@ -114,8 +114,7 @@ impl RedbIndex {
         };
         match t.get(id) {
             Ok(Some(val)) => {
-                let z: ParsedZettel =
-                    serde_json::from_slice(val.value()).map_err(redb_err)?;
+                let z: ParsedZettel = serde_json::from_slice(val.value()).map_err(redb_err)?;
                 Ok(Some(z))
             }
             Ok(None) => Ok(None),
@@ -157,11 +156,7 @@ impl RedbIndex {
     // ── Internal helpers ─────────────────────────────────────────
 
     /// Remove secondary index entries for a zettel (before delete or re-index).
-    fn remove_secondary_entries(
-        &self,
-        txn: &redb::WriteTransaction,
-        id: &str,
-    ) -> Result<()> {
+    fn remove_secondary_entries(&self, txn: &redb::WriteTransaction, id: &str) -> Result<()> {
         // Read existing zettel to know its type/tags/links
         if let Ok(t) = txn.open_table(ZETTELS) {
             if let Ok(Some(val)) = t.get(id) {
@@ -230,7 +225,7 @@ impl RedbIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{ZettelId, ZettelMeta, WikiLink, Zone};
+    use crate::types::{WikiLink, ZettelId, ZettelMeta, Zone};
 
     fn test_zettel(id: &str, title: &str) -> ParsedZettel {
         ParsedZettel {

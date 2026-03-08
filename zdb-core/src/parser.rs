@@ -210,7 +210,10 @@ pub fn parse_frontmatter(yaml: &str, path: &str) -> Result<ZettelMeta> {
 /// Extract Dataview-style inline fields from body and reference zones.
 /// Body fields: `key:: value` on a line. Reference fields: `- key:: value` (list-item).
 /// Cross-zone duplicate keys → validation error. Same-zone duplicates: first wins silently.
-pub fn extract_inline_fields(body: &str, reference: &str) -> crate::error::Result<Vec<InlineField>> {
+pub fn extract_inline_fields(
+    body: &str,
+    reference: &str,
+) -> crate::error::Result<Vec<InlineField>> {
     use std::sync::OnceLock;
     static BODY_RE: OnceLock<Regex> = OnceLock::new();
     static REF_RE: OnceLock<Regex> = OnceLock::new();
@@ -218,10 +221,16 @@ pub fn extract_inline_fields(body: &str, reference: &str) -> crate::error::Resul
     static INLINE_CODE_RE: OnceLock<Regex> = OnceLock::new();
     static FENCE_RE: OnceLock<Regex> = OnceLock::new();
 
-    let body_re = BODY_RE.get_or_init(|| Regex::new(r"^([\w][\w\s-]*):: (.+)$").expect("valid regex: body inline field"));
-    let ref_re = REF_RE.get_or_init(|| Regex::new(r"^- ([\w][\w\s-]*):: ?(.*)$").expect("valid regex: ref inline field"));
-    let inline_code_re = INLINE_CODE_RE.get_or_init(|| Regex::new(r"`[^`]+`").expect("valid regex: inline code"));
-    let fence_re = FENCE_RE.get_or_init(|| Regex::new(r"^(?:`{3,}|~{3,})").expect("valid regex: fence marker"));
+    let body_re = BODY_RE.get_or_init(|| {
+        Regex::new(r"^([\w][\w\s-]*):: (.+)$").expect("valid regex: body inline field")
+    });
+    let ref_re = REF_RE.get_or_init(|| {
+        Regex::new(r"^- ([\w][\w\s-]*):: ?(.*)$").expect("valid regex: ref inline field")
+    });
+    let inline_code_re =
+        INLINE_CODE_RE.get_or_init(|| Regex::new(r"`[^`]+`").expect("valid regex: inline code"));
+    let fence_re = FENCE_RE
+        .get_or_init(|| Regex::new(r"^(?:`{3,}|~{3,})").expect("valid regex: fence marker"));
 
     let mut fields = Vec::new();
     let mut seen: std::collections::HashMap<String, Zone> = std::collections::HashMap::new();
@@ -286,7 +295,9 @@ pub fn extract_inline_fields(body: &str, reference: &str) -> crate::error::Resul
 pub fn extract_wikilinks(frontmatter: &str, body: &str, reference: &str) -> Vec<WikiLink> {
     use std::sync::OnceLock;
     static WL_RE: OnceLock<Regex> = OnceLock::new();
-    let re = WL_RE.get_or_init(|| Regex::new(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]").expect("valid regex: wikilink"));
+    let re = WL_RE.get_or_init(|| {
+        Regex::new(r"\[\[([^\]|]+)(?:\|([^\]]+))?\]\]").expect("valid regex: wikilink")
+    });
 
     let mut links = Vec::new();
 
@@ -358,8 +369,7 @@ fn serialize_yaml_value(out: &mut String, key: &str, value: &serde_yaml::Value) 
             // then strip the trailing newline and append.
             let mut map = serde_yaml::Mapping::new();
             map.insert(serde_yaml::Value::String(key.into()), value.clone());
-            let yaml = serde_yaml::to_string(&serde_yaml::Value::Mapping(map))
-                .unwrap_or_default();
+            let yaml = serde_yaml::to_string(&serde_yaml::Value::Mapping(map)).unwrap_or_default();
             out.push_str(&yaml);
         }
         _ => {
@@ -436,7 +446,11 @@ pub fn parse(content: &str, path: &str) -> Result<crate::types::ParsedZettel> {
     let zettel = split_zones(content)?;
     let meta = parse_frontmatter(&zettel.raw_frontmatter, path)?;
     let inline_fields = extract_inline_fields(&zettel.body, &zettel.reference_section)?;
-    let wikilinks = extract_wikilinks(&zettel.raw_frontmatter, &zettel.body, &zettel.reference_section);
+    let wikilinks = extract_wikilinks(
+        &zettel.raw_frontmatter,
+        &zettel.body,
+        &zettel.reference_section,
+    );
 
     Ok(crate::types::ParsedZettel {
         meta,
@@ -783,7 +797,10 @@ Body here.
     fn rewrite_wikilinks_multiple_occurrences() {
         let content = "First [[old_target]] then [[old_target|Alt]] and [[other]]";
         let result = rewrite_wikilinks(content, "old_target", "new_target");
-        assert_eq!(result, "First [[new_target]] then [[new_target|Alt]] and [[other]]");
+        assert_eq!(
+            result,
+            "First [[new_target]] then [[new_target|Alt]] and [[other]]"
+        );
     }
 
     #[test]
@@ -796,7 +813,11 @@ Body here.
     #[test]
     fn rewrite_wikilinks_path_qualified() {
         let content = "See [[zettelkasten/20260301120000]]";
-        let result = rewrite_wikilinks(content, "zettelkasten/20260301120000", "zettelkasten/contact/20260301120000");
+        let result = rewrite_wikilinks(
+            content,
+            "zettelkasten/20260301120000",
+            "zettelkasten/contact/20260301120000",
+        );
         assert_eq!(result, "See [[zettelkasten/contact/20260301120000]]");
     }
 

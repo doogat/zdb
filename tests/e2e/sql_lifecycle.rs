@@ -5,7 +5,10 @@ use predicates::prelude::*;
 fn create_table() {
     let repo = ZdbTestRepo::init();
     repo.zdb()
-        .args(["query", "CREATE TABLE tasks (status TEXT, priority INTEGER, assignee TEXT)"])
+        .args([
+            "query",
+            "CREATE TABLE tasks (status TEXT, priority INTEGER, assignee TEXT)",
+        ])
         .assert()
         .success()
         .stdout("table tasks created\n");
@@ -15,21 +18,34 @@ fn create_table() {
 fn insert_and_select() {
     let repo = ZdbTestRepo::init();
     repo.zdb()
-        .args(["query", "CREATE TABLE tasks (status TEXT, priority INTEGER)"])
+        .args([
+            "query",
+            "CREATE TABLE tasks (status TEXT, priority INTEGER)",
+        ])
         .assert()
         .success();
 
     // Insert rows (sleep between to avoid ID collision)
-    let id1 = repo.zdb()
-        .args(["query", "INSERT INTO tasks (status, priority) VALUES ('open', 1)"])
-        .output().unwrap();
+    let id1 = repo
+        .zdb()
+        .args([
+            "query",
+            "INSERT INTO tasks (status, priority) VALUES ('open', 1)",
+        ])
+        .output()
+        .unwrap();
     let id1 = String::from_utf8_lossy(&id1.stdout).trim().to_string();
 
     std::thread::sleep(std::time::Duration::from_secs(1));
 
-    let id2 = repo.zdb()
-        .args(["query", "INSERT INTO tasks (status, priority) VALUES ('closed', 2)"])
-        .output().unwrap();
+    let id2 = repo
+        .zdb()
+        .args([
+            "query",
+            "INSERT INTO tasks (status, priority) VALUES ('closed', 2)",
+        ])
+        .output()
+        .unwrap();
     let id2 = String::from_utf8_lossy(&id2.stdout).trim().to_string();
 
     // All rows present
@@ -48,18 +64,30 @@ fn select_with_where() {
     let repo = ZdbTestRepo::init();
     repo.zdb()
         .args(["query", "CREATE TABLE tasks (status TEXT, assignee TEXT)"])
-        .assert().success();
+        .assert()
+        .success();
 
     repo.zdb()
-        .args(["query", "INSERT INTO tasks (status, assignee) VALUES ('open', 'alice')"])
-        .assert().success();
+        .args([
+            "query",
+            "INSERT INTO tasks (status, assignee) VALUES ('open', 'alice')",
+        ])
+        .assert()
+        .success();
     std::thread::sleep(std::time::Duration::from_secs(1));
     repo.zdb()
-        .args(["query", "INSERT INTO tasks (status, assignee) VALUES ('closed', 'bob')"])
-        .assert().success();
+        .args([
+            "query",
+            "INSERT INTO tasks (status, assignee) VALUES ('closed', 'bob')",
+        ])
+        .assert()
+        .success();
 
     repo.zdb()
-        .args(["query", "SELECT status, assignee FROM tasks WHERE assignee = 'alice'"])
+        .args([
+            "query",
+            "SELECT status, assignee FROM tasks WHERE assignee = 'alice'",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("alice"))
@@ -70,22 +98,37 @@ fn select_with_where() {
 fn update_row() {
     let repo = ZdbTestRepo::init();
     repo.zdb()
-        .args(["query", "CREATE TABLE tasks (status TEXT, priority INTEGER)"])
-        .assert().success();
+        .args([
+            "query",
+            "CREATE TABLE tasks (status TEXT, priority INTEGER)",
+        ])
+        .assert()
+        .success();
 
-    let out = repo.zdb()
-        .args(["query", "INSERT INTO tasks (status, priority) VALUES ('open', 1)"])
-        .output().unwrap();
+    let out = repo
+        .zdb()
+        .args([
+            "query",
+            "INSERT INTO tasks (status, priority) VALUES ('open', 1)",
+        ])
+        .output()
+        .unwrap();
     let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
 
     repo.zdb()
-        .args(["query", &format!("UPDATE tasks SET status = 'done', priority = 10 WHERE id = '{id}'")])
+        .args([
+            "query",
+            &format!("UPDATE tasks SET status = 'done', priority = 10 WHERE id = '{id}'"),
+        ])
         .assert()
         .success()
         .stdout("1 row(s) affected\n");
 
     repo.zdb()
-        .args(["query", &format!("SELECT status, priority FROM tasks WHERE id = '{id}'")])
+        .args([
+            "query",
+            &format!("SELECT status, priority FROM tasks WHERE id = '{id}'"),
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("done | 10"));
@@ -96,17 +139,22 @@ fn delete_row() {
     let repo = ZdbTestRepo::init();
     repo.zdb()
         .args(["query", "CREATE TABLE tasks (status TEXT)"])
-        .assert().success();
+        .assert()
+        .success();
 
-    let out1 = repo.zdb()
+    let out1 = repo
+        .zdb()
         .args(["query", "INSERT INTO tasks (status) VALUES ('keep')"])
-        .output().unwrap();
+        .output()
+        .unwrap();
     let id1 = String::from_utf8_lossy(&out1.stdout).trim().to_string();
     std::thread::sleep(std::time::Duration::from_secs(1));
 
-    let out2 = repo.zdb()
+    let out2 = repo
+        .zdb()
         .args(["query", "INSERT INTO tasks (status) VALUES ('delete-me')"])
-        .output().unwrap();
+        .output()
+        .unwrap();
     let id2 = String::from_utf8_lossy(&out2.stdout).trim().to_string();
 
     repo.zdb()
@@ -128,10 +176,12 @@ fn reindex_preserves_table() {
     let repo = ZdbTestRepo::init();
     repo.zdb()
         .args(["query", "CREATE TABLE tasks (status TEXT)"])
-        .assert().success();
+        .assert()
+        .success();
     repo.zdb()
         .args(["query", "INSERT INTO tasks (status) VALUES ('open')"])
-        .assert().success();
+        .assert()
+        .success();
 
     repo.zdb().arg("reindex").assert().success();
 
@@ -146,12 +196,21 @@ fn reindex_preserves_table() {
 fn data_zettel_readable_as_markdown() {
     let repo = ZdbTestRepo::init();
     repo.zdb()
-        .args(["query", "CREATE TABLE tasks (status TEXT, priority INTEGER)"])
-        .assert().success();
+        .args([
+            "query",
+            "CREATE TABLE tasks (status TEXT, priority INTEGER)",
+        ])
+        .assert()
+        .success();
 
-    let out = repo.zdb()
-        .args(["query", "INSERT INTO tasks (status, priority) VALUES ('open', 1)"])
-        .output().unwrap();
+    let out = repo
+        .zdb()
+        .args([
+            "query",
+            "INSERT INTO tasks (status, priority) VALUES ('open', 1)",
+        ])
+        .output()
+        .unwrap();
     let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
 
     repo.zdb()
@@ -169,7 +228,9 @@ fn install_literature_note_type() {
         .args(["type", "install", "literature-note"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("installed type \"literature-note\""));
+        .stdout(predicate::str::contains(
+            "installed type \"literature-note\"",
+        ));
 }
 
 #[test]
@@ -181,10 +242,16 @@ fn install_kanban_type_and_create_with_default() {
         .success();
 
     // Insert with omitted status → should get default "backlog"
-    let out = repo.zdb()
+    let out = repo
+        .zdb()
         .args(["query", "INSERT INTO kanban (assignee) VALUES ('alice')"])
-        .output().unwrap();
-    assert!(out.status.success(), "insert failed: {}", String::from_utf8_lossy(&out.stderr));
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "insert failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
 
     repo.zdb()
@@ -214,10 +281,12 @@ fn alter_table_add_column() {
     let repo = ZdbTestRepo::init();
     repo.zdb()
         .args(["query", "CREATE TABLE projects (name TEXT)"])
-        .assert().success();
+        .assert()
+        .success();
     repo.zdb()
         .args(["query", "INSERT INTO projects (name) VALUES ('alpha')"])
-        .assert().success();
+        .assert()
+        .success();
 
     repo.zdb()
         .args(["query", "ALTER TABLE projects ADD COLUMN priority INTEGER"])
@@ -239,10 +308,12 @@ fn alter_table_rename_column() {
     let repo = ZdbTestRepo::init();
     repo.zdb()
         .args(["query", "CREATE TABLE items (name TEXT, score INTEGER)"])
-        .assert().success();
+        .assert()
+        .success();
     repo.zdb()
         .args(["query", "INSERT INTO items (name, score) VALUES ('x', 42)"])
-        .assert().success();
+        .assert()
+        .success();
 
     repo.zdb()
         .args(["query", "ALTER TABLE items RENAME COLUMN score TO rating"])
@@ -263,10 +334,12 @@ fn drop_table_cascade() {
     let repo = ZdbTestRepo::init();
     repo.zdb()
         .args(["query", "CREATE TABLE droptest (name TEXT)"])
-        .assert().success();
+        .assert()
+        .success();
     repo.zdb()
         .args(["query", "INSERT INTO droptest (name) VALUES ('gone')"])
-        .assert().success();
+        .assert()
+        .success();
 
     repo.zdb()
         .args(["query", "DROP TABLE droptest CASCADE"])
@@ -285,24 +358,42 @@ fn drop_table_cascade() {
 fn bulk_update() {
     let repo = ZdbTestRepo::init();
     repo.zdb()
-        .args(["query", "CREATE TABLE bulktest (status TEXT, priority INTEGER)"])
-        .assert().success();
+        .args([
+            "query",
+            "CREATE TABLE bulktest (status TEXT, priority INTEGER)",
+        ])
+        .assert()
+        .success();
     repo.zdb()
-        .args(["query", "INSERT INTO bulktest (status, priority) VALUES ('open', 1)"])
-        .assert().success();
+        .args([
+            "query",
+            "INSERT INTO bulktest (status, priority) VALUES ('open', 1)",
+        ])
+        .assert()
+        .success();
     std::thread::sleep(std::time::Duration::from_secs(1));
     repo.zdb()
-        .args(["query", "INSERT INTO bulktest (status, priority) VALUES ('open', 2)"])
-        .assert().success();
+        .args([
+            "query",
+            "INSERT INTO bulktest (status, priority) VALUES ('open', 2)",
+        ])
+        .assert()
+        .success();
 
     repo.zdb()
-        .args(["query", "UPDATE bulktest SET status = 'closed' WHERE priority = 1"])
+        .args([
+            "query",
+            "UPDATE bulktest SET status = 'closed' WHERE priority = 1",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("1 row(s) affected"));
 
     repo.zdb()
-        .args(["query", "SELECT status, priority FROM bulktest ORDER BY priority"])
+        .args([
+            "query",
+            "SELECT status, priority FROM bulktest ORDER BY priority",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("closed | 1"))
@@ -314,18 +405,31 @@ fn bulk_delete() {
     let repo = ZdbTestRepo::init();
     repo.zdb()
         .args(["query", "CREATE TABLE delbulk (status TEXT, name TEXT)"])
-        .assert().success();
+        .assert()
+        .success();
     repo.zdb()
-        .args(["query", "INSERT INTO delbulk (status, name) VALUES ('done', 'a')"])
-        .assert().success();
+        .args([
+            "query",
+            "INSERT INTO delbulk (status, name) VALUES ('done', 'a')",
+        ])
+        .assert()
+        .success();
     std::thread::sleep(std::time::Duration::from_secs(1));
     repo.zdb()
-        .args(["query", "INSERT INTO delbulk (status, name) VALUES ('todo', 'b')"])
-        .assert().success();
+        .args([
+            "query",
+            "INSERT INTO delbulk (status, name) VALUES ('todo', 'b')",
+        ])
+        .assert()
+        .success();
     std::thread::sleep(std::time::Duration::from_secs(1));
     repo.zdb()
-        .args(["query", "INSERT INTO delbulk (status, name) VALUES ('done', 'c')"])
-        .assert().success();
+        .args([
+            "query",
+            "INSERT INTO delbulk (status, name) VALUES ('done', 'c')",
+        ])
+        .assert()
+        .success();
 
     repo.zdb()
         .args(["query", "DELETE FROM delbulk WHERE status = 'done'"])
@@ -376,7 +480,10 @@ fn transaction_rollback_via_cli() {
         .success();
 
     repo.zdb()
-        .args(["query", "BEGIN; INSERT INTO items (name) VALUES ('gone'); ROLLBACK"])
+        .args([
+            "query",
+            "BEGIN; INSERT INTO items (name) VALUES ('gone'); ROLLBACK",
+        ])
         .assert()
         .success()
         .stdout(predicate::str::contains("ROLLBACK"));
@@ -424,7 +531,12 @@ fn single_git_commit_for_transaction() {
         .unwrap();
 
     // Should produce exactly one additional git commit
-    assert_eq!(after - before, 1, "expected single git commit for transaction, got {}", after - before);
+    assert_eq!(
+        after - before,
+        1,
+        "expected single git commit for transaction, got {}",
+        after - before
+    );
 
     // Verify commit message
     let log = std::process::Command::new("git")

@@ -1,8 +1,7 @@
 use rusqlite::params;
 use sqlparser::ast::{
     AlterTableOperation, AssignmentTarget, ColumnOption, DataType, Expr, FromTable, ObjectType,
-    SetExpr, Statement,
-    Value as SqlValue,
+    SetExpr, Statement, Value as SqlValue,
 };
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
@@ -10,15 +9,18 @@ use std::collections::BTreeMap;
 
 use crate::error::{Result, ZettelError};
 use crate::indexer::Index;
-use crate::traits::ZettelStore;
 use crate::parser;
+use crate::traits::ZettelStore;
 use crate::types::{
     ColumnDef, InlineField, ParsedZettel, TableSchema, Value, WikiLink, ZettelId, ZettelMeta, Zone,
 };
 
 #[derive(Debug)]
 pub enum SqlResult {
-    Rows { columns: Vec<String>, rows: Vec<Vec<String>> },
+    Rows {
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+    },
     Affected(usize),
     Ok(String),
 }
@@ -47,9 +49,7 @@ pub struct SqlEngine<'a> {
 
 /// Reserved table names that cannot be used for CREATE TABLE.
 fn is_reserved_table(name: &str) -> bool {
-    name == "zettels"
-        || name.starts_with("_zdb_")
-        || name.starts_with("sqlite_")
+    name == "zettels" || name.starts_with("_zdb_") || name.starts_with("sqlite_")
 }
 
 impl Drop for SqlEngine<'_> {
@@ -67,7 +67,11 @@ impl Drop for SqlEngine<'_> {
 
 impl<'a> SqlEngine<'a> {
     pub fn new(index: &'a Index, repo: &'a dyn ZettelStore) -> Self {
-        Self { index, repo, txn: None }
+        Self {
+            index,
+            repo,
+            txn: None,
+        }
     }
 
     /// Generate a unique ZettelId, waiting if same-second collision detected.
@@ -88,7 +92,9 @@ impl<'a> SqlEngine<'a> {
             }
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
-        Err(ZettelError::SqlEngine("failed to generate unique id after 100 attempts".into()))
+        Err(ZettelError::SqlEngine(
+            "failed to generate unique id after 100 attempts".into(),
+        ))
     }
 
     #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
@@ -196,7 +202,9 @@ impl<'a> SqlEngine<'a> {
             // Check if it was deleted in the buffer
             for d in buf.deletes.iter().rev() {
                 if d.path == path {
-                    return Err(ZettelError::NotFound(format!("deleted in transaction: {path}")));
+                    return Err(ZettelError::NotFound(format!(
+                        "deleted in transaction: {path}"
+                    )));
                 }
             }
         }
@@ -205,9 +213,7 @@ impl<'a> SqlEngine<'a> {
 
     fn handle_begin(&mut self) -> Result<SqlResult> {
         if self.txn.is_some() {
-            return Err(ZettelError::SqlEngine(
-                "transaction already active".into(),
-            ));
+            return Err(ZettelError::SqlEngine("transaction already active".into()));
         }
         self.index
             .conn
@@ -218,9 +224,10 @@ impl<'a> SqlEngine<'a> {
     }
 
     fn handle_commit(&mut self) -> Result<SqlResult> {
-        let buf = self.txn.as_ref().ok_or_else(|| {
-            ZettelError::SqlEngine("no active transaction".into())
-        })?;
+        let buf = self
+            .txn
+            .as_ref()
+            .ok_or_else(|| ZettelError::SqlEngine("no active transaction".into()))?;
 
         // Flush buffered writes/deletes to git in a single commit.
         // Cancelled operations: if a path was written then deleted, skip both
@@ -272,10 +279,7 @@ impl<'a> SqlEngine<'a> {
         Ok(SqlResult::Ok("ROLLBACK".into()))
     }
 
-    fn handle_create_table(
-        &mut self,
-        ct: &sqlparser::ast::CreateTable,
-    ) -> Result<SqlResult> {
+    fn handle_create_table(&mut self, ct: &sqlparser::ast::CreateTable) -> Result<SqlResult> {
         let table_name = ct.name.to_string().to_lowercase();
 
         if is_reserved_table(&table_name) {
@@ -327,10 +331,7 @@ impl<'a> SqlEngine<'a> {
         Ok(SqlResult::Ok(format!("table {table_name} created")))
     }
 
-    fn extract_columns(
-        &mut self,
-        cols: &[sqlparser::ast::ColumnDef],
-    ) -> Result<Vec<ColumnDef>> {
+    fn extract_columns(&mut self, cols: &[sqlparser::ast::ColumnDef]) -> Result<Vec<ColumnDef>> {
         let mut out = Vec::new();
         for col in cols {
             let name = col.name.value.to_lowercase();
@@ -370,8 +371,16 @@ impl<'a> SqlEngine<'a> {
                 _ => "TEXT",
             };
             let check = if let Some(ref vals) = col.allowed_values {
-                let quoted: Vec<String> = vals.iter().map(|v| format!("'{}'", v.replace('\'', "''"))).collect();
-                format!(" CHECK(\"{}\" IS NULL OR \"{}\" IN ({}))", col.name, col.name, quoted.join(", "))
+                let quoted: Vec<String> = vals
+                    .iter()
+                    .map(|v| format!("'{}'", v.replace('\'', "''")))
+                    .collect();
+                format!(
+                    " CHECK(\"{}\" IS NULL OR \"{}\" IN ({}))",
+                    col.name,
+                    col.name,
+                    quoted.join(", ")
+                )
             } else {
                 String::new()
             };
@@ -386,10 +395,7 @@ impl<'a> SqlEngine<'a> {
         Ok(())
     }
 
-    fn handle_insert(
-        &mut self,
-        ins: &sqlparser::ast::Insert,
-    ) -> Result<SqlResult> {
+    fn handle_insert(&mut self, ins: &sqlparser::ast::Insert) -> Result<SqlResult> {
         // Reject REPLACE/UPSERT variants that bypass git
         if ins.replace_into {
             return Err(ZettelError::SqlEngine(
@@ -411,11 +417,7 @@ impl<'a> SqlEngine<'a> {
         let schema = self.load_schema(&table_name)?;
 
         // Extract column names from INSERT
-        let col_names: Vec<String> = ins
-            .columns
-            .iter()
-            .map(|c| c.value.to_lowercase())
-            .collect();
+        let col_names: Vec<String> = ins.columns.iter().map(|c| c.value.to_lowercase()).collect();
 
         // Extract values from first row
         let values = match ins.source.as_ref() {
@@ -434,9 +436,7 @@ impl<'a> SqlEngine<'a> {
                     ))
                 }
             },
-            None => {
-                return Err(ZettelError::SqlEngine("missing VALUES clause".into()))
-            }
+            None => return Err(ZettelError::SqlEngine("missing VALUES clause".into())),
         };
 
         if col_names.len() != values.len() {
@@ -511,9 +511,13 @@ impl<'a> SqlEngine<'a> {
 
         // Commit to Git (or buffer if in transaction)
         if let Some(ref mut buf) = self.txn {
-            buf.writes.push(PendingWrite { path: path.clone(), content: content.clone() });
+            buf.writes.push(PendingWrite {
+                path: path.clone(),
+                content: content.clone(),
+            });
         } else {
-            self.repo.commit_file(&path, &content, &format!("insert into {table_name}"))?;
+            self.repo
+                .commit_file(&path, &content, &format!("insert into {table_name}"))?;
         }
 
         // Index the zettel
@@ -572,9 +576,16 @@ impl<'a> SqlEngine<'a> {
             apply_updates_to_zettel(&mut parsed, &schema, &updates);
             let new_content = parser::serialize(&parsed);
             if let Some(ref mut buf) = self.txn {
-                buf.writes.push(PendingWrite { path: path.clone(), content: new_content.clone() });
+                buf.writes.push(PendingWrite {
+                    path: path.clone(),
+                    content: new_content.clone(),
+                });
             } else {
-                self.repo.commit_file(&path, &new_content, &format!("update {table_name} {zettel_id}"))?;
+                self.repo.commit_file(
+                    &path,
+                    &new_content,
+                    &format!("update {table_name} {zettel_id}"),
+                )?;
             }
             let reparsed = parser::parse(&new_content, &path)?;
             self.index.index_zettel(&reparsed)?;
@@ -598,11 +609,18 @@ impl<'a> SqlEngine<'a> {
 
         if let Some(ref mut buf) = self.txn {
             for (path, content) in &files {
-                buf.writes.push(PendingWrite { path: path.clone(), content: content.clone() });
+                buf.writes.push(PendingWrite {
+                    path: path.clone(),
+                    content: content.clone(),
+                });
             }
         } else {
-            let file_refs: Vec<(&str, &str)> = files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
-            self.repo.commit_files(&file_refs, &format!("bulk update {table_name}"))?;
+            let file_refs: Vec<(&str, &str)> = files
+                .iter()
+                .map(|(p, c)| (p.as_str(), c.as_str()))
+                .collect();
+            self.repo
+                .commit_files(&file_refs, &format!("bulk update {table_name}"))?;
         }
 
         // Re-index and update materialized rows
@@ -616,10 +634,7 @@ impl<'a> SqlEngine<'a> {
         Ok(SqlResult::Affected(matches.len()))
     }
 
-    fn handle_delete(
-        &mut self,
-        del: &sqlparser::ast::Delete,
-    ) -> Result<SqlResult> {
+    fn handle_delete(&mut self, del: &sqlparser::ast::Delete) -> Result<SqlResult> {
         let from_tables = match &del.from {
             FromTable::WithFromKeyword(tables) | FromTable::WithoutKeyword(tables) => tables,
         };
@@ -633,9 +648,13 @@ impl<'a> SqlEngine<'a> {
         if let Ok(zettel_id) = extract_where_id(&del.selection) {
             let path = self.index.resolve_path(&zettel_id)?;
             if let Some(ref mut buf) = self.txn {
-                buf.deletes.push(PendingDelete { path: path.clone(), zettel_id: zettel_id.clone() });
+                buf.deletes.push(PendingDelete {
+                    path: path.clone(),
+                    zettel_id: zettel_id.clone(),
+                });
             } else {
-                self.repo.delete_file(&path, &format!("delete from {table_name} {zettel_id}"))?;
+                self.repo
+                    .delete_file(&path, &format!("delete from {table_name} {zettel_id}"))?;
             }
             self.index.remove_zettel(&zettel_id)?;
             self.index.conn.execute(
@@ -653,11 +672,15 @@ impl<'a> SqlEngine<'a> {
 
         if let Some(ref mut buf) = self.txn {
             for (id, path) in &matches {
-                buf.deletes.push(PendingDelete { path: path.clone(), zettel_id: id.clone() });
+                buf.deletes.push(PendingDelete {
+                    path: path.clone(),
+                    zettel_id: id.clone(),
+                });
             }
         } else {
             let paths: Vec<&str> = matches.iter().map(|(_, p)| p.as_str()).collect();
-            self.repo.delete_files(&paths, &format!("bulk delete from {table_name}"))?;
+            self.repo
+                .delete_files(&paths, &format!("bulk delete from {table_name}"))?;
         }
 
         for (id, _) in &matches {
@@ -700,11 +723,17 @@ impl<'a> SqlEngine<'a> {
                         default_value: None,
                     });
                 }
-                AlterTableOperation::DropColumn { column_name, if_exists, .. } => {
+                AlterTableOperation::DropColumn {
+                    column_name,
+                    if_exists,
+                    ..
+                } => {
                     let col_name = column_name.value.to_lowercase();
                     let pos = schema.columns.iter().position(|c| c.name == col_name);
                     match pos {
-                        Some(i) => { schema.columns.remove(i); }
+                        Some(i) => {
+                            schema.columns.remove(i);
+                        }
                         None if *if_exists => {}
                         None => {
                             return Err(ZettelError::SqlEngine(format!(
@@ -713,7 +742,10 @@ impl<'a> SqlEngine<'a> {
                         }
                     }
                 }
-                AlterTableOperation::RenameColumn { old_column_name, new_column_name } => {
+                AlterTableOperation::RenameColumn {
+                    old_column_name,
+                    new_column_name,
+                } => {
                     return self.handle_rename_column(
                         &table_name,
                         &typedef_id,
@@ -735,7 +767,11 @@ impl<'a> SqlEngine<'a> {
         let id = ZettelId(typedef_id);
         let schema_zettel = build_typedef_zettel(&id, &schema);
         let content = parser::serialize(&schema_zettel);
-        self.repo.commit_file(&typedef_path, &content, &format!("alter table {table_name}"))?;
+        self.repo.commit_file(
+            &typedef_path,
+            &content,
+            &format!("alter table {table_name}"),
+        )?;
         let parsed = parser::parse(&content, &typedef_path)?;
         self.index.index_zettel(&parsed)?;
         self.index.rematerialize_type(&table_name, self.repo)?;
@@ -753,9 +789,14 @@ impl<'a> SqlEngine<'a> {
         new_name: &str,
     ) -> Result<SqlResult> {
         if schema.columns.iter().any(|c| c.name == new_name) {
-            return Err(ZettelError::SqlEngine(format!("column already exists: {new_name}")));
+            return Err(ZettelError::SqlEngine(format!(
+                "column already exists: {new_name}"
+            )));
         }
-        let col = schema.columns.iter_mut().find(|c| c.name == old_name)
+        let col = schema
+            .columns
+            .iter_mut()
+            .find(|c| c.name == old_name)
             .ok_or_else(|| ZettelError::SqlEngine(format!("column not found: {old_name}")))?;
         let zone = effective_zone(col);
         col.name = new_name.to_string();
@@ -775,8 +816,14 @@ impl<'a> SqlEngine<'a> {
             files.push((path.clone(), parser::serialize(&parsed)));
         }
 
-        let file_refs: Vec<(&str, &str)> = files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
-        self.repo.commit_files(&file_refs, &format!("alter table {table_name} rename {old_name} to {new_name}"))?;
+        let file_refs: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(p, c)| (p.as_str(), c.as_str()))
+            .collect();
+        self.repo.commit_files(
+            &file_refs,
+            &format!("alter table {table_name} rename {old_name} to {new_name}"),
+        )?;
 
         let parsed_typedef = parser::parse(&typedef_content, typedef_path)?;
         self.index.index_zettel(&parsed_typedef)?;
@@ -787,7 +834,9 @@ impl<'a> SqlEngine<'a> {
         }
         self.index.rematerialize_type(table_name, self.repo)?;
 
-        Ok(SqlResult::Ok(format!("renamed {old_name} to {new_name} in {table_name}")))
+        Ok(SqlResult::Ok(format!(
+            "renamed {old_name} to {new_name} in {table_name}"
+        )))
     }
 
     fn handle_drop(
@@ -809,10 +858,7 @@ impl<'a> SqlEngine<'a> {
             self.handle_drop_table(&table_name, if_exists, cascade)?;
         }
 
-        Ok(SqlResult::Ok(format!(
-            "dropped {} table(s)",
-            names.len()
-        )))
+        Ok(SqlResult::Ok(format!("dropped {} table(s)", names.len())))
     }
 
     fn handle_drop_table(
@@ -831,9 +877,10 @@ impl<'a> SqlEngine<'a> {
 
         // Find all data zettels of this type
         let data_zettels: Vec<(String, String)> = {
-            let mut stmt = self.index.conn.prepare(
-                "SELECT id, path FROM zettels WHERE type = ?1",
-            )?;
+            let mut stmt = self
+                .index
+                .conn
+                .prepare("SELECT id, path FROM zettels WHERE type = ?1")?;
             let rows: Vec<(String, String)> = stmt
                 .query_map(params![table_name], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -849,7 +896,8 @@ impl<'a> SqlEngine<'a> {
             for (_, path) in &data_zettels {
                 paths.push(path);
             }
-            self.repo.delete_files(&paths, &format!("drop table {table_name} cascade"))?;
+            self.repo
+                .delete_files(&paths, &format!("drop table {table_name} cascade"))?;
 
             // Remove from index
             self.index.remove_zettel(&typedef_id)?;
@@ -887,10 +935,9 @@ impl<'a> SqlEngine<'a> {
         }
 
         // Drop materialized SQLite table
-        self.index.conn.execute(
-            &format!("DROP TABLE IF EXISTS {table_name}"),
-            [],
-        )?;
+        self.index
+            .conn
+            .execute(&format!("DROP TABLE IF EXISTS {table_name}"), [])?;
 
         Ok(())
     }
@@ -927,7 +974,10 @@ impl<'a> SqlEngine<'a> {
         let mut stmt = self.index.conn.prepare(&sql).map_err(|e| {
             ZettelError::SqlEngine(format!(
                 "invalid WHERE clause{}: {e}",
-                where_clause.as_deref().map(|c| format!(" ({c})")).unwrap_or_default()
+                where_clause
+                    .as_deref()
+                    .map(|c| format!(" ({c})"))
+                    .unwrap_or_default()
             ))
         })?;
         let ids: Vec<String> = stmt
@@ -975,8 +1025,10 @@ impl<'a> SqlEngine<'a> {
             placeholders.join(", ")
         );
 
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            vals.iter().map(|v| v as &dyn rusqlite::types::ToSql).collect();
+        let params: Vec<&dyn rusqlite::types::ToSql> = vals
+            .iter()
+            .map(|v| v as &dyn rusqlite::types::ToSql)
+            .collect();
         self.index.conn.execute(&sql, params.as_slice())?;
         Ok(())
     }
@@ -1010,8 +1062,10 @@ impl<'a> SqlEngine<'a> {
             vals.len()
         );
 
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            vals.iter().map(|v| v as &dyn rusqlite::types::ToSql).collect();
+        let params: Vec<&dyn rusqlite::types::ToSql> = vals
+            .iter()
+            .map(|v| v as &dyn rusqlite::types::ToSql)
+            .collect();
         self.index.conn.execute(&sql, params.as_slice())?;
         Ok(())
     }
@@ -1054,9 +1108,7 @@ fn expr_to_string(expr: &Expr) -> Result<String> {
             SqlValue::Number(n, _) => Ok(n.clone()),
             SqlValue::Boolean(b) => Ok(b.to_string()),
             SqlValue::Null => Ok(String::new()),
-            _ => Err(ZettelError::SqlEngine(format!(
-                "unsupported value: {v}"
-            ))),
+            _ => Err(ZettelError::SqlEngine(format!("unsupported value: {v}"))),
         },
         Expr::UnaryOp { op, expr } => {
             let inner = expr_to_string(expr)?;
@@ -1144,10 +1196,7 @@ pub fn build_typedef_zettel(id: &ZettelId, schema: &TableSchema) -> ParsedZettel
     extra.insert("columns".to_string(), Value::List(columns_yaml));
 
     if let Some(ref strategy) = schema.crdt_strategy {
-        extra.insert(
-            "crdt_strategy".to_string(),
-            Value::String(strategy.clone()),
-        );
+        extra.insert("crdt_strategy".to_string(), Value::String(strategy.clone()));
     }
 
     if !schema.template_sections.is_empty() {
@@ -1214,10 +1263,7 @@ fn build_data_zettel(
                 });
             }
             Zone::Frontmatter => {
-                extra.insert(
-                    col.name.clone(),
-                    to_yaml_value(&val, &col.data_type),
-                );
+                extra.insert(col.name.clone(), to_yaml_value(&val, &col.data_type));
             }
             Zone::Body => {
                 if title_value.is_none() {
@@ -1258,10 +1304,7 @@ fn build_data_zettel(
 }
 
 fn is_numeric_type(dt: &str) -> bool {
-    matches!(
-        dt.to_uppercase().as_str(),
-        "INTEGER" | "REAL" | "BOOLEAN"
-    )
+    matches!(dt.to_uppercase().as_str(), "INTEGER" | "REAL" | "BOOLEAN")
 }
 
 /// Resolve the effective zone for a column, falling back to type-based inference.
@@ -1344,9 +1387,7 @@ pub fn schema_from_parsed(zettel: &ParsedZettel) -> Result<TableSchema> {
             .get("required")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        let search_boost = map
-            .get("search_boost")
-            .and_then(|v| v.as_f64());
+        let search_boost = map.get("search_boost").and_then(|v| v.as_f64());
         let allowed_values = map
             .get("allowed_values")
             .and_then(|v| v.as_sequence())
@@ -1535,7 +1576,11 @@ fn engine_exec_ok(repo: &crate::git_ops::GitRepo, index: &crate::indexer::Index,
 }
 
 #[cfg(test)]
-fn engine_exec_id(repo: &crate::git_ops::GitRepo, index: &crate::indexer::Index, sql: &str) -> String {
+fn engine_exec_id(
+    repo: &crate::git_ops::GitRepo,
+    index: &crate::indexer::Index,
+    sql: &str,
+) -> String {
     let mut engine = SqlEngine::new(index, repo);
     match engine.execute(sql).unwrap() {
         SqlResult::Ok(id) => id,
@@ -1582,9 +1627,7 @@ mod tests {
         assert_eq!(rows[0][1], "_typedef");
 
         // Materialized table should exist
-        let rows = index
-            .query_raw("SELECT COUNT(*) FROM projects")
-            .unwrap();
+        let rows = index.query_raw("SELECT COUNT(*) FROM projects").unwrap();
         assert_eq!(rows[0][0], "0");
     }
 
@@ -1609,9 +1652,7 @@ mod tests {
         let (_dir, repo, index) = setup();
         let mut engine = SqlEngine::new(&index, &repo);
 
-        engine
-            .execute("CREATE TABLE projects (name TEXT)")
-            .unwrap();
+        engine.execute("CREATE TABLE projects (name TEXT)").unwrap();
         let err = engine
             .execute("CREATE TABLE projects (name TEXT)")
             .unwrap_err();
@@ -1623,19 +1664,13 @@ mod tests {
         let (_dir, repo, index) = setup();
         let mut engine = SqlEngine::new(&index, &repo);
 
+        engine.execute("CREATE TABLE people (name TEXT)").unwrap();
         engine
-            .execute("CREATE TABLE people (name TEXT)")
-            .unwrap();
-        engine
-            .execute(
-                "CREATE TABLE tasks (name TEXT, assignee TEXT REFERENCES people(id))",
-            )
+            .execute("CREATE TABLE tasks (name TEXT, assignee TEXT REFERENCES people(id))")
             .unwrap();
 
         // Check materialized table has correct columns
-        let rows = index
-            .query_raw("PRAGMA table_info(tasks)")
-            .unwrap();
+        let rows = index.query_raw("PRAGMA table_info(tasks)").unwrap();
         let col_names: Vec<&str> = rows.iter().map(|r| r[1].as_str()).collect();
         assert!(col_names.contains(&"id"));
         assert!(col_names.contains(&"name"));
@@ -1661,7 +1696,9 @@ mod tests {
         };
 
         // Check materialized table
-        let rows = index.query_raw("SELECT name, status, priority FROM projects").unwrap();
+        let rows = index
+            .query_raw("SELECT name, status, priority FROM projects")
+            .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0][0], "Alpha");
         assert_eq!(rows[0][1], "active");
@@ -1746,9 +1783,7 @@ mod tests {
         let (_dir, repo, index) = setup();
         let mut engine = SqlEngine::new(&index, &repo);
 
-        engine
-            .execute("CREATE TABLE projects (name TEXT)")
-            .unwrap();
+        engine.execute("CREATE TABLE projects (name TEXT)").unwrap();
         let id = match engine
             .execute("INSERT INTO projects (name) VALUES ('Alpha')")
             .unwrap()
@@ -1783,9 +1818,7 @@ mod tests {
 
         // CREATE
         engine
-            .execute(
-                "CREATE TABLE tasks (name TEXT, status TEXT, priority INTEGER)",
-            )
+            .execute("CREATE TABLE tasks (name TEXT, status TEXT, priority INTEGER)")
             .unwrap();
 
         // INSERT
@@ -1834,9 +1867,7 @@ mod tests {
         engine
             .execute(&format!("DELETE FROM tasks WHERE id = '{id}'"))
             .unwrap();
-        let result = engine
-            .execute("SELECT COUNT(*) FROM tasks")
-            .unwrap();
+        let result = engine.execute("SELECT COUNT(*) FROM tasks").unwrap();
         match result {
             SqlResult::Rows { rows, .. } => assert_eq!(rows[0][0], "0"),
             _ => panic!("expected Rows"),
@@ -1848,18 +1879,14 @@ mod tests {
         let (_dir, repo, index) = setup();
         let mut engine = SqlEngine::new(&index, &repo);
 
-        engine
-            .execute("CREATE TABLE people (name TEXT)")
-            .unwrap();
+        engine.execute("CREATE TABLE people (name TEXT)").unwrap();
         engine
             .execute("CREATE TABLE tasks (name TEXT, assignee TEXT REFERENCES people(id))")
             .unwrap();
 
         // Insert with non-existent reference should fail
         let err = engine
-            .execute(
-                "INSERT INTO tasks (name, assignee) VALUES ('Fix bug', '99999999999999')",
-            )
+            .execute("INSERT INTO tasks (name, assignee) VALUES ('Fix bug', '99999999999999')")
             .unwrap_err();
         assert!(format!("{err}").contains("referenced zettel not found"));
     }
@@ -1874,9 +1901,7 @@ mod tests {
             .unwrap();
 
         let id = match engine
-            .execute(
-                "INSERT INTO projects (name, status, priority) VALUES ('Alpha', 'active', 1)",
-            )
+            .execute("INSERT INTO projects (name, status, priority) VALUES ('Alpha', 'active', 1)")
             .unwrap()
         {
             SqlResult::Ok(id) => id,
@@ -1906,16 +1931,24 @@ mod tests {
         engine.execute("CREATE TABLE docs (name TEXT)").unwrap();
 
         // INSERT → should go to zettelkasten/docs/{id}.md
-        let id = match engine.execute("INSERT INTO docs (name) VALUES ('Guide')").unwrap() {
+        let id = match engine
+            .execute("INSERT INTO docs (name) VALUES ('Guide')")
+            .unwrap()
+        {
             SqlResult::Ok(id) => id,
             _ => panic!("expected Ok"),
         };
         let path = index.resolve_path(&id).unwrap();
-        assert!(path.starts_with("zettelkasten/docs/"), "path should be in type subfolder: {path}");
+        assert!(
+            path.starts_with("zettelkasten/docs/"),
+            "path should be in type subfolder: {path}"
+        );
 
         // UPDATE via SQL → should find it in subfolder
         engine
-            .execute(&format!("UPDATE docs SET name = 'Manual' WHERE id = '{id}'"))
+            .execute(&format!(
+                "UPDATE docs SET name = 'Manual' WHERE id = '{id}'"
+            ))
             .unwrap();
         let content = repo.read_file(&path).unwrap();
         assert!(content.contains("Manual"));
@@ -1934,7 +1967,8 @@ mod tests {
         // Manually create typedef with allowed_values + default_value
         let typedef = "---\nid: 20260301110000\ntitle: task\ntype: _typedef\ncolumns:\n  - name: status\n    data_type: TEXT\n    zone: frontmatter\n    allowed_values:\n      - todo\n      - doing\n      - done\n    default_value: todo\n  - name: name\n    data_type: TEXT\n    zone: frontmatter\n---\n";
         let typedef_path = "zettelkasten/_typedef/20260301110000.md";
-        repo.commit_file(typedef_path, typedef, "add typedef").unwrap();
+        repo.commit_file(typedef_path, typedef, "add typedef")
+            .unwrap();
         let parsed = crate::parser::parse(typedef, typedef_path).unwrap();
         index.index_zettel(&parsed).unwrap();
         index.materialize_all_types(&repo).unwrap();
@@ -1942,13 +1976,19 @@ mod tests {
         let mut engine = SqlEngine::new(&index, &repo);
 
         // INSERT omitting status → should get default "todo"
-        let id = match engine.execute("INSERT INTO task (name) VALUES ('Write tests')").unwrap() {
+        let id = match engine
+            .execute("INSERT INTO task (name) VALUES ('Write tests')")
+            .unwrap()
+        {
             SqlResult::Ok(id) => id,
             _ => panic!("expected Ok"),
         };
         let path = index.resolve_path(&id).unwrap();
         let content = repo.read_file(&path).unwrap();
-        assert!(content.contains("status: todo"), "expected default status in:\n{content}");
+        assert!(
+            content.contains("status: todo"),
+            "expected default status in:\n{content}"
+        );
     }
 
     #[test]
@@ -1957,7 +1997,8 @@ mod tests {
 
         let typedef = "---\nid: 20260301110100\ntitle: task2\ntype: _typedef\ncolumns:\n  - name: status\n    data_type: TEXT\n    zone: frontmatter\n    allowed_values:\n      - todo\n      - doing\n      - done\n  - name: name\n    data_type: TEXT\n    zone: frontmatter\n---\n";
         let typedef_path = "zettelkasten/_typedef/20260301110100.md";
-        repo.commit_file(typedef_path, typedef, "add typedef").unwrap();
+        repo.commit_file(typedef_path, typedef, "add typedef")
+            .unwrap();
         let parsed = crate::parser::parse(typedef, typedef_path).unwrap();
         index.index_zettel(&parsed).unwrap();
         index.materialize_all_types(&repo).unwrap();
@@ -1968,7 +2009,10 @@ mod tests {
         let result = engine.execute("INSERT INTO task2 (name, status) VALUES ('Test', 'invalid')");
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("not in allowed values"), "expected validation error: {err}");
+        assert!(
+            err.contains("not in allowed values"),
+            "expected validation error: {err}"
+        );
     }
 
     #[test]
@@ -1977,7 +2021,8 @@ mod tests {
 
         let typedef = "---\nid: 20260301110200\ntitle: task3\ntype: _typedef\ncolumns:\n  - name: status\n    data_type: TEXT\n    zone: frontmatter\n    allowed_values:\n      - todo\n      - doing\n      - done\n    default_value: todo\n  - name: name\n    data_type: TEXT\n    zone: frontmatter\n---\n";
         let typedef_path = "zettelkasten/_typedef/20260301110200.md";
-        repo.commit_file(typedef_path, typedef, "add typedef").unwrap();
+        repo.commit_file(typedef_path, typedef, "add typedef")
+            .unwrap();
         let parsed = crate::parser::parse(typedef, typedef_path).unwrap();
         index.index_zettel(&parsed).unwrap();
         index.materialize_all_types(&repo).unwrap();
@@ -1985,16 +2030,24 @@ mod tests {
         let mut engine = SqlEngine::new(&index, &repo);
 
         // INSERT valid
-        let id = match engine.execute("INSERT INTO task3 (name, status) VALUES ('Test', 'todo')").unwrap() {
+        let id = match engine
+            .execute("INSERT INTO task3 (name, status) VALUES ('Test', 'todo')")
+            .unwrap()
+        {
             SqlResult::Ok(id) => id,
             _ => panic!("expected Ok"),
         };
 
         // UPDATE with invalid value
-        let result = engine.execute(&format!("UPDATE task3 SET status = 'bad' WHERE id = '{id}'"));
+        let result = engine.execute(&format!(
+            "UPDATE task3 SET status = 'bad' WHERE id = '{id}'"
+        ));
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("not in allowed values"), "expected validation error: {err}");
+        assert!(
+            err.contains("not in allowed values"),
+            "expected validation error: {err}"
+        );
     }
 
     #[test]
@@ -2003,17 +2056,25 @@ mod tests {
         let mut engine = SqlEngine::new(&index, &repo);
 
         engine.execute("CREATE TABLE dropme (name TEXT)").unwrap();
-        engine.execute("INSERT INTO dropme (name) VALUES ('a')").unwrap();
-        engine.execute("INSERT INTO dropme (name) VALUES ('b')").unwrap();
+        engine
+            .execute("INSERT INTO dropme (name) VALUES ('a')")
+            .unwrap();
+        engine
+            .execute("INSERT INTO dropme (name) VALUES ('b')")
+            .unwrap();
 
         engine.execute("DROP TABLE dropme CASCADE").unwrap();
 
         // Typedef gone
-        let rows = index.query_raw("SELECT id FROM zettels WHERE type = '_typedef' AND title = 'dropme'").unwrap();
+        let rows = index
+            .query_raw("SELECT id FROM zettels WHERE type = '_typedef' AND title = 'dropme'")
+            .unwrap();
         assert!(rows.is_empty());
 
         // Data zettels gone
-        let rows = index.query_raw("SELECT id FROM zettels WHERE type = 'dropme'").unwrap();
+        let rows = index
+            .query_raw("SELECT id FROM zettels WHERE type = 'dropme'")
+            .unwrap();
         assert!(rows.is_empty());
 
         // Materialized table gone
@@ -2027,7 +2088,10 @@ mod tests {
         let mut engine = SqlEngine::new(&index, &repo);
 
         engine.execute("CREATE TABLE stripme (name TEXT)").unwrap();
-        let id = match engine.execute("INSERT INTO stripme (name) VALUES ('keep')").unwrap() {
+        let id = match engine
+            .execute("INSERT INTO stripme (name) VALUES ('keep')")
+            .unwrap()
+        {
             SqlResult::Ok(id) => id,
             _ => panic!("expected Ok"),
         };
@@ -2035,7 +2099,9 @@ mod tests {
         engine.execute("DROP TABLE stripme").unwrap();
 
         // Typedef gone
-        let rows = index.query_raw("SELECT id FROM zettels WHERE type = '_typedef' AND title = 'stripme'").unwrap();
+        let rows = index
+            .query_raw("SELECT id FROM zettels WHERE type = '_typedef' AND title = 'stripme'")
+            .unwrap();
         assert!(rows.is_empty());
 
         // Data zettel still exists but type is cleared
@@ -2049,8 +2115,12 @@ mod tests {
         let (_dir, repo, index) = setup();
         let mut engine = SqlEngine::new(&index, &repo);
 
-        engine.execute("CREATE TABLE removeme (status TEXT)").unwrap();
-        engine.execute("INSERT INTO removeme (status) VALUES ('x')").unwrap();
+        engine
+            .execute("CREATE TABLE removeme (status TEXT)")
+            .unwrap();
+        engine
+            .execute("INSERT INTO removeme (status) VALUES ('x')")
+            .unwrap();
 
         // Materialized table exists before drop
         assert!(index.query_raw("SELECT * FROM removeme").is_ok());
@@ -2058,11 +2128,16 @@ mod tests {
         engine.execute("DROP TABLE removeme").unwrap();
 
         // Typedef removed from index
-        let rows = index.query_raw("SELECT id FROM zettels WHERE type = '_typedef' AND title = 'removeme'").unwrap();
+        let rows = index
+            .query_raw("SELECT id FROM zettels WHERE type = '_typedef' AND title = 'removeme'")
+            .unwrap();
         assert!(rows.is_empty(), "typedef should be removed");
 
         // Materialized table dropped
-        assert!(index.query_raw("SELECT * FROM removeme").is_err(), "materialized table should be dropped");
+        assert!(
+            index.query_raw("SELECT * FROM removeme").is_err(),
+            "materialized table should be dropped"
+        );
     }
 
     #[test]
@@ -2090,7 +2165,9 @@ mod tests {
         let mut engine = SqlEngine::new(&index, &repo);
 
         engine.execute("CREATE TABLE addcol (name TEXT)").unwrap();
-        engine.execute("ALTER TABLE addcol ADD COLUMN priority INTEGER").unwrap();
+        engine
+            .execute("ALTER TABLE addcol ADD COLUMN priority INTEGER")
+            .unwrap();
 
         // Verify column exists in materialized table
         let result = engine.execute("SELECT * FROM addcol").unwrap();
@@ -2108,8 +2185,12 @@ mod tests {
         let mut engine = SqlEngine::new(&index, &repo);
 
         engine.execute("CREATE TABLE addcol2 (name TEXT)").unwrap();
-        engine.execute("INSERT INTO addcol2 (name) VALUES ('test')").unwrap();
-        engine.execute("ALTER TABLE addcol2 ADD COLUMN score INTEGER").unwrap();
+        engine
+            .execute("INSERT INTO addcol2 (name) VALUES ('test')")
+            .unwrap();
+        engine
+            .execute("ALTER TABLE addcol2 ADD COLUMN score INTEGER")
+            .unwrap();
 
         let result = engine.execute("SELECT name, score FROM addcol2").unwrap();
         match result {
@@ -2127,8 +2208,12 @@ mod tests {
         let (_dir, repo, index) = setup();
         let mut engine = SqlEngine::new(&index, &repo);
 
-        engine.execute("CREATE TABLE dropcol (name TEXT, extra TEXT)").unwrap();
-        engine.execute("ALTER TABLE dropcol DROP COLUMN extra").unwrap();
+        engine
+            .execute("CREATE TABLE dropcol (name TEXT, extra TEXT)")
+            .unwrap();
+        engine
+            .execute("ALTER TABLE dropcol DROP COLUMN extra")
+            .unwrap();
 
         let result = engine.execute("SELECT * FROM dropcol").unwrap();
         match result {
@@ -2145,12 +2230,22 @@ mod tests {
         let (_dir, repo, index) = setup();
         let mut engine = SqlEngine::new(&index, &repo);
 
-        engine.execute("CREATE TABLE bulkdel (name TEXT, status TEXT)").unwrap();
-        engine.execute("INSERT INTO bulkdel (name, status) VALUES ('a', 'done')").unwrap();
-        engine.execute("INSERT INTO bulkdel (name, status) VALUES ('b', 'todo')").unwrap();
-        engine.execute("INSERT INTO bulkdel (name, status) VALUES ('c', 'done')").unwrap();
+        engine
+            .execute("CREATE TABLE bulkdel (name TEXT, status TEXT)")
+            .unwrap();
+        engine
+            .execute("INSERT INTO bulkdel (name, status) VALUES ('a', 'done')")
+            .unwrap();
+        engine
+            .execute("INSERT INTO bulkdel (name, status) VALUES ('b', 'todo')")
+            .unwrap();
+        engine
+            .execute("INSERT INTO bulkdel (name, status) VALUES ('c', 'done')")
+            .unwrap();
 
-        let result = engine.execute("DELETE FROM bulkdel WHERE status = 'done'").unwrap();
+        let result = engine
+            .execute("DELETE FROM bulkdel WHERE status = 'done'")
+            .unwrap();
         match result {
             SqlResult::Affected(n) => assert_eq!(n, 2),
             _ => panic!("expected Affected"),
@@ -2172,8 +2267,12 @@ mod tests {
         let mut engine = SqlEngine::new(&index, &repo);
 
         engine.execute("CREATE TABLE bulkdel2 (name TEXT)").unwrap();
-        engine.execute("INSERT INTO bulkdel2 (name) VALUES ('a')").unwrap();
-        engine.execute("INSERT INTO bulkdel2 (name) VALUES ('b')").unwrap();
+        engine
+            .execute("INSERT INTO bulkdel2 (name) VALUES ('a')")
+            .unwrap();
+        engine
+            .execute("INSERT INTO bulkdel2 (name) VALUES ('b')")
+            .unwrap();
 
         let result = engine.execute("DELETE FROM bulkdel2").unwrap();
         match result {
@@ -2193,18 +2292,30 @@ mod tests {
         let (_dir, repo, index) = setup();
         let mut engine = SqlEngine::new(&index, &repo);
 
-        engine.execute("CREATE TABLE bulkupd (name TEXT, priority INTEGER)").unwrap();
-        engine.execute("INSERT INTO bulkupd (name, priority) VALUES ('a', 1)").unwrap();
-        engine.execute("INSERT INTO bulkupd (name, priority) VALUES ('b', 2)").unwrap();
-        engine.execute("INSERT INTO bulkupd (name, priority) VALUES ('c', 1)").unwrap();
+        engine
+            .execute("CREATE TABLE bulkupd (name TEXT, priority INTEGER)")
+            .unwrap();
+        engine
+            .execute("INSERT INTO bulkupd (name, priority) VALUES ('a', 1)")
+            .unwrap();
+        engine
+            .execute("INSERT INTO bulkupd (name, priority) VALUES ('b', 2)")
+            .unwrap();
+        engine
+            .execute("INSERT INTO bulkupd (name, priority) VALUES ('c', 1)")
+            .unwrap();
 
-        let result = engine.execute("UPDATE bulkupd SET priority = 9 WHERE priority = 1").unwrap();
+        let result = engine
+            .execute("UPDATE bulkupd SET priority = 9 WHERE priority = 1")
+            .unwrap();
         match result {
             SqlResult::Affected(n) => assert_eq!(n, 2),
             _ => panic!("expected Affected"),
         }
 
-        let rows = engine.execute("SELECT name, priority FROM bulkupd ORDER BY name").unwrap();
+        let rows = engine
+            .execute("SELECT name, priority FROM bulkupd ORDER BY name")
+            .unwrap();
         match rows {
             SqlResult::Rows { rows, .. } => {
                 assert_eq!(rows[0][1], "9"); // a: was 1 → 9
@@ -2220,9 +2331,15 @@ mod tests {
         let (_dir, repo, index) = setup();
         let mut engine = SqlEngine::new(&index, &repo);
 
-        engine.execute("CREATE TABLE bulkupd2 (name TEXT, flag TEXT)").unwrap();
-        engine.execute("INSERT INTO bulkupd2 (name, flag) VALUES ('a', 'old')").unwrap();
-        engine.execute("INSERT INTO bulkupd2 (name, flag) VALUES ('b', 'old')").unwrap();
+        engine
+            .execute("CREATE TABLE bulkupd2 (name TEXT, flag TEXT)")
+            .unwrap();
+        engine
+            .execute("INSERT INTO bulkupd2 (name, flag) VALUES ('a', 'old')")
+            .unwrap();
+        engine
+            .execute("INSERT INTO bulkupd2 (name, flag) VALUES ('b', 'old')")
+            .unwrap();
 
         let result = engine.execute("UPDATE bulkupd2 SET flag = 'new'").unwrap();
         match result {
@@ -2244,19 +2361,32 @@ mod tests {
         let (_dir, repo, index) = setup();
         let mut engine = SqlEngine::new(&index, &repo);
 
-        engine.execute("CREATE TABLE renamefm (status TEXT, priority INTEGER)").unwrap();
-        let id = match engine.execute("INSERT INTO renamefm (status, priority) VALUES ('active', 5)").unwrap() {
+        engine
+            .execute("CREATE TABLE renamefm (status TEXT, priority INTEGER)")
+            .unwrap();
+        let id = match engine
+            .execute("INSERT INTO renamefm (status, priority) VALUES ('active', 5)")
+            .unwrap()
+        {
             SqlResult::Ok(id) => id,
             _ => panic!("expected Ok"),
         };
 
-        engine.execute("ALTER TABLE renamefm RENAME COLUMN priority TO importance").unwrap();
+        engine
+            .execute("ALTER TABLE renamefm RENAME COLUMN priority TO importance")
+            .unwrap();
 
         // Verify zettel file has renamed key
         let path = index.resolve_path(&id).unwrap();
         let content = repo.read_file(&path).unwrap();
-        assert!(content.contains("importance: 5"), "expected renamed key in frontmatter: {content}");
-        assert!(!content.contains("priority:"), "old key should be gone: {content}");
+        assert!(
+            content.contains("importance: 5"),
+            "expected renamed key in frontmatter: {content}"
+        );
+        assert!(
+            !content.contains("priority:"),
+            "old key should be gone: {content}"
+        );
 
         // Verify materialized table has renamed column
         let result = engine.execute("SELECT importance FROM renamefm").unwrap();
@@ -2274,18 +2404,31 @@ mod tests {
         let mut engine = SqlEngine::new(&index, &repo);
 
         // Body zone column (TEXT, first column = body zone by default)
-        engine.execute("CREATE TABLE renamebody (description TEXT)").unwrap();
-        let id = match engine.execute("INSERT INTO renamebody (description) VALUES ('hello world')").unwrap() {
+        engine
+            .execute("CREATE TABLE renamebody (description TEXT)")
+            .unwrap();
+        let id = match engine
+            .execute("INSERT INTO renamebody (description) VALUES ('hello world')")
+            .unwrap()
+        {
             SqlResult::Ok(id) => id,
             _ => panic!("expected Ok"),
         };
 
-        engine.execute("ALTER TABLE renamebody RENAME COLUMN description TO summary").unwrap();
+        engine
+            .execute("ALTER TABLE renamebody RENAME COLUMN description TO summary")
+            .unwrap();
 
         let path = index.resolve_path(&id).unwrap();
         let content = repo.read_file(&path).unwrap();
-        assert!(content.contains("## summary"), "expected renamed heading: {content}");
-        assert!(!content.contains("## description"), "old heading should be gone: {content}");
+        assert!(
+            content.contains("## summary"),
+            "expected renamed heading: {content}"
+        );
+        assert!(
+            !content.contains("## description"),
+            "old heading should be gone: {content}"
+        );
     }
 
     #[test]
@@ -2297,26 +2440,49 @@ mod tests {
         let person_id = engine_exec_id(&repo, &index, "INSERT INTO person (name) VALUES ('Alice')");
 
         // Create type with reference column and insert with the person's zettel id
-        engine_exec_ok(&repo, &index, "CREATE TABLE task (title TEXT, assignee TEXT REFERENCES person)");
-        let id = engine_exec_id(&repo, &index, &format!("INSERT INTO task (title, assignee) VALUES ('Fix bug', '{person_id}')"));
+        engine_exec_ok(
+            &repo,
+            &index,
+            "CREATE TABLE task (title TEXT, assignee TEXT REFERENCES person)",
+        );
+        let id = engine_exec_id(
+            &repo,
+            &index,
+            &format!("INSERT INTO task (title, assignee) VALUES ('Fix bug', '{person_id}')"),
+        );
 
         let mut engine = SqlEngine::new(&index, &repo);
-        engine.execute("ALTER TABLE task RENAME COLUMN assignee TO owner").unwrap();
+        engine
+            .execute("ALTER TABLE task RENAME COLUMN assignee TO owner")
+            .unwrap();
 
         let path = index.resolve_path(&id).unwrap();
         let content = repo.read_file(&path).unwrap();
-        assert!(content.contains("- owner::"), "expected renamed reference key: {content}");
-        assert!(!content.contains("- assignee::"), "old reference key should be gone: {content}");
+        assert!(
+            content.contains("- owner::"),
+            "expected renamed reference key: {content}"
+        );
+        assert!(
+            !content.contains("- assignee::"),
+            "old reference key should be gone: {content}"
+        );
     }
 
     #[test]
     fn alter_table_rename_column_rejects_collision() {
         let (_dir, repo, index) = setup();
         let mut engine = SqlEngine::new(&index, &repo);
-        engine.execute("CREATE TABLE coltest (name TEXT, status TEXT)").unwrap();
+        engine
+            .execute("CREATE TABLE coltest (name TEXT, status TEXT)")
+            .unwrap();
 
-        let err = engine.execute("ALTER TABLE coltest RENAME COLUMN name TO status").unwrap_err();
-        assert!(err.to_string().contains("column already exists: status"), "{err}");
+        let err = engine
+            .execute("ALTER TABLE coltest RENAME COLUMN name TO status")
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("column already exists: status"),
+            "{err}"
+        );
     }
 
     /// Count git commits by walking the HEAD log.
@@ -2335,15 +2501,25 @@ mod tests {
         let before = count_commits(&repo);
 
         engine.execute("BEGIN").unwrap();
-        engine.execute("INSERT INTO items (name) VALUES ('a')").unwrap();
-        engine.execute("INSERT INTO items (name) VALUES ('b')").unwrap();
+        engine
+            .execute("INSERT INTO items (name) VALUES ('a')")
+            .unwrap();
+        engine
+            .execute("INSERT INTO items (name) VALUES ('b')")
+            .unwrap();
         engine.execute("COMMIT").unwrap();
 
         let after = count_commits(&repo);
         // Should produce exactly one additional git commit for the transaction
-        assert_eq!(after - before, 1, "expected single git commit for transaction");
+        assert_eq!(
+            after - before,
+            1,
+            "expected single git commit for transaction"
+        );
 
-        let rows = index.query_raw("SELECT name FROM items ORDER BY name").unwrap();
+        let rows = index
+            .query_raw("SELECT name FROM items ORDER BY name")
+            .unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0][0], "a");
         assert_eq!(rows[1][0], "b");
@@ -2357,7 +2533,9 @@ mod tests {
         let before = count_commits(&repo);
 
         engine.execute("BEGIN").unwrap();
-        engine.execute("INSERT INTO items (name) VALUES ('gone')").unwrap();
+        engine
+            .execute("INSERT INTO items (name) VALUES ('gone')")
+            .unwrap();
         engine.execute("ROLLBACK").unwrap();
 
         let after = count_commits(&repo);
@@ -2374,7 +2552,9 @@ mod tests {
         engine.execute("CREATE TABLE items (name TEXT)").unwrap();
 
         engine.execute("BEGIN").unwrap();
-        engine.execute("INSERT INTO items (name) VALUES ('visible')").unwrap();
+        engine
+            .execute("INSERT INTO items (name) VALUES ('visible')")
+            .unwrap();
 
         // SELECT within the same transaction should see the inserted row
         let result = engine.execute("SELECT name FROM items").unwrap();
@@ -2396,7 +2576,9 @@ mod tests {
             let mut engine = SqlEngine::new(&index, &repo);
             engine.execute("CREATE TABLE items (name TEXT)").unwrap();
             engine.execute("BEGIN").unwrap();
-            engine.execute("INSERT INTO items (name) VALUES ('orphan')").unwrap();
+            engine
+                .execute("INSERT INTO items (name) VALUES ('orphan')")
+                .unwrap();
             // engine dropped here without COMMIT
         }
 
@@ -2423,11 +2605,16 @@ mod tests {
         engine.execute("CREATE TABLE items (name TEXT)").unwrap();
 
         engine.execute("BEGIN").unwrap();
-        let id = match engine.execute("INSERT INTO items (name) VALUES ('old')").unwrap() {
+        let id = match engine
+            .execute("INSERT INTO items (name) VALUES ('old')")
+            .unwrap()
+        {
             SqlResult::Ok(id) => id,
             _ => panic!("expected Ok"),
         };
-        engine.execute(&format!("UPDATE items SET name = 'new' WHERE id = '{id}'")).unwrap();
+        engine
+            .execute(&format!("UPDATE items SET name = 'new' WHERE id = '{id}'"))
+            .unwrap();
         engine.execute("COMMIT").unwrap();
 
         let rows = index.query_raw("SELECT name FROM items").unwrap();
@@ -2447,11 +2634,16 @@ mod tests {
         engine.execute("CREATE TABLE items (name TEXT)").unwrap();
 
         engine.execute("BEGIN").unwrap();
-        let id = match engine.execute("INSERT INTO items (name) VALUES ('temp')").unwrap() {
+        let id = match engine
+            .execute("INSERT INTO items (name) VALUES ('temp')")
+            .unwrap()
+        {
             SqlResult::Ok(id) => id,
             _ => panic!("expected Ok"),
         };
-        engine.execute(&format!("DELETE FROM items WHERE id = '{id}'")).unwrap();
+        engine
+            .execute(&format!("DELETE FROM items WHERE id = '{id}'"))
+            .unwrap();
         engine.execute("COMMIT").unwrap();
 
         let rows = index.query_raw("SELECT name FROM items").unwrap();
@@ -2465,7 +2657,9 @@ mod tests {
         engine.execute("CREATE TABLE items (name TEXT)").unwrap();
 
         engine.execute("BEGIN").unwrap();
-        engine.execute("INSERT INTO items (name) VALUES ('keep')").unwrap();
+        engine
+            .execute("INSERT INTO items (name) VALUES ('keep')")
+            .unwrap();
 
         // Trigger an error (insert into nonexistent table)
         let err = engine.execute("INSERT INTO nonexistent (name) VALUES ('fail')");
@@ -2485,18 +2679,25 @@ mod tests {
         engine.execute("CREATE TABLE items (name TEXT)").unwrap();
 
         engine.execute("BEGIN").unwrap();
-        let id = match engine.execute("INSERT INTO items (name) VALUES ('ghost')").unwrap() {
+        let id = match engine
+            .execute("INSERT INTO items (name) VALUES ('ghost')")
+            .unwrap()
+        {
             SqlResult::Ok(id) => id,
             _ => panic!("expected Ok"),
         };
 
         // Delete within same txn
-        engine.execute(&format!("DELETE FROM items WHERE id = '{id}'")).unwrap();
+        engine
+            .execute(&format!("DELETE FROM items WHERE id = '{id}'"))
+            .unwrap();
 
         // SELECT should return no rows (SQLite already removed)
         let result = engine.execute("SELECT name FROM items").unwrap();
         match result {
-            SqlResult::Rows { rows, .. } => assert!(rows.is_empty(), "deleted row should not appear in SELECT"),
+            SqlResult::Rows { rows, .. } => {
+                assert!(rows.is_empty(), "deleted row should not appear in SELECT")
+            }
             _ => panic!("expected Rows"),
         }
 
@@ -2515,17 +2716,25 @@ mod tests {
 
         engine.execute("BEGIN").unwrap();
 
-        let id1 = match engine.execute("INSERT INTO items (name) VALUES ('keep')").unwrap() {
+        let id1 = match engine
+            .execute("INSERT INTO items (name) VALUES ('keep')")
+            .unwrap()
+        {
             SqlResult::Ok(id) => id,
             _ => panic!("expected Ok"),
         };
         std::thread::sleep(std::time::Duration::from_secs(1));
-        let id2 = match engine.execute("INSERT INTO items (name) VALUES ('remove')").unwrap() {
+        let id2 = match engine
+            .execute("INSERT INTO items (name) VALUES ('remove')")
+            .unwrap()
+        {
             SqlResult::Ok(id) => id,
             _ => panic!("expected Ok"),
         };
 
-        engine.execute(&format!("DELETE FROM items WHERE id = '{id2}'")).unwrap();
+        engine
+            .execute(&format!("DELETE FROM items WHERE id = '{id2}'"))
+            .unwrap();
         engine.execute("COMMIT").unwrap();
 
         // Only first insert should survive
@@ -2534,16 +2743,22 @@ mod tests {
         assert_eq!(rows[0][0], "keep");
 
         // Verify git file exists for survivor
-        assert!(repo.read_file(&format!("zettelkasten/items/{id1}.md")).is_ok());
+        assert!(repo
+            .read_file(&format!("zettelkasten/items/{id1}.md"))
+            .is_ok());
         // Deleted zettel should not be in git (it was buffer-only)
-        assert!(repo.read_file(&format!("zettelkasten/items/{id2}.md")).is_err());
+        assert!(repo
+            .read_file(&format!("zettelkasten/items/{id2}.md"))
+            .is_err());
     }
 
     #[test]
     fn create_index_rejected_with_reason() {
         let (_dir, repo, index) = setup();
         let mut engine = SqlEngine::new(&index, &repo);
-        let err = engine.execute("CREATE INDEX idx ON zettels(title)").unwrap_err();
+        let err = engine
+            .execute("CREATE INDEX idx ON zettels(title)")
+            .unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("CREATE INDEX not supported"), "{msg}");
     }
@@ -2552,7 +2767,9 @@ mod tests {
     fn create_view_rejected_with_reason() {
         let (_dir, repo, index) = setup();
         let mut engine = SqlEngine::new(&index, &repo);
-        let err = engine.execute("CREATE VIEW v AS SELECT * FROM zettels").unwrap_err();
+        let err = engine
+            .execute("CREATE VIEW v AS SELECT * FROM zettels")
+            .unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("CREATE VIEW not supported"), "{msg}");
     }
@@ -2562,7 +2779,9 @@ mod tests {
         let (_dir, repo, index) = setup();
         let mut engine = SqlEngine::new(&index, &repo);
         let err = engine
-            .execute("CREATE TRIGGER t AFTER INSERT ON zettels FOR EACH ROW EXECUTE PROCEDURE noop()")
+            .execute(
+                "CREATE TRIGGER t AFTER INSERT ON zettels FOR EACH ROW EXECUTE PROCEDURE noop()",
+            )
             .unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("CREATE TRIGGER not supported"), "{msg}");
@@ -2572,7 +2791,9 @@ mod tests {
     fn create_virtual_table_rejected_with_reason() {
         let (_dir, repo, index) = setup();
         let mut engine = SqlEngine::new(&index, &repo);
-        let err = engine.execute("CREATE VIRTUAL TABLE vt USING fts5(content)").unwrap_err();
+        let err = engine
+            .execute("CREATE VIRTUAL TABLE vt USING fts5(content)")
+            .unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("CREATE VIRTUAL TABLE not supported"), "{msg}");
     }

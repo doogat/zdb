@@ -21,7 +21,11 @@ fn zdb_bin() -> PathBuf {
     let target = std::env::var("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| dir.join("target"));
-    let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+    let profile = if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    };
     target
         .join(profile)
         .join(format!("zdb{}", std::env::consts::EXE_SUFFIX))
@@ -156,7 +160,11 @@ impl ServerGuard {
             .expect("invalid json")
     }
 
-    pub fn graphql_with_vars(&self, query: &str, variables: serde_json::Value) -> serde_json::Value {
+    pub fn graphql_with_vars(
+        &self,
+        query: &str,
+        variables: serde_json::Value,
+    ) -> serde_json::Value {
         let body = serde_json::json!({ "query": query, "variables": variables });
         reqwest::blocking::Client::new()
             .post(self.url())
@@ -170,7 +178,9 @@ impl ServerGuard {
     }
 
     /// Open a graphql-ws WebSocket connection with auth.
-    pub fn ws_connect(&self) -> tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>> {
+    pub fn ws_connect(
+        &self,
+    ) -> tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>> {
         let request = Request::builder()
             .uri(format!("ws://127.0.0.1:{}/ws", self.port))
             .header("Authorization", format!("Bearer {}", self.token))
@@ -179,7 +189,10 @@ impl ServerGuard {
             .header("Connection", "Upgrade")
             .header("Upgrade", "websocket")
             .header("Sec-WebSocket-Version", "13")
-            .header("Sec-WebSocket-Key", tungstenite::handshake::client::generate_key())
+            .header(
+                "Sec-WebSocket-Key",
+                tungstenite::handshake::client::generate_key(),
+            )
             .body(())
             .unwrap();
 
@@ -188,12 +201,17 @@ impl ServerGuard {
     }
 
     /// Init graphql-ws protocol and subscribe, returns the connected socket.
-    pub fn ws_subscribe(&self, subscription_query: &str) -> tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>> {
+    pub fn ws_subscribe(
+        &self,
+        subscription_query: &str,
+    ) -> tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>> {
         let mut ws = self.ws_connect();
 
         // connection_init
         ws.send(Message::Text(
-            serde_json::json!({"type": "connection_init", "payload": {}}).to_string().into(),
+            serde_json::json!({"type": "connection_init", "payload": {}})
+                .to_string()
+                .into(),
         ))
         .unwrap();
 
@@ -209,7 +227,8 @@ impl ServerGuard {
                 "id": "1",
                 "payload": { "query": subscription_query }
             })
-            .to_string().into(),
+            .to_string()
+            .into(),
         ))
         .unwrap();
 
@@ -230,7 +249,9 @@ impl Drop for ServerGuard {
 }
 
 /// Read the next "next" message from WS, skipping pings.
-pub fn read_next(ws: &mut tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>) -> serde_json::Value {
+pub fn read_next(
+    ws: &mut tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
+) -> serde_json::Value {
     loop {
         let msg = ws.read().expect("ws read failed");
         if let Message::Text(text) = msg {
@@ -317,7 +338,11 @@ impl TwoNodeSetup {
         // Node 2 dir (clone happens after node1 pushes)
         let node2_dir = TempDir::new().unwrap();
 
-        Self { remote_dir, node1, node2_dir }
+        Self {
+            remote_dir,
+            node1,
+            node2_dir,
+        }
     }
 
     /// Clone remote into node2 and register it
@@ -400,7 +425,11 @@ impl MultiNodeSetup {
             temps.push(dir);
         }
 
-        Self { remote_dir, nodes, _temps: temps }
+        Self {
+            remote_dir,
+            nodes,
+            _temps: temps,
+        }
     }
 
     /// Push from a node to origin
@@ -410,10 +439,7 @@ impl MultiNodeSetup {
 
     /// Sync a node
     pub fn sync(node: &Path) {
-        ZdbTestRepo::zdb_at(node)
-            .arg("sync")
-            .assert()
-            .success();
+        ZdbTestRepo::zdb_at(node).arg("sync").assert().success();
     }
 
     /// Create a zettel on a node, return its ID
@@ -422,7 +448,11 @@ impl MultiNodeSetup {
             .args(["create", "--title", title, "--body", body])
             .output()
             .unwrap();
-        assert!(out.status.success(), "create failed: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "create failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     }
 
@@ -432,7 +462,11 @@ impl MultiNodeSetup {
             .args(["read", id])
             .output()
             .unwrap();
-        assert!(out.status.success(), "read failed: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "read failed: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         String::from_utf8_lossy(&out.stdout).to_string()
     }
 

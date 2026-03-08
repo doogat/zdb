@@ -1,4 +1,6 @@
-use async_graphql::dynamic::{Enum, EnumItem, Field, FieldFuture, FieldValue, InputObject, InputValue, Object, TypeRef};
+use async_graphql::dynamic::{
+    Enum, EnumItem, Field, FieldFuture, FieldValue, InputObject, InputValue, Object, TypeRef,
+};
 use async_graphql::{Name, Value as GqlValue};
 use indexmap::IndexMap;
 use rusqlite::types::Value as SqlValue;
@@ -14,7 +16,10 @@ pub fn string_filter() -> InputObject {
         .field(InputValue::new("eq", TypeRef::named(TypeRef::STRING)))
         .field(InputValue::new("neq", TypeRef::named(TypeRef::STRING)))
         .field(InputValue::new("contains", TypeRef::named(TypeRef::STRING)))
-        .field(InputValue::new("startsWith", TypeRef::named(TypeRef::STRING)))
+        .field(InputValue::new(
+            "startsWith",
+            TypeRef::named(TypeRef::STRING),
+        ))
         .field(InputValue::new("in", TypeRef::named_list(TypeRef::STRING)))
 }
 
@@ -44,8 +49,7 @@ pub fn float_filter() -> InputObject {
 
 /// `BoolFilter` — equality on BOOLEAN columns.
 pub fn bool_filter() -> InputObject {
-    InputObject::new("BoolFilter")
-        .field(InputValue::new("eq", TypeRef::named(TypeRef::BOOLEAN)))
+    InputObject::new("BoolFilter").field(InputValue::new("eq", TypeRef::named(TypeRef::BOOLEAN)))
 }
 
 /// `IDFilter` — equality and set membership on ID/reference columns.
@@ -215,17 +219,21 @@ pub fn build_aggregate_type(type_name: &str, schema: &TableSchema) -> Object {
     let mut obj = Object::new(format!("{type_name}Aggregate"));
 
     // count: Int!
-    obj = obj.field(Field::new("count", TypeRef::named_nn(TypeRef::INT), |ctx| {
-        FieldFuture::new(async move {
-            let parent = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
-            if let GqlValue::Object(map) = parent {
-                if let Some(v) = map.get("count") {
-                    return Ok(Some(FieldValue::value(v.clone())));
+    obj = obj.field(Field::new(
+        "count",
+        TypeRef::named_nn(TypeRef::INT),
+        |ctx| {
+            FieldFuture::new(async move {
+                let parent = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
+                if let GqlValue::Object(map) = parent {
+                    if let Some(v) = map.get("count") {
+                        return Ok(Some(FieldValue::value(v.clone())));
+                    }
                 }
-            }
-            Ok(Some(FieldValue::value(GqlValue::from(0))))
-        })
-    }));
+                Ok(Some(FieldValue::value(GqlValue::from(0))))
+            })
+        },
+    ));
 
     // Numeric aggregate fields
     for col in &schema.columns {
@@ -276,7 +284,12 @@ pub fn build_aggregate_sql(
         }
         let cap = capitalize_first(&col.name);
         let c = &col.name;
-        for (func, prefix) in [("MIN", "min"), ("MAX", "max"), ("SUM", "sum"), ("AVG", "avg")] {
+        for (func, prefix) in [
+            ("MIN", "min"),
+            ("MAX", "max"),
+            ("SUM", "sum"),
+            ("AVG", "avg"),
+        ] {
             let alias = format!("{prefix}{cap}");
             selects.push(format!("{func}(\"{c}\") AS \"{alias}\""));
             names.push(alias);
@@ -670,10 +683,7 @@ mod tests {
         let mut obj = IndexMap::new();
         obj.insert(
             Name::new("_or"),
-            GqlValue::List(vec![
-                GqlValue::Object(or_item1),
-                GqlValue::Object(or_item2),
-            ]),
+            GqlValue::List(vec![GqlValue::Object(or_item1), GqlValue::Object(or_item2)]),
         );
         let input = GqlValue::Object(obj);
         let wc = build_where_sql(&input, &test_schema());
@@ -714,10 +724,7 @@ mod tests {
         let mut obj = IndexMap::new();
         obj.insert(
             Name::new("_and"),
-            GqlValue::List(vec![
-                GqlValue::Object(or_wrapper),
-                GqlValue::Object(prio),
-            ]),
+            GqlValue::List(vec![GqlValue::Object(or_wrapper), GqlValue::Object(prio)]),
         );
         let input = GqlValue::Object(obj);
         let wc = build_where_sql(&input, &test_schema());
@@ -878,7 +885,11 @@ mod tests {
     #[test]
     fn test_aggregate_row_to_value() {
         let row = vec!["42".to_string(), "1.5".to_string(), "10.0".to_string()];
-        let names = vec!["count".to_string(), "minPriority".to_string(), "maxPriority".to_string()];
+        let names = vec![
+            "count".to_string(),
+            "minPriority".to_string(),
+            "maxPriority".to_string(),
+        ];
         let val = aggregate_row_to_value(&row, &names);
         if let GqlValue::Object(map) = val {
             assert_eq!(map.get("count"), Some(&GqlValue::from(42i64)));

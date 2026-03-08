@@ -34,7 +34,10 @@ fn setup_sync_pair(
     let files: Vec<(String, String)> = (0..count)
         .map(|i| (zettel_path(i), zettel_content(i)))
         .collect();
-    let refs: Vec<(&str, &str)> = files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, c)| (p.as_str(), c.as_str()))
+        .collect();
     repo_a.commit_files(&refs, "seed").unwrap();
     repo_a
         .add_remote("origin", bare_dir.to_str().unwrap())
@@ -72,8 +75,10 @@ fn bench_sync_fast_forward(c: &mut Criterion) {
                 let new_files: Vec<(String, String)> = (ZETTEL_COUNT_1K..ZETTEL_COUNT_1K + 10)
                     .map(|i| (zettel_path(i), zettel_content(i)))
                     .collect();
-                let refs: Vec<(&str, &str)> =
-                    new_files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+                let refs: Vec<(&str, &str)> = new_files
+                    .iter()
+                    .map(|(p, c)| (p.as_str(), c.as_str()))
+                    .collect();
                 repo_a.commit_files(&refs, "add 10").unwrap();
                 repo_a.push("origin", "master").unwrap();
 
@@ -102,8 +107,10 @@ fn bench_sync_fast_forward_5k(c: &mut Criterion) {
                 let new_files: Vec<(String, String)> = (ZETTEL_COUNT_5K..ZETTEL_COUNT_5K + 10)
                     .map(|i| (zettel_path(i), zettel_content(i)))
                     .collect();
-                let refs: Vec<(&str, &str)> =
-                    new_files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+                let refs: Vec<(&str, &str)> = new_files
+                    .iter()
+                    .map(|(p, c)| (p.as_str(), c.as_str()))
+                    .collect();
                 repo_a.commit_files(&refs, "add 10").unwrap();
                 repo_a.push("origin", "master").unwrap();
 
@@ -127,8 +134,10 @@ fn bench_compact(c: &mut Criterion) {
                 let files: Vec<(String, String)> = (0..ZETTEL_COUNT_1K)
                     .map(|i| (zettel_path(i), zettel_content(i)))
                     .collect();
-                let refs: Vec<(&str, &str)> =
-                    files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+                let refs: Vec<(&str, &str)> = files
+                    .iter()
+                    .map(|(p, c)| (p.as_str(), c.as_str()))
+                    .collect();
                 repo.commit_files(&refs, "seed").unwrap();
                 register_node(&repo, "BenchNode").unwrap();
                 (dir, repo)
@@ -142,5 +151,10 @@ fn bench_compact(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_sync_fast_forward, bench_sync_fast_forward_5k, bench_compact);
+criterion_group!(
+    benches,
+    bench_sync_fast_forward,
+    bench_sync_fast_forward_5k,
+    bench_compact
+);
 criterion_main!(benches);

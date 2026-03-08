@@ -105,9 +105,13 @@ fn zdb_value_to_json(v: ZdbValue) -> serde_json::Value {
         ZdbValue::String(s) => serde_json::Value::String(s),
         ZdbValue::Number(n) => serde_json::json!(n),
         ZdbValue::Bool(b) => serde_json::Value::Bool(b),
-        ZdbValue::List(l) => serde_json::Value::Array(l.into_iter().map(zdb_value_to_json).collect()),
+        ZdbValue::List(l) => {
+            serde_json::Value::Array(l.into_iter().map(zdb_value_to_json).collect())
+        }
         ZdbValue::Map(m) => serde_json::Value::Object(
-            m.into_iter().map(|(k, v)| (k, zdb_value_to_json(v))).collect(),
+            m.into_iter()
+                .map(|(k, v)| (k, zdb_value_to_json(v)))
+                .collect(),
         ),
     }
 }
@@ -119,7 +123,12 @@ pub fn zettel_to_json(z: &ParsedZettel) -> ZettelJson {
         body: z.body.clone(),
         tags: z.meta.tags.clone(),
         zettel_type: z.meta.zettel_type.clone(),
-        frontmatter: z.meta.extra.iter().map(|(k, v)| (k.clone(), zdb_value_to_json(v.clone()))).collect(),
+        frontmatter: z
+            .meta
+            .extra
+            .iter()
+            .map(|(k, v)| (k.clone(), zdb_value_to_json(v.clone())))
+            .collect(),
         reference_section: z.reference_section.clone(),
     }
 }
@@ -132,7 +141,13 @@ fn rest_error(e: ZettelError) -> (StatusCode, Json<ErrorBody>) {
         ZettelError::SqlEngine(_) => (StatusCode::UNPROCESSABLE_ENTITY, "SQL_ERROR"),
         _ => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
     };
-    (status, Json(ErrorBody { error: code.into(), message: e.to_string() }))
+    (
+        status,
+        Json(ErrorBody {
+            error: code.into(),
+            message: e.to_string(),
+        }),
+    )
 }
 
 // ── Router ───────────────────────────────────────────────────────
@@ -142,7 +157,9 @@ pub fn router() -> Router {
         .route("/zettels", routing::get(list_zettels).post(create_zettel))
         .route(
             "/zettels/{id}",
-            routing::get(get_zettel).put(update_zettel).delete(delete_zettel),
+            routing::get(get_zettel)
+                .put(update_zettel)
+                .delete(delete_zettel),
         )
 }
 
@@ -168,7 +185,13 @@ async fn list_zettels(
                 rank: r.rank,
             })
             .collect();
-        return Ok(Json(serde_json::to_value(SearchResponse { data: hits, total_count: result.total_count }).unwrap()));
+        return Ok(Json(
+            serde_json::to_value(SearchResponse {
+                data: hits,
+                total_count: result.total_count,
+            })
+            .unwrap(),
+        ));
     }
 
     let page = params.page.unwrap_or(1).max(1);
@@ -184,7 +207,11 @@ async fn list_zettels(
         .await
         .map_err(rest_error)?;
 
-    let total_pages = if total == 0 { 1 } else { (total + per_page - 1) / per_page };
+    let total_pages = if total == 0 {
+        1
+    } else {
+        (total + per_page - 1) / per_page
+    };
 
     let zettels = actor
         .list_zettels(
@@ -202,7 +229,12 @@ async fn list_zettels(
     Ok(Json(
         serde_json::to_value(ListResponse {
             data,
-            pagination: Pagination { page, per_page, total, total_pages },
+            pagination: Pagination {
+                page,
+                per_page,
+                total,
+                total_pages,
+            },
         })
         .unwrap(),
     ))
@@ -213,7 +245,9 @@ async fn get_zettel(
     Path(id): Path<String>,
 ) -> Result<Json<SingleResponse>, (StatusCode, Json<ErrorBody>)> {
     let z = actor.get_zettel(id).await.map_err(rest_error)?;
-    Ok(Json(SingleResponse { data: zettel_to_json(&z) }))
+    Ok(Json(SingleResponse {
+        data: zettel_to_json(&z),
+    }))
 }
 
 async fn create_zettel(
@@ -224,7 +258,12 @@ async fn create_zettel(
         .create_zettel(body.title, body.body, body.tags, body.zettel_type)
         .await
         .map_err(rest_error)?;
-    Ok((StatusCode::CREATED, Json(SingleResponse { data: zettel_to_json(&z) })))
+    Ok((
+        StatusCode::CREATED,
+        Json(SingleResponse {
+            data: zettel_to_json(&z),
+        }),
+    ))
 }
 
 async fn update_zettel(
@@ -236,7 +275,9 @@ async fn update_zettel(
         .update_zettel(id, body.title, body.body, body.tags, body.zettel_type)
         .await
         .map_err(rest_error)?;
-    Ok(Json(SingleResponse { data: zettel_to_json(&z) }))
+    Ok(Json(SingleResponse {
+        data: zettel_to_json(&z),
+    }))
 }
 
 async fn delete_zettel(

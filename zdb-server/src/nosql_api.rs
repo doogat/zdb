@@ -1,5 +1,5 @@
 use axum::extract::{Path, Query};
-use axum::{Extension, Router, routing};
+use axum::{routing, Extension, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::actor::ActorHandle;
@@ -39,12 +39,20 @@ async fn get_zettel(
         }
         Ok(None) => (
             StatusCode::NOT_FOUND,
-            Json(ErrorBody { error: "not_found".into(), message: "zettel not found".into() }),
-        ).into_response(),
+            Json(ErrorBody {
+                error: "not_found".into(),
+                message: "zettel not found".into(),
+            }),
+        )
+            .into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorBody { error: "nosql_error".into(), message: e.to_string() }),
-        ).into_response(),
+            Json(ErrorBody {
+                error: "nosql_error".into(),
+                message: e.to_string(),
+            }),
+        )
+            .into_response(),
     }
 }
 
@@ -60,16 +68,24 @@ async fn scan(
         (Some(_), Some(_)) => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(ErrorBody { error: "bad_request".into(), message: "specify ?type= or ?tag=, not both".into() }),
-            ).into_response();
+                Json(ErrorBody {
+                    error: "bad_request".into(),
+                    message: "specify ?type= or ?tag=, not both".into(),
+                }),
+            )
+                .into_response();
         }
         (Some(t), None) => actor.nosql_scan_type(t).await,
         (None, Some(tag)) => actor.nosql_scan_tag(tag).await,
         (None, None) => {
             return (
                 StatusCode::BAD_REQUEST,
-                Json(ErrorBody { error: "bad_request".into(), message: "specify ?type= or ?tag=".into() }),
-            ).into_response();
+                Json(ErrorBody {
+                    error: "bad_request".into(),
+                    message: "specify ?type= or ?tag=".into(),
+                }),
+            )
+                .into_response();
         }
     };
 
@@ -77,8 +93,12 @@ async fn scan(
         Ok(ids) => Json(IdsResponse { ids }).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorBody { error: "nosql_error".into(), message: e.to_string() }),
-        ).into_response(),
+            Json(ErrorBody {
+                error: "nosql_error".into(),
+                message: e.to_string(),
+            }),
+        )
+            .into_response(),
     }
 }
 
@@ -94,7 +114,11 @@ async fn backlinks(
         Ok(ids) => Json(IdsResponse { ids }).into_response(),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ErrorBody { error: "nosql_error".into(), message: e.to_string() }),
-        ).into_response(),
+            Json(ErrorBody {
+                error: "nosql_error".into(),
+                message: e.to_string(),
+            }),
+        )
+            .into_response(),
     }
 }

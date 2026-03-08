@@ -7,7 +7,9 @@ use zdb_core::git_ops::GitRepo;
 use zdb_core::indexer::Index;
 use zdb_core::parser;
 use zdb_core::sql_engine::{schema_from_parsed, SqlEngine, SqlResult};
-use zdb_core::types::{CompactionReport, PaginatedSearchResult, ParsedZettel, SyncReport, TableSchema, ZettelMeta};
+use zdb_core::types::{
+    CompactionReport, PaginatedSearchResult, ParsedZettel, SyncReport, TableSchema, ZettelMeta,
+};
 
 use crate::events::{EventBus, EventKind, ZettelEvent};
 
@@ -172,7 +174,13 @@ impl ActorHandle {
         offset: Option<i64>,
     ) -> ActorResult<Vec<ParsedZettel>> {
         match self
-            .send(ActorCommand::ListZettels { zettel_type, tag, backlinks_of, limit, offset })
+            .send(ActorCommand::ListZettels {
+                zettel_type,
+                tag,
+                backlinks_of,
+                limit,
+                offset,
+            })
             .await
         {
             ActorReply::ZettelList(r) => r,
@@ -192,7 +200,15 @@ impl ActorHandle {
         offset: Option<i64>,
     ) -> ActorResult<Vec<ParsedZettel>> {
         match self
-            .send(ActorCommand::FilteredList { table_name, where_sql, params, order_sql, tag, limit, offset })
+            .send(ActorCommand::FilteredList {
+                table_name,
+                where_sql,
+                params,
+                order_sql,
+                tag,
+                limit,
+                offset,
+            })
             .await
         {
             ActorReply::ZettelList(r) => r,
@@ -205,14 +221,29 @@ impl ActorHandle {
         sql: String,
         params: Vec<rusqlite::types::Value>,
     ) -> ActorResult<Vec<String>> {
-        match self.send(ActorCommand::AggregateQuery { sql, params }).await {
+        match self
+            .send(ActorCommand::AggregateQuery { sql, params })
+            .await
+        {
             ActorReply::AggregateRow(r) => r,
             _ => Err(ZettelError::Validation("unexpected reply".into())),
         }
     }
 
-    pub async fn search(&self, query: String, limit: usize, offset: usize) -> ActorResult<PaginatedSearchResult> {
-        match self.send(ActorCommand::Search { query, limit, offset }).await {
+    pub async fn search(
+        &self,
+        query: String,
+        limit: usize,
+        offset: usize,
+    ) -> ActorResult<PaginatedSearchResult> {
+        match self
+            .send(ActorCommand::Search {
+                query,
+                limit,
+                offset,
+            })
+            .await
+        {
             ActorReply::SearchResults(r) => r,
             _ => Err(ZettelError::Validation("unexpected reply".into())),
         }
@@ -226,7 +257,12 @@ impl ActorHandle {
         zettel_type: Option<String>,
     ) -> ActorResult<ParsedZettel> {
         match self
-            .send(ActorCommand::CreateZettel { title, body, tags, zettel_type })
+            .send(ActorCommand::CreateZettel {
+                title,
+                body,
+                tags,
+                zettel_type,
+            })
             .await
         {
             ActorReply::Zettel(r) => *r,
@@ -243,7 +279,13 @@ impl ActorHandle {
         zettel_type: Option<String>,
     ) -> ActorResult<ParsedZettel> {
         match self
-            .send(ActorCommand::UpdateZettel { id, title, body, tags, zettel_type })
+            .send(ActorCommand::UpdateZettel {
+                id,
+                title,
+                body,
+                tags,
+                zettel_type,
+            })
             .await
         {
             ActorReply::Zettel(r) => *r,
@@ -286,7 +328,11 @@ impl ActorHandle {
         backlinks_of: Option<String>,
     ) -> ActorResult<i64> {
         match self
-            .send(ActorCommand::CountZettels { zettel_type, tag, backlinks_of })
+            .send(ActorCommand::CountZettels {
+                zettel_type,
+                tag,
+                backlinks_of,
+            })
             .await
         {
             ActorReply::Count(r) => r,
@@ -302,7 +348,12 @@ impl ActorHandle {
         mime: String,
     ) -> ActorResult<zdb_core::types::AttachmentInfo> {
         match self
-            .send(ActorCommand::AttachFile { zettel_id, filename, bytes, mime })
+            .send(ActorCommand::AttachFile {
+                zettel_id,
+                filename,
+                bytes,
+                mime,
+            })
             .await
         {
             ActorReply::Attachment(r) => r,
@@ -310,13 +361,12 @@ impl ActorHandle {
         }
     }
 
-    pub async fn detach_file(
-        &self,
-        zettel_id: String,
-        filename: String,
-    ) -> ActorResult<()> {
+    pub async fn detach_file(&self, zettel_id: String, filename: String) -> ActorResult<()> {
         match self
-            .send(ActorCommand::DetachFile { zettel_id, filename })
+            .send(ActorCommand::DetachFile {
+                zettel_id,
+                filename,
+            })
             .await
         {
             ActorReply::Deleted(r) => r,
@@ -328,10 +378,7 @@ impl ActorHandle {
         &self,
         zettel_id: String,
     ) -> ActorResult<Vec<zdb_core::types::AttachmentInfo>> {
-        match self
-            .send(ActorCommand::ListAttachments { zettel_id })
-            .await
-        {
+        match self.send(ActorCommand::ListAttachments { zettel_id }).await {
             ActorReply::AttachmentList(r) => r,
             _ => Err(ZettelError::Validation("unexpected reply".into())),
         }
@@ -381,14 +428,19 @@ impl ActorHandle {
 
     async fn send(&self, cmd: ActorCommand) -> ActorReply {
         let (reply_tx, reply_rx) = oneshot::channel();
-        let msg = ActorMsg { cmd, reply: reply_tx };
+        let msg = ActorMsg {
+            cmd,
+            reply: reply_tx,
+        };
         // If send fails, the actor is gone
         if self.tx.send(msg).await.is_err() {
             return ActorReply::Deleted(Err(ZettelError::Validation("actor stopped".into())));
         }
-        reply_rx.await.unwrap_or(ActorReply::Deleted(Err(
-            ZettelError::Validation("actor dropped reply".into()),
-        )))
+        reply_rx
+            .await
+            .unwrap_or(ActorReply::Deleted(Err(ZettelError::Validation(
+                "actor dropped reply".into(),
+            ))))
     }
 }
 
@@ -442,7 +494,9 @@ fn actor_loop(repo_path: PathBuf, mut rx: mpsc::Receiver<ActorMsg>, event_bus: E
         let (delete_id, delete_type) = match &msg.cmd {
             ActorCommand::DeleteZettel { id } => (
                 Some(id.clone()),
-                get_zettel(&repo, &index, id).ok().and_then(|z| z.meta.zettel_type),
+                get_zettel(&repo, &index, id)
+                    .ok()
+                    .and_then(|z| z.meta.zettel_type),
             ),
             _ => (None, None),
         };
@@ -462,7 +516,12 @@ fn actor_loop(repo_path: PathBuf, mut rx: mpsc::Receiver<ActorMsg>, event_bus: E
                     if let Ok(z) = r.as_ref() {
                         event_bus.send(ZettelEvent {
                             kind: kind.clone(),
-                            zettel_id: z.meta.id.as_ref().map(ToString::to_string).unwrap_or_default(),
+                            zettel_id: z
+                                .meta
+                                .id
+                                .as_ref()
+                                .map(ToString::to_string)
+                                .unwrap_or_default(),
                             zettel_type: z.meta.zettel_type.clone(),
                             timestamp: Utc::now(),
                         });
@@ -513,30 +572,22 @@ fn handle_command(
     cmd: ActorCommand,
 ) -> ActorReply {
     match cmd {
-        ActorCommand::NoSqlGet { id } => {
-            ActorReply::NoSqlZettel(Box::new(
-                redb.map(|r| r.get(&id))
-                    .unwrap_or(Err(ZettelError::Validation("nosql not available".into())))
-            ))
-        }
-        ActorCommand::NoSqlScanType { type_name } => {
-            ActorReply::NoSqlIds(
-                redb.map(|r| r.scan_by_type(&type_name))
-                    .unwrap_or(Err(ZettelError::Validation("nosql not available".into())))
-            )
-        }
-        ActorCommand::NoSqlScanTag { tag } => {
-            ActorReply::NoSqlIds(
-                redb.map(|r| r.scan_by_tag(&tag))
-                    .unwrap_or(Err(ZettelError::Validation("nosql not available".into())))
-            )
-        }
-        ActorCommand::NoSqlBacklinks { id } => {
-            ActorReply::NoSqlIds(
-                redb.map(|r| r.backlinks(&id))
-                    .unwrap_or(Err(ZettelError::Validation("nosql not available".into())))
-            )
-        }
+        ActorCommand::NoSqlGet { id } => ActorReply::NoSqlZettel(Box::new(
+            redb.map(|r| r.get(&id))
+                .unwrap_or(Err(ZettelError::Validation("nosql not available".into()))),
+        )),
+        ActorCommand::NoSqlScanType { type_name } => ActorReply::NoSqlIds(
+            redb.map(|r| r.scan_by_type(&type_name))
+                .unwrap_or(Err(ZettelError::Validation("nosql not available".into()))),
+        ),
+        ActorCommand::NoSqlScanTag { tag } => ActorReply::NoSqlIds(
+            redb.map(|r| r.scan_by_tag(&tag))
+                .unwrap_or(Err(ZettelError::Validation("nosql not available".into()))),
+        ),
+        ActorCommand::NoSqlBacklinks { id } => ActorReply::NoSqlIds(
+            redb.map(|r| r.backlinks(&id))
+                .unwrap_or(Err(ZettelError::Validation("nosql not available".into()))),
+        ),
         _ => handle_command_shared(repo, index, repo_path, cmd),
     }
 }
@@ -551,60 +602,114 @@ fn handle_command_shared(
         ActorCommand::GetZettel { id } => {
             ActorReply::Zettel(Box::new(get_zettel(repo, index, &id)))
         }
-        ActorCommand::ListZettels { zettel_type, tag, backlinks_of, limit, offset } => {
-            ActorReply::ZettelList(list_zettels(repo, index, zettel_type, tag, backlinks_of, limit, offset))
-        }
-        ActorCommand::Search { query, limit, offset } => {
-            ActorReply::SearchResults(index.search_paginated(&query, limit, offset))
-        }
-        ActorCommand::CreateZettel { title, body, tags, zettel_type } => {
-            ActorReply::Zettel(Box::new(create_zettel(repo, index, repo_path, title, body, tags, zettel_type)))
-        }
-        ActorCommand::UpdateZettel { id, title, body, tags, zettel_type } => {
-            ActorReply::Zettel(Box::new(update_zettel(repo, index, &id, title, body, tags, zettel_type)))
-        }
-        ActorCommand::DeleteZettel { id } => {
-            ActorReply::Deleted(delete_zettel(repo, index, &id))
-        }
+        ActorCommand::ListZettels {
+            zettel_type,
+            tag,
+            backlinks_of,
+            limit,
+            offset,
+        } => ActorReply::ZettelList(list_zettels(
+            repo,
+            index,
+            zettel_type,
+            tag,
+            backlinks_of,
+            limit,
+            offset,
+        )),
+        ActorCommand::Search {
+            query,
+            limit,
+            offset,
+        } => ActorReply::SearchResults(index.search_paginated(&query, limit, offset)),
+        ActorCommand::CreateZettel {
+            title,
+            body,
+            tags,
+            zettel_type,
+        } => ActorReply::Zettel(Box::new(create_zettel(
+            repo,
+            index,
+            repo_path,
+            title,
+            body,
+            tags,
+            zettel_type,
+        ))),
+        ActorCommand::UpdateZettel {
+            id,
+            title,
+            body,
+            tags,
+            zettel_type,
+        } => ActorReply::Zettel(Box::new(update_zettel(
+            repo,
+            index,
+            &id,
+            title,
+            body,
+            tags,
+            zettel_type,
+        ))),
+        ActorCommand::DeleteZettel { id } => ActorReply::Deleted(delete_zettel(repo, index, &id)),
         ActorCommand::ExecuteSql { sql } => {
             let mut engine = SqlEngine::new(index, repo);
             ActorReply::SqlResult(engine.execute(&sql))
         }
-        ActorCommand::GetTypeSchemas => {
-            ActorReply::TypeSchemas(get_type_schemas(repo, index))
-        }
-        ActorCommand::GetBacklinks { id } => {
-            ActorReply::Backlinks(index.backlinks(&id))
-        }
-        ActorCommand::CountZettels { zettel_type, tag, backlinks_of } => {
-            ActorReply::Count(count_zettels(index, zettel_type, tag, backlinks_of))
-        }
-        ActorCommand::FilteredList { table_name, where_sql, params, order_sql, tag, limit, offset } => {
-            ActorReply::ZettelList(filtered_list(repo, index, &table_name, &where_sql, &params, order_sql.as_deref(), tag.as_deref(), limit, offset))
-        }
-        ActorCommand::AggregateQuery { sql, params } => {
-            ActorReply::AggregateRow(
-                index.query_raw_with_params(&sql, &params)
-                    .map(|rows| rows.into_iter().next().unwrap_or_default())
-            )
-        }
-        ActorCommand::AttachFile { zettel_id, filename, bytes, mime } => {
+        ActorCommand::GetTypeSchemas => ActorReply::TypeSchemas(get_type_schemas(repo, index)),
+        ActorCommand::GetBacklinks { id } => ActorReply::Backlinks(index.backlinks(&id)),
+        ActorCommand::CountZettels {
+            zettel_type,
+            tag,
+            backlinks_of,
+        } => ActorReply::Count(count_zettels(index, zettel_type, tag, backlinks_of)),
+        ActorCommand::FilteredList {
+            table_name,
+            where_sql,
+            params,
+            order_sql,
+            tag,
+            limit,
+            offset,
+        } => ActorReply::ZettelList(filtered_list(
+            repo,
+            index,
+            &table_name,
+            &where_sql,
+            &params,
+            order_sql.as_deref(),
+            tag.as_deref(),
+            limit,
+            offset,
+        )),
+        ActorCommand::AggregateQuery { sql, params } => ActorReply::AggregateRow(
+            index
+                .query_raw_with_params(&sql, &params)
+                .map(|rows| rows.into_iter().next().unwrap_or_default()),
+        ),
+        ActorCommand::AttachFile {
+            zettel_id,
+            filename,
+            bytes,
+            mime,
+        } => {
             let id = zdb_core::types::ZettelId(zettel_id);
-            ActorReply::Attachment(
-                zdb_core::attachments::attach_file(repo, index, &id, &filename, &bytes, &mime)
-            )
+            ActorReply::Attachment(zdb_core::attachments::attach_file(
+                repo, index, &id, &filename, &bytes, &mime,
+            ))
         }
-        ActorCommand::DetachFile { zettel_id, filename } => {
+        ActorCommand::DetachFile {
+            zettel_id,
+            filename,
+        } => {
             let id = zdb_core::types::ZettelId(zettel_id);
-            ActorReply::Deleted(
-                zdb_core::attachments::detach_file(repo, index, &id, &filename)
-            )
+            ActorReply::Deleted(zdb_core::attachments::detach_file(
+                repo, index, &id, &filename,
+            ))
         }
         ActorCommand::ListAttachments { zettel_id } => {
             let id = zdb_core::types::ZettelId(zettel_id);
-            ActorReply::AttachmentList(
-                zdb_core::attachments::list_attachments(repo, &id)
-            )
+            ActorReply::AttachmentList(zdb_core::attachments::list_attachments(repo, &id))
         }
         ActorCommand::RunMaintenance { force } => {
             ActorReply::Maintenance(run_maintenance(repo, index, repo_path, force))
@@ -739,9 +844,8 @@ fn filtered_list(
         (None, None) => String::new(),
     };
 
-    let sql = format!(
-        "SELECT id FROM \"{table_name}\"{where_clause} ORDER BY {order}{limit_clause}"
-    );
+    let sql =
+        format!("SELECT id FROM \"{table_name}\"{where_clause} ORDER BY {order}{limit_clause}");
 
     let rows = index.query_raw_with_params(&sql, params)?;
 
@@ -845,9 +949,7 @@ fn delete_zettel(repo: &GitRepo, index: &Index, id: &str) -> ActorResult<()> {
 
 fn get_type_schemas(repo: &GitRepo, index: &Index) -> ActorResult<Vec<TableSchema>> {
     // Find all _typedef zettels
-    let rows = index.query_raw(
-        "SELECT path FROM zettels WHERE type = '_typedef'",
-    )?;
+    let rows = index.query_raw("SELECT path FROM zettels WHERE type = '_typedef'")?;
 
     let mut schemas = Vec::new();
     for row in rows {
@@ -911,7 +1013,12 @@ fn unique_id(repo_path: &std::path::Path) -> zdb_core::types::ZettelId {
 }
 
 /// Run compaction + stale node detection.
-fn run_maintenance(repo: &GitRepo, index: &Index, _repo_path: &std::path::Path, force: bool) -> ActorResult<CompactionReport> {
+fn run_maintenance(
+    repo: &GitRepo,
+    index: &Index,
+    _repo_path: &std::path::Path,
+    force: bool,
+) -> ActorResult<CompactionReport> {
     let mgr = match zdb_core::sync_manager::SyncManager::open(repo) {
         Ok(m) => m,
         Err(ZettelError::NotFound(_)) => {
@@ -928,7 +1035,8 @@ fn run_maintenance(repo: &GitRepo, index: &Index, _repo_path: &std::path::Path, 
     let report = zdb_core::compaction::compact(repo, &mgr, force)?;
     log::info!(
         "maintenance: compacted — files_removed={} crdt_compacted={} gc={}",
-        report.files_removed, report.crdt_docs_compacted,
+        report.files_removed,
+        report.crdt_docs_compacted,
         if report.gc_success { "ok" } else { "failed" }
     );
 

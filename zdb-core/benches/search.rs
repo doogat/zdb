@@ -33,7 +33,10 @@ fn populated_repo_and_index(repo_dir: &Path, db_path: &Path, count: usize) -> (G
     let files: Vec<(String, String)> = (0..count)
         .map(|i| (zettel_path(i), zettel_content(i)))
         .collect();
-    let refs: Vec<(&str, &str)> = files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, c)| (p.as_str(), c.as_str()))
+        .collect();
     repo.commit_files(&refs, "seed").unwrap();
 
     let index = Index::open(db_path).unwrap();
@@ -63,7 +66,9 @@ fn bench_query_raw(c: &mut Criterion) {
     c.bench_function("search/sql_select_1k", |b| {
         b.iter(|| {
             index
-                .query_raw("SELECT id, title FROM zettels WHERE title LIKE '%architecture%' LIMIT 10")
+                .query_raw(
+                    "SELECT id, title FROM zettels WHERE title LIKE '%architecture%' LIMIT 10",
+                )
                 .unwrap();
         });
     });
@@ -91,7 +96,9 @@ fn bench_query_raw_5k(c: &mut Criterion) {
     c.bench_function("search/sql_select_5k", |b| {
         b.iter(|| {
             index
-                .query_raw("SELECT id, title FROM zettels WHERE title LIKE '%architecture%' LIMIT 10")
+                .query_raw(
+                    "SELECT id, title FROM zettels WHERE title LIKE '%architecture%' LIMIT 10",
+                )
                 .unwrap();
         });
     });
@@ -108,8 +115,10 @@ fn bench_rebuild(c: &mut Criterion) {
                 let files: Vec<(String, String)> = (0..ZETTEL_COUNT_1K)
                     .map(|i| (zettel_path(i), zettel_content(i)))
                     .collect();
-                let refs: Vec<(&str, &str)> =
-                    files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+                let refs: Vec<(&str, &str)> = files
+                    .iter()
+                    .map(|(p, c)| (p.as_str(), c.as_str()))
+                    .collect();
                 repo.commit_files(&refs, "seed").unwrap();
                 let index = Index::open(&db_path).unwrap();
                 (dir, repo, index)
@@ -132,8 +141,10 @@ fn bench_incremental_reindex(c: &mut Criterion) {
                 let files: Vec<(String, String)> = (0..ZETTEL_COUNT_1K)
                     .map(|i| (zettel_path(i), zettel_content(i)))
                     .collect();
-                let refs: Vec<(&str, &str)> =
-                    files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+                let refs: Vec<(&str, &str)> = files
+                    .iter()
+                    .map(|(p, c)| (p.as_str(), c.as_str()))
+                    .collect();
                 repo.commit_files(&refs, "seed").unwrap();
                 let index = Index::open(&db_path).unwrap();
                 index.rebuild(&repo).unwrap();
@@ -144,7 +155,8 @@ fn bench_incremental_reindex(c: &mut Criterion) {
                     &zettel_path(0),
                     &zettel_content(0).replace("Note about", "Modified note about"),
                     "modify one",
-                ).unwrap();
+                )
+                .unwrap();
 
                 (dir, repo, index, old_head)
             },

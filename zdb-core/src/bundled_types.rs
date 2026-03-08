@@ -157,7 +157,13 @@ pub fn get_bundled_type(name: &str) -> Option<&'static str> {
 
 /// List all available bundled type names.
 pub fn list_bundled_types() -> &'static [&'static str] {
-    &["contact", "kanban", "literature-note", "meeting-minutes", "project"]
+    &[
+        "contact",
+        "kanban",
+        "literature-note",
+        "meeting-minutes",
+        "project",
+    ]
 }
 
 #[cfg(test)]

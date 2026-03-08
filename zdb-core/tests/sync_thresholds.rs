@@ -35,7 +35,10 @@ fn nfr03_sync_under_2s_at_5k() {
     let files: Vec<(String, String)> = (0..ZETTEL_COUNT)
         .map(|i| (zettel_path(i), zettel_content(i)))
         .collect();
-    let refs: Vec<(&str, &str)> = files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, c)| (p.as_str(), c.as_str()))
+        .collect();
     repo_a.commit_files(&refs, "seed").unwrap();
     repo_a
         .add_remote("origin", bare.path().to_str().unwrap())

@@ -1,10 +1,4 @@
-use axum::{
-    extract::Request,
-    http::StatusCode,
-    middleware::Next,
-    response::Response,
-    Extension,
-};
+use axum::{extract::Request, http::StatusCode, middleware::Next, response::Response, Extension};
 use std::path::Path;
 
 /// Load existing token or generate and persist a new one.

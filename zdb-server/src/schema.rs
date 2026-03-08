@@ -22,7 +22,12 @@ fn zettel_to_value(z: &ParsedZettel) -> GqlValue {
     let title = z.meta.title.as_deref().unwrap_or("");
     let date = z.meta.date.as_deref().unwrap_or("");
     let ztype = z.meta.zettel_type.as_deref().unwrap_or("");
-    let tags: Vec<GqlValue> = z.meta.tags.iter().map(|t| GqlValue::from(t.as_str())).collect();
+    let tags: Vec<GqlValue> = z
+        .meta
+        .tags
+        .iter()
+        .map(|t| GqlValue::from(t.as_str()))
+        .collect();
 
     let fields: Vec<GqlValue> = z
         .inline_fields
@@ -58,7 +63,10 @@ fn zettel_to_value(z: &ParsedZettel) -> GqlValue {
             obj.insert(Name::new("target"), GqlValue::from(l.target.as_str()));
             obj.insert(
                 Name::new("display"),
-                l.display.as_deref().map(GqlValue::from).unwrap_or(GqlValue::Null),
+                l.display
+                    .as_deref()
+                    .map(GqlValue::from)
+                    .unwrap_or(GqlValue::Null),
             );
             obj.insert(Name::new("zone"), GqlValue::from(zone));
             GqlValue::Object(obj)
@@ -85,7 +93,10 @@ fn zettel_to_value(z: &ParsedZettel) -> GqlValue {
                 .filter_map(|item| {
                     let Value::Map(map) = item else { return None };
                     let name = map.get("name")?.as_str()?;
-                    let mime = map.get("mime").and_then(|v| v.as_str()).unwrap_or("application/octet-stream");
+                    let mime = map
+                        .get("mime")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("application/octet-stream");
                     let size = map.get("size").and_then(|v| v.as_f64()).unwrap_or(0.0) as i64;
                     let zid = z.meta.id.as_ref().map(|i| i.0.as_str()).unwrap_or("");
                     let url = format!("/attachments/{}/{}", zid, name);
@@ -169,30 +180,46 @@ fn typedef_to_value(s: &TableSchema) -> GqlValue {
             obj.insert(Name::new("required"), GqlValue::from(c.required));
             obj.insert(
                 Name::new("references"),
-                c.references.as_deref().map(GqlValue::from).unwrap_or(GqlValue::Null),
+                c.references
+                    .as_deref()
+                    .map(GqlValue::from)
+                    .unwrap_or(GqlValue::Null),
             );
             obj.insert(
                 Name::new("allowedValues"),
-                c.allowed_values.as_ref().map(|vals| {
-                    GqlValue::List(vals.iter().map(|v| GqlValue::from(v.as_str())).collect())
-                }).unwrap_or(GqlValue::Null),
+                c.allowed_values
+                    .as_ref()
+                    .map(|vals| {
+                        GqlValue::List(vals.iter().map(|v| GqlValue::from(v.as_str())).collect())
+                    })
+                    .unwrap_or(GqlValue::Null),
             );
             obj.insert(
                 Name::new("defaultValue"),
-                c.default_value.as_deref().map(GqlValue::from).unwrap_or(GqlValue::Null),
+                c.default_value
+                    .as_deref()
+                    .map(GqlValue::from)
+                    .unwrap_or(GqlValue::Null),
             );
             GqlValue::Object(obj)
         })
         .collect();
 
-    let sections: Vec<GqlValue> = s.template_sections.iter().map(|s| GqlValue::from(s.as_str())).collect();
+    let sections: Vec<GqlValue> = s
+        .template_sections
+        .iter()
+        .map(|s| GqlValue::from(s.as_str()))
+        .collect();
 
     let mut obj = IndexMap::new();
     obj.insert(Name::new("name"), GqlValue::from(s.table_name.as_str()));
     obj.insert(Name::new("columns"), GqlValue::List(columns));
     obj.insert(
         Name::new("crdtStrategy"),
-        s.crdt_strategy.as_deref().map(GqlValue::from).unwrap_or(GqlValue::Null),
+        s.crdt_strategy
+            .as_deref()
+            .map(GqlValue::from)
+            .unwrap_or(GqlValue::Null),
     );
     obj.insert(Name::new("templateSections"), GqlValue::List(sections));
     GqlValue::Object(obj)
@@ -220,16 +247,12 @@ fn typed_zettel_to_value(z: &ParsedZettel, schema: &TableSchema) -> GqlValue {
 fn extract_typed_field(z: &ParsedZettel, col: &ColumnDef) -> GqlValue {
     let zone = col.zone.as_ref().unwrap_or(&Zone::Frontmatter);
     let raw = match zone {
-        Zone::Frontmatter => z
-            .meta
-            .extra
-            .get(&col.name)
-            .map(|v| match v {
-                zdb_core::types::Value::String(s) => s.clone(),
-                zdb_core::types::Value::Number(n) => n.to_string(),
-                zdb_core::types::Value::Bool(b) => b.to_string(),
-                _ => String::new(),
-            }),
+        Zone::Frontmatter => z.meta.extra.get(&col.name).map(|v| match v {
+            zdb_core::types::Value::String(s) => s.clone(),
+            zdb_core::types::Value::Number(n) => n.to_string(),
+            zdb_core::types::Value::Bool(b) => b.to_string(),
+            _ => String::new(),
+        }),
         Zone::Body => {
             // Extract section content under ## {column_name}
             extract_body_section(&z.body, &col.name)
@@ -250,8 +273,14 @@ fn extract_typed_field(z: &ParsedZettel, col: &ColumnDef) -> GqlValue {
                 let b = matches!(s.to_lowercase().as_str(), "true" | "1" | "yes");
                 GqlValue::from(b)
             }
-            "INTEGER" => s.parse::<i64>().map(GqlValue::from).unwrap_or(GqlValue::Null),
-            "REAL" => s.parse::<f64>().map(GqlValue::from).unwrap_or(GqlValue::Null),
+            "INTEGER" => s
+                .parse::<i64>()
+                .map(GqlValue::from)
+                .unwrap_or(GqlValue::Null),
+            "REAL" => s
+                .parse::<f64>()
+                .map(GqlValue::from)
+                .unwrap_or(GqlValue::Null),
             _ => GqlValue::from(s),
         },
     }
@@ -275,126 +304,200 @@ fn extract_body_section(body: &str, heading: &str) -> Option<String> {
         content.push(line);
     }
     let text = content.join("\n").trim().to_string();
-    if text.is_empty() { None } else { Some(text) }
+    if text.is_empty() {
+        None
+    } else {
+        Some(text)
+    }
 }
 
 // -- Schema builder --
 
-pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader: Option<Arc<SchemaReloader>>) -> Result<Schema, String> {
+pub fn build_schema(
+    actor: ActorHandle,
+    type_schemas: Vec<TableSchema>,
+    reloader: Option<Arc<SchemaReloader>>,
+) -> Result<Schema, String> {
     let inline_field_type = Object::new("InlineField")
-        .field(Field::new("key", TypeRef::named_nn(TypeRef::STRING), |ctx| {
-            FieldFuture::new(async move {
-                let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
-                Ok(obj_field(obj, "key"))
-            })
-        }))
-        .field(Field::new("value", TypeRef::named_nn(TypeRef::STRING), |ctx| {
-            FieldFuture::new(async move {
-                let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
-                Ok(obj_field(obj, "value"))
-            })
-        }))
-        .field(Field::new("zone", TypeRef::named_nn(TypeRef::STRING), |ctx| {
-            FieldFuture::new(async move {
-                let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
-                Ok(obj_field(obj, "zone"))
-            })
-        }));
+        .field(Field::new(
+            "key",
+            TypeRef::named_nn(TypeRef::STRING),
+            |ctx| {
+                FieldFuture::new(async move {
+                    let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
+                    Ok(obj_field(obj, "key"))
+                })
+            },
+        ))
+        .field(Field::new(
+            "value",
+            TypeRef::named_nn(TypeRef::STRING),
+            |ctx| {
+                FieldFuture::new(async move {
+                    let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
+                    Ok(obj_field(obj, "value"))
+                })
+            },
+        ))
+        .field(Field::new(
+            "zone",
+            TypeRef::named_nn(TypeRef::STRING),
+            |ctx| {
+                FieldFuture::new(async move {
+                    let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
+                    Ok(obj_field(obj, "zone"))
+                })
+            },
+        ));
 
     let link_type = Object::new("Link")
-        .field(Field::new("target", TypeRef::named_nn(TypeRef::STRING), |ctx| {
-            FieldFuture::new(async move {
-                let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
-                Ok(obj_field(obj, "target"))
-            })
-        }))
-        .field(Field::new("display", TypeRef::named(TypeRef::STRING), |ctx| {
-            FieldFuture::new(async move {
-                let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
-                Ok(obj_field(obj, "display"))
-            })
-        }))
-        .field(Field::new("zone", TypeRef::named_nn(TypeRef::STRING), |ctx| {
-            FieldFuture::new(async move {
-                let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
-                Ok(obj_field(obj, "zone"))
-            })
-        }));
+        .field(Field::new(
+            "target",
+            TypeRef::named_nn(TypeRef::STRING),
+            |ctx| {
+                FieldFuture::new(async move {
+                    let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
+                    Ok(obj_field(obj, "target"))
+                })
+            },
+        ))
+        .field(Field::new(
+            "display",
+            TypeRef::named(TypeRef::STRING),
+            |ctx| {
+                FieldFuture::new(async move {
+                    let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
+                    Ok(obj_field(obj, "display"))
+                })
+            },
+        ))
+        .field(Field::new(
+            "zone",
+            TypeRef::named_nn(TypeRef::STRING),
+            |ctx| {
+                FieldFuture::new(async move {
+                    let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
+                    Ok(obj_field(obj, "zone"))
+                })
+            },
+        ));
 
     let search_hit_type = Object::new("SearchHit")
         .field(simple_field("id", TypeRef::named_nn(TypeRef::ID)))
         .field(simple_field("title", TypeRef::named_nn(TypeRef::STRING)))
         .field(simple_field("path", TypeRef::named_nn(TypeRef::STRING)))
         .field(simple_field("snippet", TypeRef::named_nn(TypeRef::STRING)))
-        .field(Field::new("rank", TypeRef::named_nn(TypeRef::FLOAT), |ctx| {
-            FieldFuture::new(async move {
-                let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
-                Ok(obj_field(obj, "rank"))
-            })
-        }));
+        .field(Field::new(
+            "rank",
+            TypeRef::named_nn(TypeRef::FLOAT),
+            |ctx| {
+                FieldFuture::new(async move {
+                    let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
+                    Ok(obj_field(obj, "rank"))
+                })
+            },
+        ));
 
     let search_connection_type = Object::new("SearchConnection")
-        .field(Field::new("hits", TypeRef::named_nn_list_nn("SearchHit"), |ctx| {
-            FieldFuture::new(async move {
-                let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
-                Ok(obj_field(obj, "hits"))
-            })
-        }))
-        .field(Field::new("totalCount", TypeRef::named_nn(TypeRef::INT), |ctx| {
-            FieldFuture::new(async move {
-                let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
-                Ok(obj_field(obj, "totalCount"))
-            })
-        }));
+        .field(Field::new(
+            "hits",
+            TypeRef::named_nn_list_nn("SearchHit"),
+            |ctx| {
+                FieldFuture::new(async move {
+                    let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
+                    Ok(obj_field(obj, "hits"))
+                })
+            },
+        ))
+        .field(Field::new(
+            "totalCount",
+            TypeRef::named_nn(TypeRef::INT),
+            |ctx| {
+                FieldFuture::new(async move {
+                    let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
+                    Ok(obj_field(obj, "totalCount"))
+                })
+            },
+        ));
 
     let column_info_type = Object::new("ColumnInfo")
         .field(simple_field("name", TypeRef::named_nn(TypeRef::STRING)))
         .field(simple_field("dataType", TypeRef::named_nn(TypeRef::STRING)))
         .field(simple_field("zone", TypeRef::named(TypeRef::STRING)))
-        .field(Field::new("required", TypeRef::named_nn(TypeRef::BOOLEAN), |ctx| {
-            FieldFuture::new(async move {
-                let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
-                Ok(obj_field(obj, "required"))
-            })
-        }))
+        .field(Field::new(
+            "required",
+            TypeRef::named_nn(TypeRef::BOOLEAN),
+            |ctx| {
+                FieldFuture::new(async move {
+                    let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
+                    Ok(obj_field(obj, "required"))
+                })
+            },
+        ))
         .field(simple_field("references", TypeRef::named(TypeRef::STRING)))
-        .field(Field::new("allowedValues", TypeRef::named_list(TypeRef::STRING), |ctx| {
-            FieldFuture::new(async move {
-                let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
-                Ok(obj_field(obj, "allowedValues"))
-            })
-        }))
-        .field(simple_field("defaultValue", TypeRef::named(TypeRef::STRING)));
+        .field(Field::new(
+            "allowedValues",
+            TypeRef::named_list(TypeRef::STRING),
+            |ctx| {
+                FieldFuture::new(async move {
+                    let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
+                    Ok(obj_field(obj, "allowedValues"))
+                })
+            },
+        ))
+        .field(simple_field(
+            "defaultValue",
+            TypeRef::named(TypeRef::STRING),
+        ));
 
     let typedef_type = Object::new("TypeDef")
         .field(simple_field("name", TypeRef::named_nn(TypeRef::STRING)))
-        .field(Field::new("columns", TypeRef::named_nn_list_nn("ColumnInfo"), |ctx| {
-            FieldFuture::new(async move {
-                let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
-                Ok(obj_field(obj, "columns"))
-            })
-        }))
-        .field(simple_field("crdtStrategy", TypeRef::named(TypeRef::STRING)))
-        .field(Field::new("templateSections", TypeRef::named_nn_list_nn(TypeRef::STRING), |ctx| {
-            FieldFuture::new(async move {
-                let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
-                Ok(obj_field(obj, "templateSections"))
-            })
-        }));
+        .field(Field::new(
+            "columns",
+            TypeRef::named_nn_list_nn("ColumnInfo"),
+            |ctx| {
+                FieldFuture::new(async move {
+                    let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
+                    Ok(obj_field(obj, "columns"))
+                })
+            },
+        ))
+        .field(simple_field(
+            "crdtStrategy",
+            TypeRef::named(TypeRef::STRING),
+        ))
+        .field(Field::new(
+            "templateSections",
+            TypeRef::named_nn_list_nn(TypeRef::STRING),
+            |ctx| {
+                FieldFuture::new(async move {
+                    let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
+                    Ok(obj_field(obj, "templateSections"))
+                })
+            },
+        ));
 
     let sql_result_type = Object::new("SqlResult")
-        .field(Field::new("rows", TypeRef::named_nn_list(TypeRef::STRING), |ctx| {
-            FieldFuture::new(async move {
-                let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
-                Ok(obj_field(obj, "rows"))
-            })
-        }))
-        .field(Field::new("affected", TypeRef::named(TypeRef::INT), |ctx| {
-            FieldFuture::new(async move {
-                let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
-                Ok(obj_field(obj, "affected"))
-            })
-        }))
+        .field(Field::new(
+            "rows",
+            TypeRef::named_nn_list(TypeRef::STRING),
+            |ctx| {
+                FieldFuture::new(async move {
+                    let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
+                    Ok(obj_field(obj, "rows"))
+                })
+            },
+        ))
+        .field(Field::new(
+            "affected",
+            TypeRef::named(TypeRef::INT),
+            |ctx| {
+                FieldFuture::new(async move {
+                    let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
+                    Ok(obj_field(obj, "affected"))
+                })
+            },
+        ))
         .field(simple_field("message", TypeRef::named(TypeRef::STRING)));
 
     let attachment_type = Object::new("Attachment")
@@ -415,14 +518,20 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
     let create_input = InputObject::new("CreateZettelInput")
         .field(InputValue::new("title", TypeRef::named_nn(TypeRef::STRING)))
         .field(InputValue::new("content", TypeRef::named(TypeRef::STRING)))
-        .field(InputValue::new("tags", TypeRef::named_list(TypeRef::STRING)))
+        .field(InputValue::new(
+            "tags",
+            TypeRef::named_list(TypeRef::STRING),
+        ))
         .field(InputValue::new("type", TypeRef::named(TypeRef::STRING)));
 
     let update_input = InputObject::new("UpdateZettelInput")
         .field(InputValue::new("id", TypeRef::named_nn(TypeRef::ID)))
         .field(InputValue::new("title", TypeRef::named(TypeRef::STRING)))
         .field(InputValue::new("content", TypeRef::named(TypeRef::STRING)))
-        .field(InputValue::new("tags", TypeRef::named_list(TypeRef::STRING)))
+        .field(InputValue::new(
+            "tags",
+            TypeRef::named_list(TypeRef::STRING),
+        ))
         .field(InputValue::new("type", TypeRef::named(TypeRef::STRING)));
 
     // -- Query fields --
@@ -451,9 +560,21 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
             Field::new("zettels", TypeRef::named_nn_list_nn("Zettel"), |ctx| {
                 FieldFuture::new(async move {
                     let a = ctx.data::<ActorHandle>()?;
-                    let zettel_type = ctx.args.get("type").and_then(|v| v.string().ok()).map(|s| s.to_string());
-                    let tag = ctx.args.get("tag").and_then(|v| v.string().ok()).map(|s| s.to_string());
-                    let backlinks_of = ctx.args.get("backlinksOf").and_then(|v| v.string().ok()).map(|s| s.to_string());
+                    let zettel_type = ctx
+                        .args
+                        .get("type")
+                        .and_then(|v| v.string().ok())
+                        .map(|s| s.to_string());
+                    let tag = ctx
+                        .args
+                        .get("tag")
+                        .and_then(|v| v.string().ok())
+                        .map(|s| s.to_string());
+                    let backlinks_of = ctx
+                        .args
+                        .get("backlinksOf")
+                        .and_then(|v| v.string().ok())
+                        .map(|s| s.to_string());
                     let limit = ctx.args.get("limit").and_then(|v| v.i64().ok());
                     let offset = ctx.args.get("offset").and_then(|v| v.i64().ok());
                     let zettels = a
@@ -461,7 +582,9 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
                         .await
                         .map_err(to_server_error)?;
                     Ok(Some(FieldValue::list(
-                        zettels.iter().map(|z| FieldValue::owned_any(zettel_to_value(z))),
+                        zettels
+                            .iter()
+                            .map(|z| FieldValue::owned_any(zettel_to_value(z))),
                     )))
                 })
             })
@@ -480,8 +603,16 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
                 FieldFuture::new(async move {
                     let a = ctx.data::<ActorHandle>()?;
                     let q = ctx.args.try_get("query")?.string()?.to_string();
-                    let limit = ctx.args.get("limit").and_then(|v| v.i64().ok()).unwrap_or(20) as usize;
-                    let offset = ctx.args.get("offset").and_then(|v| v.i64().ok()).unwrap_or(0) as usize;
+                    let limit = ctx
+                        .args
+                        .get("limit")
+                        .and_then(|v| v.i64().ok())
+                        .unwrap_or(20) as usize;
+                    let offset = ctx
+                        .args
+                        .get("offset")
+                        .and_then(|v| v.i64().ok())
+                        .unwrap_or(0) as usize;
                     let result = a.search(q, limit, offset).await.map_err(to_server_error)?;
                     let mut obj = IndexMap::new();
                     obj.insert(
@@ -503,15 +634,21 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
 
     // typeDefs
     {
-        query = query.field(Field::new("typeDefs", TypeRef::named_nn_list_nn("TypeDef"), |ctx| {
-            FieldFuture::new(async move {
-                let a = ctx.data::<ActorHandle>()?;
-                let schemas = a.get_type_schemas().await.map_err(to_server_error)?;
-                Ok(Some(FieldValue::list(
-                    schemas.iter().map(|s| FieldValue::owned_any(typedef_to_value(s))),
-                )))
-            })
-        }));
+        query = query.field(Field::new(
+            "typeDefs",
+            TypeRef::named_nn_list_nn("TypeDef"),
+            |ctx| {
+                FieldFuture::new(async move {
+                    let a = ctx.data::<ActorHandle>()?;
+                    let schemas = a.get_type_schemas().await.map_err(to_server_error)?;
+                    Ok(Some(FieldValue::list(
+                        schemas
+                            .iter()
+                            .map(|s| FieldValue::owned_any(typedef_to_value(s))),
+                    )))
+                })
+            },
+        ));
     }
 
     // sql(query)
@@ -538,7 +675,7 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
                 FieldFuture::new(async move {
                     let reloader = ctx.data::<Arc<SchemaReloader>>()?;
                     Ok(Some(FieldValue::value(GqlValue::from(
-                        reloader.version() as i64,
+                        reloader.version() as i64
                     ))))
                 })
             },
@@ -586,79 +723,98 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
             let type_name_clone = type_name.clone();
             let table_name = table_name.clone();
             query = query.field(
-                Field::new(&plural, TypeRef::named_nn(&connection_type_name), move |ctx| {
-                    let schema_clone = schema_clone.clone();
-                    let _type_name = type_name_clone.clone();
-                    let table_name = table_name.clone();
-                    FieldFuture::new(async move {
-                        let a = ctx.data::<ActorHandle>()?;
-                        let tag = ctx.args.get("tag").and_then(|v| v.string().ok()).map(|s| s.to_string());
-                        let limit = ctx.args.get("limit").and_then(|v| v.i64().ok());
-                        let offset = ctx.args.get("offset").and_then(|v| v.i64().ok());
+                Field::new(
+                    &plural,
+                    TypeRef::named_nn(&connection_type_name),
+                    move |ctx| {
+                        let schema_clone = schema_clone.clone();
+                        let _type_name = type_name_clone.clone();
+                        let table_name = table_name.clone();
+                        FieldFuture::new(async move {
+                            let a = ctx.data::<ActorHandle>()?;
+                            let tag = ctx
+                                .args
+                                .get("tag")
+                                .and_then(|v| v.string().ok())
+                                .map(|s| s.to_string());
+                            let limit = ctx.args.get("limit").and_then(|v| v.i64().ok());
+                            let offset = ctx.args.get("offset").and_then(|v| v.i64().ok());
 
-                        // Parse optional orderBy
-                        let order_sql = ctx.args.get("orderBy")
-                            .and_then(|v| v.deserialize::<GqlValue>().ok())
-                            .and_then(|v| crate::filter::build_order_sql(&v, &schema_clone));
+                            // Parse optional orderBy
+                            let order_sql = ctx
+                                .args
+                                .get("orderBy")
+                                .and_then(|v| v.deserialize::<GqlValue>().ok())
+                                .and_then(|v| crate::filter::build_order_sql(&v, &schema_clone));
 
-                        // Build where clause
-                        let where_val = ctx.args.get("where").map(|v| v.deserialize::<GqlValue>());
-                        let wc = match &where_val {
-                            Some(Ok(ref filter_input)) => {
-                                crate::filter::build_where_sql(filter_input, &schema_clone)
+                            // Build where clause
+                            let where_val =
+                                ctx.args.get("where").map(|v| v.deserialize::<GqlValue>());
+                            let wc = match &where_val {
+                                Some(Ok(ref filter_input)) => {
+                                    crate::filter::build_where_sql(filter_input, &schema_clone)
+                                }
+                                _ => crate::filter::WhereClause::empty(),
+                            };
+
+                            // Fetch items (always use filtered_list — supports where + tag + orderBy)
+                            let zettels = a
+                                .filtered_list(
+                                    table_name.clone(),
+                                    wc.sql.clone(),
+                                    wc.params.clone(),
+                                    order_sql,
+                                    tag.clone(),
+                                    limit,
+                                    offset,
+                                )
+                                .await
+                                .map_err(to_server_error)?;
+
+                            // Fetch totalCount (same where + tag filters, no limit/offset)
+                            let mut count_conditions = Vec::new();
+                            if !wc.sql.is_empty() {
+                                count_conditions.push(wc.sql.clone());
                             }
-                            _ => crate::filter::WhereClause::empty(),
-                        };
+                            if let Some(ref t) = tag {
+                                count_conditions.push(format!(
+                                    "id IN (SELECT zettel_id FROM _zdb_tags WHERE tag = '{}')",
+                                    t.replace('\'', "''")
+                                ));
+                            }
+                            let count_where = if count_conditions.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" WHERE {}", count_conditions.join(" AND "))
+                            };
+                            let count_sql =
+                                format!("SELECT COUNT(*) FROM \"{table_name}\"{count_where}");
+                            let count_row = a
+                                .aggregate_query(count_sql, wc.params)
+                                .await
+                                .map_err(to_server_error)?;
+                            let total_count: i64 =
+                                count_row.first().and_then(|s| s.parse().ok()).unwrap_or(0);
 
-                        // Fetch items (always use filtered_list — supports where + tag + orderBy)
-                        let zettels = a.filtered_list(
-                            table_name.clone(),
-                            wc.sql.clone(),
-                            wc.params.clone(),
-                            order_sql,
-                            tag.clone(),
-                            limit,
-                            offset,
-                        )
-                        .await
-                        .map_err(to_server_error)?;
+                            let items = GqlValue::List(
+                                zettels
+                                    .iter()
+                                    .map(|z| typed_zettel_to_value(z, &schema_clone))
+                                    .collect(),
+                            );
+                            let mut conn = IndexMap::new();
+                            conn.insert(Name::new("items"), items);
+                            conn.insert(Name::new("totalCount"), GqlValue::from(total_count));
 
-                        // Fetch totalCount (same where + tag filters, no limit/offset)
-                        let mut count_conditions = Vec::new();
-                        if !wc.sql.is_empty() {
-                            count_conditions.push(wc.sql.clone());
-                        }
-                        if let Some(ref t) = tag {
-                            count_conditions.push(format!(
-                                "id IN (SELECT zettel_id FROM _zdb_tags WHERE tag = '{}')",
-                                t.replace('\'', "''")
-                            ));
-                        }
-                        let count_where = if count_conditions.is_empty() {
-                            String::new()
-                        } else {
-                            format!(" WHERE {}", count_conditions.join(" AND "))
-                        };
-                        let count_sql = format!("SELECT COUNT(*) FROM \"{table_name}\"{count_where}");
-                        let count_row = a.aggregate_query(count_sql, wc.params).await.map_err(to_server_error)?;
-                        let total_count: i64 = count_row.first()
-                            .and_then(|s| s.parse().ok())
-                            .unwrap_or(0);
-
-                        let items = GqlValue::List(
-                            zettels.iter()
-                                .map(|z| typed_zettel_to_value(z, &schema_clone))
-                                .collect(),
-                        );
-                        let mut conn = IndexMap::new();
-                        conn.insert(Name::new("items"), items);
-                        conn.insert(Name::new("totalCount"), GqlValue::from(total_count));
-
-                        Ok(Some(FieldValue::owned_any(GqlValue::Object(conn))))
-                    })
-                })
+                            Ok(Some(FieldValue::owned_any(GqlValue::Object(conn))))
+                        })
+                    },
+                )
                 .argument(InputValue::new("where", TypeRef::named(&where_type_name)))
-                .argument(InputValue::new("orderBy", TypeRef::named(&order_by_type_name)))
+                .argument(InputValue::new(
+                    "orderBy",
+                    TypeRef::named(&order_by_type_name),
+                ))
                 .argument(InputValue::new("tag", TypeRef::named(TypeRef::STRING)))
                 .argument(InputValue::new("limit", TypeRef::named(TypeRef::INT)))
                 .argument(InputValue::new("offset", TypeRef::named(TypeRef::INT))),
@@ -679,13 +835,19 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
                         let table_name = table_name2.clone();
                         FieldFuture::new(async move {
                             let a = ctx.data::<ActorHandle>()?;
-                            let wc = ctx.args.get("where")
+                            let wc = ctx
+                                .args
+                                .get("where")
                                 .and_then(|v| v.deserialize::<GqlValue>().ok())
                                 .map(|v| crate::filter::build_where_sql(&v, &schema_clone))
                                 .unwrap_or_else(crate::filter::WhereClause::empty);
 
-                            let (sql, names) = crate::filter::build_aggregate_sql(&table_name, &schema_clone, &wc);
-                            let row = a.aggregate_query(sql, wc.params).await.map_err(to_server_error)?;
+                            let (sql, names) =
+                                crate::filter::build_aggregate_sql(&table_name, &schema_clone, &wc);
+                            let row = a
+                                .aggregate_query(sql, wc.params)
+                                .await
+                                .map_err(to_server_error)?;
                             let val = crate::filter::aggregate_row_to_value(&row, &names);
                             Ok(Some(FieldValue::owned_any(val)))
                         })
@@ -708,13 +870,23 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
                     let input = ctx.args.try_get("input")?;
                     let input = input.object()?;
                     let title = input.try_get("title")?.string()?.to_string();
-                    let content = input.get("content").and_then(|v| v.string().ok()).map(|s| s.to_string());
+                    let content = input
+                        .get("content")
+                        .and_then(|v| v.string().ok())
+                        .map(|s| s.to_string());
                     let tags = input
                         .get("tags")
                         .and_then(|v| v.list().ok())
-                        .map(|l| l.iter().filter_map(|v| v.string().ok().map(|s| s.to_string())).collect())
+                        .map(|l| {
+                            l.iter()
+                                .filter_map(|v| v.string().ok().map(|s| s.to_string()))
+                                .collect()
+                        })
                         .unwrap_or_default();
-                    let zettel_type = input.get("type").and_then(|v| v.string().ok()).map(|s| s.to_string());
+                    let zettel_type = input
+                        .get("type")
+                        .and_then(|v| v.string().ok())
+                        .map(|s| s.to_string());
                     let z = a
                         .create_zettel(title, content, tags, zettel_type)
                         .await
@@ -722,7 +894,10 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
                     Ok(Some(FieldValue::owned_any(zettel_to_value(&z))))
                 })
             })
-            .argument(InputValue::new("input", TypeRef::named_nn("CreateZettelInput"))),
+            .argument(InputValue::new(
+                "input",
+                TypeRef::named_nn("CreateZettelInput"),
+            )),
         );
     }
 
@@ -735,13 +910,23 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
                     let input = ctx.args.try_get("input")?;
                     let input = input.object()?;
                     let id = input.try_get("id")?.string()?.to_string();
-                    let title = input.get("title").and_then(|v| v.string().ok()).map(|s| s.to_string());
-                    let content = input.get("content").and_then(|v| v.string().ok()).map(|s| s.to_string());
-                    let tags = input
-                        .get("tags")
-                        .and_then(|v| v.list().ok())
-                        .map(|l| l.iter().filter_map(|v| v.string().ok().map(|s| s.to_string())).collect());
-                    let zettel_type = input.get("type").and_then(|v| v.string().ok()).map(|s| s.to_string());
+                    let title = input
+                        .get("title")
+                        .and_then(|v| v.string().ok())
+                        .map(|s| s.to_string());
+                    let content = input
+                        .get("content")
+                        .and_then(|v| v.string().ok())
+                        .map(|s| s.to_string());
+                    let tags = input.get("tags").and_then(|v| v.list().ok()).map(|l| {
+                        l.iter()
+                            .filter_map(|v| v.string().ok().map(|s| s.to_string()))
+                            .collect()
+                    });
+                    let zettel_type = input
+                        .get("type")
+                        .and_then(|v| v.string().ok())
+                        .map(|s| s.to_string());
                     let z = a
                         .update_zettel(id, title, content, tags, zettel_type)
                         .await
@@ -749,7 +934,10 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
                     Ok(Some(FieldValue::owned_any(zettel_to_value(&z))))
                 })
             })
-            .argument(InputValue::new("input", TypeRef::named_nn("UpdateZettelInput"))),
+            .argument(InputValue::new(
+                "input",
+                TypeRef::named_nn("UpdateZettelInput"),
+            )),
         );
     }
 
@@ -772,8 +960,14 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
     {
         let attach_input = InputObject::new("AttachFileInput")
             .field(InputValue::new("zettelId", TypeRef::named_nn(TypeRef::ID)))
-            .field(InputValue::new("filename", TypeRef::named_nn(TypeRef::STRING)))
-            .field(InputValue::new("dataBase64", TypeRef::named_nn(TypeRef::STRING)))
+            .field(InputValue::new(
+                "filename",
+                TypeRef::named_nn(TypeRef::STRING),
+            ))
+            .field(InputValue::new(
+                "dataBase64",
+                TypeRef::named_nn(TypeRef::STRING),
+            ))
             .field(InputValue::new("mime", TypeRef::named(TypeRef::STRING)));
 
         mutation = mutation.field(
@@ -785,13 +979,21 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
                     let zettel_id = input.try_get("zettelId")?.string()?.to_string();
                     let filename = input.try_get("filename")?.string()?.to_string();
                     let data_b64 = input.try_get("dataBase64")?.string()?.to_string();
-                    let bytes = base64_engine::STANDARD.decode(&data_b64)
-                        .map_err(|e| async_graphql::ServerError::new(format!("invalid base64: {e}"), None))?;
-                    let mime = input.get("mime")
+                    let bytes = base64_engine::STANDARD.decode(&data_b64).map_err(|e| {
+                        async_graphql::ServerError::new(format!("invalid base64: {e}"), None)
+                    })?;
+                    let mime = input
+                        .get("mime")
                         .and_then(|v| v.string().ok())
                         .map(|s| s.to_string())
-                        .unwrap_or_else(|| zdb_core::types::AttachmentInfo::mime_from_filename(&filename).to_string());
-                    let info = a.attach_file(zettel_id, filename, bytes, mime).await.map_err(to_server_error)?;
+                        .unwrap_or_else(|| {
+                            zdb_core::types::AttachmentInfo::mime_from_filename(&filename)
+                                .to_string()
+                        });
+                    let info = a
+                        .attach_file(zettel_id, filename, bytes, mime)
+                        .await
+                        .map_err(to_server_error)?;
                     let zid = &info.path.split('/').nth(1).unwrap_or("");
                     let url = format!("/attachments/{}/{}", zid, info.name);
                     let mut obj = IndexMap::new();
@@ -802,7 +1004,10 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
                     Ok(Some(FieldValue::owned_any(GqlValue::Object(obj))))
                 })
             })
-            .argument(InputValue::new("input", TypeRef::named_nn("AttachFileInput"))),
+            .argument(InputValue::new(
+                "input",
+                TypeRef::named_nn("AttachFileInput"),
+            )),
         );
 
         // Register attach input type
@@ -819,12 +1024,17 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
                     let a = ctx.data::<ActorHandle>()?;
                     let zettel_id = ctx.args.try_get("zettelId")?.string()?.to_string();
                     let filename = ctx.args.try_get("filename")?.string()?.to_string();
-                    a.detach_file(zettel_id, filename).await.map_err(to_server_error)?;
+                    a.detach_file(zettel_id, filename)
+                        .await
+                        .map_err(to_server_error)?;
                     Ok(Some(FieldValue::value(GqlValue::from(true))))
                 })
             })
             .argument(InputValue::new("zettelId", TypeRef::named_nn(TypeRef::ID)))
-            .argument(InputValue::new("filename", TypeRef::named_nn(TypeRef::STRING))),
+            .argument(InputValue::new(
+                "filename",
+                TypeRef::named_nn(TypeRef::STRING),
+            )),
         );
     }
 
@@ -857,16 +1067,34 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
 
     // -- SyncResult output type --
     let sync_result_type = Object::new("SyncResult")
-        .field(simple_field("direction", TypeRef::named_nn(TypeRef::STRING)))
-        .field(simple_field("commitsTransferred", TypeRef::named_nn(TypeRef::INT)))
-        .field(simple_field("conflictsResolved", TypeRef::named_nn(TypeRef::INT)))
+        .field(simple_field(
+            "direction",
+            TypeRef::named_nn(TypeRef::STRING),
+        ))
+        .field(simple_field(
+            "commitsTransferred",
+            TypeRef::named_nn(TypeRef::INT),
+        ))
+        .field(simple_field(
+            "conflictsResolved",
+            TypeRef::named_nn(TypeRef::INT),
+        ))
         .field(simple_field("resurrected", TypeRef::named_nn(TypeRef::INT)));
 
     // -- CompactResult output type --
     let compact_result_type = Object::new("CompactResult")
-        .field(simple_field("filesRemoved", TypeRef::named_nn(TypeRef::INT)))
-        .field(simple_field("crdtDocsCompacted", TypeRef::named_nn(TypeRef::INT)))
-        .field(simple_field("gcSuccess", TypeRef::named_nn(TypeRef::BOOLEAN)));
+        .field(simple_field(
+            "filesRemoved",
+            TypeRef::named_nn(TypeRef::INT),
+        ))
+        .field(simple_field(
+            "crdtDocsCompacted",
+            TypeRef::named_nn(TypeRef::INT),
+        ))
+        .field(simple_field(
+            "gcSuccess",
+            TypeRef::named_nn(TypeRef::BOOLEAN),
+        ));
 
     // sync mutation
     {
@@ -874,20 +1102,36 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
             Field::new("sync", TypeRef::named_nn("SyncResult"), |ctx| {
                 FieldFuture::new(async move {
                     let a = ctx.data::<ActorHandle>()?;
-                    let remote = ctx.args.get("remote")
+                    let remote = ctx
+                        .args
+                        .get("remote")
                         .and_then(|v| v.string().ok())
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| "origin".to_string());
-                    let branch = ctx.args.get("branch")
+                    let branch = ctx
+                        .args
+                        .get("branch")
                         .and_then(|v| v.string().ok())
                         .map(|s| s.to_string())
                         .unwrap_or_else(|| "master".to_string());
                     let report = a.sync(remote, branch).await.map_err(to_server_error)?;
                     let mut obj = IndexMap::new();
-                    obj.insert(Name::new("direction"), GqlValue::from(report.direction.as_str()));
-                    obj.insert(Name::new("commitsTransferred"), GqlValue::from(report.commits_transferred as i64));
-                    obj.insert(Name::new("conflictsResolved"), GqlValue::from(report.conflicts_resolved as i64));
-                    obj.insert(Name::new("resurrected"), GqlValue::from(report.resurrected as i64));
+                    obj.insert(
+                        Name::new("direction"),
+                        GqlValue::from(report.direction.as_str()),
+                    );
+                    obj.insert(
+                        Name::new("commitsTransferred"),
+                        GqlValue::from(report.commits_transferred as i64),
+                    );
+                    obj.insert(
+                        Name::new("conflictsResolved"),
+                        GqlValue::from(report.conflicts_resolved as i64),
+                    );
+                    obj.insert(
+                        Name::new("resurrected"),
+                        GqlValue::from(report.resurrected as i64),
+                    );
                     Ok(Some(FieldValue::owned_any(GqlValue::Object(obj))))
                 })
             })
@@ -902,13 +1146,21 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
             Field::new("compact", TypeRef::named_nn("CompactResult"), |ctx| {
                 FieldFuture::new(async move {
                     let a = ctx.data::<ActorHandle>()?;
-                    let force = ctx.args.get("force")
+                    let force = ctx
+                        .args
+                        .get("force")
                         .and_then(|v| v.boolean().ok())
                         .unwrap_or(false);
                     let report = a.run_maintenance(force).await.map_err(to_server_error)?;
                     let mut obj = IndexMap::new();
-                    obj.insert(Name::new("filesRemoved"), GqlValue::from(report.files_removed as i64));
-                    obj.insert(Name::new("crdtDocsCompacted"), GqlValue::from(report.crdt_docs_compacted as i64));
+                    obj.insert(
+                        Name::new("filesRemoved"),
+                        GqlValue::from(report.files_removed as i64),
+                    );
+                    obj.insert(
+                        Name::new("crdtDocsCompacted"),
+                        GqlValue::from(report.crdt_docs_compacted as i64),
+                    );
                     obj.insert(Name::new("gcSuccess"), GqlValue::from(report.gc_success));
                     Ok(Some(FieldValue::owned_any(GqlValue::Object(obj))))
                 })
@@ -942,31 +1194,36 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
                 let event_bus = handle.event_bus().clone();
                 let actor = handle;
                 let rx = event_bus.subscribe();
-                let stream = event_stream(rx)
-                    .then(move |result| {
-                        let actor = actor.clone();
-                        async move {
-                            let event = result?;
-                            let action = match event.kind {
-                                EventKind::Created => "created",
-                                EventKind::Updated => "updated",
-                                EventKind::Deleted => "deleted",
-                            };
-                            let zettel = if event.kind != EventKind::Deleted {
-                                actor.get_zettel(event.zettel_id.clone()).await.ok()
-                                    .map(|z| zettel_to_value(&z))
-                            } else {
-                                None
-                            };
-                            let mut map = IndexMap::new();
-                            map.insert(Name::new("action"), GqlValue::from(action));
-                            map.insert(Name::new("zettelId"), GqlValue::from(event.zettel_id.as_str()));
-                            if let Some(z) = zettel {
-                                map.insert(Name::new("zettel"), z);
-                            }
-                            Ok(FieldValue::owned_any(GqlValue::Object(map)))
+                let stream = event_stream(rx).then(move |result| {
+                    let actor = actor.clone();
+                    async move {
+                        let event = result?;
+                        let action = match event.kind {
+                            EventKind::Created => "created",
+                            EventKind::Updated => "updated",
+                            EventKind::Deleted => "deleted",
+                        };
+                        let zettel = if event.kind != EventKind::Deleted {
+                            actor
+                                .get_zettel(event.zettel_id.clone())
+                                .await
+                                .ok()
+                                .map(|z| zettel_to_value(&z))
+                        } else {
+                            None
+                        };
+                        let mut map = IndexMap::new();
+                        map.insert(Name::new("action"), GqlValue::from(action));
+                        map.insert(
+                            Name::new("zettelId"),
+                            GqlValue::from(event.zettel_id.as_str()),
+                        );
+                        if let Some(z) = zettel {
+                            map.insert(Name::new("zettel"), z);
                         }
-                    });
+                        Ok(FieldValue::owned_any(GqlValue::Object(map)))
+                    }
+                });
                 Ok(stream)
             })
         },
@@ -983,16 +1240,17 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
                 let event_bus = handle.event_bus().clone();
                 let actor = handle;
                 let rx = event_bus.subscribe();
-                let stream = event_stream(rx)
-                    .filter_map(move |result| {
-                        let actor = actor.clone();
-                        async move {
-                            let event = result.ok()?;
-                            if event.kind != EventKind::Created { return None; }
-                            let z = actor.get_zettel(event.zettel_id).await.ok()?;
-                            Some(Ok(FieldValue::owned_any(zettel_to_value(&z))))
+                let stream = event_stream(rx).filter_map(move |result| {
+                    let actor = actor.clone();
+                    async move {
+                        let event = result.ok()?;
+                        if event.kind != EventKind::Created {
+                            return None;
                         }
-                    });
+                        let z = actor.get_zettel(event.zettel_id).await.ok()?;
+                        Some(Ok(FieldValue::owned_any(zettel_to_value(&z))))
+                    }
+                });
                 Ok(stream)
             })
         },
@@ -1009,16 +1267,17 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
                 let event_bus = handle.event_bus().clone();
                 let actor = handle;
                 let rx = event_bus.subscribe();
-                let stream = event_stream(rx)
-                    .filter_map(move |result| {
-                        let actor = actor.clone();
-                        async move {
-                            let event = result.ok()?;
-                            if event.kind != EventKind::Updated { return None; }
-                            let z = actor.get_zettel(event.zettel_id).await.ok()?;
-                            Some(Ok(FieldValue::owned_any(zettel_to_value(&z))))
+                let stream = event_stream(rx).filter_map(move |result| {
+                    let actor = actor.clone();
+                    async move {
+                        let event = result.ok()?;
+                        if event.kind != EventKind::Updated {
+                            return None;
                         }
-                    });
+                        let z = actor.get_zettel(event.zettel_id).await.ok()?;
+                        Some(Ok(FieldValue::owned_any(zettel_to_value(&z))))
+                    }
+                });
                 Ok(stream)
             })
         },
@@ -1034,12 +1293,15 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
                 let handle = handle?;
                 let event_bus = handle.event_bus().clone();
                 let rx = event_bus.subscribe();
-                let stream = event_stream(rx)
-                    .filter_map(|result| async move {
-                        let event = result.ok()?;
-                        if event.kind != EventKind::Deleted { return None; }
-                        Some(Ok(FieldValue::value(GqlValue::from(event.zettel_id.as_str()))))
-                    });
+                let stream = event_stream(rx).filter_map(|result| async move {
+                    let event = result.ok()?;
+                    if event.kind != EventKind::Deleted {
+                        return None;
+                    }
+                    Some(Ok(FieldValue::value(GqlValue::from(
+                        event.zettel_id.as_str(),
+                    ))))
+                });
                 Ok(stream)
             })
         },
@@ -1064,35 +1326,40 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
                     let event_bus = handle.event_bus().clone();
                     let actor = handle;
                     let rx = event_bus.subscribe();
-                    let stream = event_stream(rx)
-                        .filter_map(move |result| {
-                            let actor = actor.clone();
-                            let table_name = table_name.clone();
-                            async move {
-                                let event = result.ok()?;
-                                if event.zettel_type.as_deref() != Some(&table_name) {
-                                    return None;
-                                }
-                                let action = match event.kind {
-                                    EventKind::Created => "created",
-                                    EventKind::Updated => "updated",
-                                    EventKind::Deleted => "deleted",
-                                };
-                                let zettel = if event.kind != EventKind::Deleted {
-                                    actor.get_zettel(event.zettel_id.clone()).await.ok()
-                                        .map(|z| zettel_to_value(&z))
-                                } else {
-                                    None
-                                };
-                                let mut map = IndexMap::new();
-                                map.insert(Name::new("action"), GqlValue::from(action));
-                                map.insert(Name::new("zettelId"), GqlValue::from(event.zettel_id.as_str()));
-                                if let Some(z) = zettel {
-                                    map.insert(Name::new("zettel"), z);
-                                }
-                                Some(Ok(FieldValue::owned_any(GqlValue::Object(map))))
+                    let stream = event_stream(rx).filter_map(move |result| {
+                        let actor = actor.clone();
+                        let table_name = table_name.clone();
+                        async move {
+                            let event = result.ok()?;
+                            if event.zettel_type.as_deref() != Some(&table_name) {
+                                return None;
                             }
-                        });
+                            let action = match event.kind {
+                                EventKind::Created => "created",
+                                EventKind::Updated => "updated",
+                                EventKind::Deleted => "deleted",
+                            };
+                            let zettel = if event.kind != EventKind::Deleted {
+                                actor
+                                    .get_zettel(event.zettel_id.clone())
+                                    .await
+                                    .ok()
+                                    .map(|z| zettel_to_value(&z))
+                            } else {
+                                None
+                            };
+                            let mut map = IndexMap::new();
+                            map.insert(Name::new("action"), GqlValue::from(action));
+                            map.insert(
+                                Name::new("zettelId"),
+                                GqlValue::from(event.zettel_id.as_str()),
+                            );
+                            if let Some(z) = zettel {
+                                map.insert(Name::new("zettel"), z);
+                            }
+                            Some(Ok(FieldValue::owned_any(GqlValue::Object(map))))
+                        }
+                    });
                     Ok(stream)
                 })
             },
@@ -1100,32 +1367,36 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
     }
 
     // -- Build schema --
-    let mut builder = Schema::build(query.type_name(), Some(mutation.type_name()), Some(subscription.type_name()))
-        .register(zettel_type)
-        .register(inline_field_type)
-        .register(link_type)
-        .register(search_hit_type)
-        .register(search_connection_type)
-        .register(column_info_type)
-        .register(typedef_type)
-        .register(sql_result_type)
-        .register(create_input)
-        .register(update_input)
-        .register(attachment_type)
-        .register(change_event_type)
-        .register(sync_result_type)
-        .register(compact_result_type)
-        // Shared filter/sort types
-        .register(crate::filter::string_filter())
-        .register(crate::filter::int_filter())
-        .register(crate::filter::float_filter())
-        .register(crate::filter::bool_filter())
-        .register(crate::filter::id_filter())
-        .register(crate::filter::sort_order_enum())
-        .register(query)
-        .register(mutation)
-        .register(subscription)
-        .data(actor);
+    let mut builder = Schema::build(
+        query.type_name(),
+        Some(mutation.type_name()),
+        Some(subscription.type_name()),
+    )
+    .register(zettel_type)
+    .register(inline_field_type)
+    .register(link_type)
+    .register(search_hit_type)
+    .register(search_connection_type)
+    .register(column_info_type)
+    .register(typedef_type)
+    .register(sql_result_type)
+    .register(create_input)
+    .register(update_input)
+    .register(attachment_type)
+    .register(change_event_type)
+    .register(sync_result_type)
+    .register(compact_result_type)
+    // Shared filter/sort types
+    .register(crate::filter::string_filter())
+    .register(crate::filter::int_filter())
+    .register(crate::filter::float_filter())
+    .register(crate::filter::bool_filter())
+    .register(crate::filter::id_filter())
+    .register(crate::filter::sort_order_enum())
+    .register(query)
+    .register(mutation)
+    .register(subscription)
+    .data(actor);
 
     for typed_obj in dynamic_types {
         builder = builder.register(typed_obj);
@@ -1187,32 +1458,48 @@ fn zettel_object(name: &str) -> Object {
         .field(simple_field("title", TypeRef::named(TypeRef::STRING)))
         .field(simple_field("date", TypeRef::named(TypeRef::STRING)))
         .field(simple_field("type", TypeRef::named(TypeRef::STRING)))
-        .field(Field::new("tags", TypeRef::named_nn_list_nn(TypeRef::STRING), |ctx| {
-            FieldFuture::new(async move {
-                let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
-                Ok(obj_field(obj, "tags"))
-            })
-        }))
+        .field(Field::new(
+            "tags",
+            TypeRef::named_nn_list_nn(TypeRef::STRING),
+            |ctx| {
+                FieldFuture::new(async move {
+                    let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
+                    Ok(obj_field(obj, "tags"))
+                })
+            },
+        ))
         .field(simple_field("body", TypeRef::named_nn(TypeRef::STRING)))
         .field(simple_field("path", TypeRef::named_nn(TypeRef::STRING)))
-        .field(Field::new("fields", TypeRef::named_nn_list_nn("InlineField"), |ctx| {
-            FieldFuture::new(async move {
-                let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
-                Ok(obj_field(obj, "fields"))
-            })
-        }))
-        .field(Field::new("links", TypeRef::named_nn_list_nn("Link"), |ctx| {
-            FieldFuture::new(async move {
-                let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
-                Ok(obj_field(obj, "links"))
-            })
-        }))
-        .field(Field::new("attachments", TypeRef::named_nn_list_nn("Attachment"), |ctx| {
-            FieldFuture::new(async move {
-                let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
-                Ok(obj_field(obj, "attachments"))
-            })
-        }))
+        .field(Field::new(
+            "fields",
+            TypeRef::named_nn_list_nn("InlineField"),
+            |ctx| {
+                FieldFuture::new(async move {
+                    let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
+                    Ok(obj_field(obj, "fields"))
+                })
+            },
+        ))
+        .field(Field::new(
+            "links",
+            TypeRef::named_nn_list_nn("Link"),
+            |ctx| {
+                FieldFuture::new(async move {
+                    let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
+                    Ok(obj_field(obj, "links"))
+                })
+            },
+        ))
+        .field(Field::new(
+            "attachments",
+            TypeRef::named_nn_list_nn("Attachment"),
+            |ctx| {
+                FieldFuture::new(async move {
+                    let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
+                    Ok(obj_field(obj, "attachments"))
+                })
+            },
+        ))
 }
 
 /// Build a dynamic GraphQL object type for a _typedef schema.

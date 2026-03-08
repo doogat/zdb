@@ -22,12 +22,24 @@ impl Hlc {
         match last {
             Some(prev) => {
                 if wall > prev.wall_ms {
-                    Hlc { wall_ms: wall, counter: 0, node }
+                    Hlc {
+                        wall_ms: wall,
+                        counter: 0,
+                        node,
+                    }
                 } else {
-                    Hlc { wall_ms: prev.wall_ms, counter: prev.counter + 1, node }
+                    Hlc {
+                        wall_ms: prev.wall_ms,
+                        counter: prev.counter + 1,
+                        node,
+                    }
                 }
             }
-            None => Hlc { wall_ms: wall, counter: 0, node },
+            None => Hlc {
+                wall_ms: wall,
+                counter: 0,
+                node,
+            },
         }
     }
 
@@ -52,7 +64,11 @@ impl Hlc {
             0
         };
 
-        Hlc { wall_ms: max_wall, counter, node }
+        Hlc {
+            wall_ms: max_wall,
+            counter,
+            node,
+        }
     }
 
     /// Parse from sortable string format: `{wall_ms}-{counter:04}-{node}`.
@@ -68,7 +84,11 @@ impl Hlc {
             .parse::<u32>()
             .map_err(|e| ZettelError::Parse(format!("bad HLC counter: {e}")))?;
         let node = parts[2].to_string();
-        Ok(Hlc { wall_ms, counter, node })
+        Ok(Hlc {
+            wall_ms,
+            counter,
+            node,
+        })
     }
 }
 
@@ -146,8 +166,16 @@ mod tests {
 
     #[test]
     fn recv_merges_correctly() {
-        let local = Hlc { wall_ms: 100, counter: 3, node: "aaaaaaaa".into() };
-        let remote = Hlc { wall_ms: 100, counter: 5, node: "bbbbbbbb".into() };
+        let local = Hlc {
+            wall_ms: 100,
+            counter: 3,
+            node: "aaaaaaaa".into(),
+        };
+        let remote = Hlc {
+            wall_ms: 100,
+            counter: 5,
+            node: "bbbbbbbb".into(),
+        };
         let merged = Hlc::recv("aaaaaaaa", &Some(local), &remote);
         // max(wall_clock, 100, 100) — if wall_clock <= 100, counter = max(3,5)+1 = 6
         assert!(merged.counter >= 6 || merged.wall_ms > 100);
@@ -156,7 +184,11 @@ mod tests {
 
     #[test]
     fn string_round_trip() {
-        let hlc = Hlc { wall_ms: 1709000000000, counter: 42, node: "abcd1234".into() };
+        let hlc = Hlc {
+            wall_ms: 1709000000000,
+            counter: 42,
+            node: "abcd1234".into(),
+        };
         let s = hlc.to_string();
         assert_eq!(s, "1709000000000-0042-abcd1234");
         let parsed = Hlc::parse(&s).unwrap();
@@ -165,22 +197,46 @@ mod tests {
 
     #[test]
     fn ordering_wall_ms_first() {
-        let a = Hlc { wall_ms: 100, counter: 99, node: "zzzzzzzz".into() };
-        let b = Hlc { wall_ms: 200, counter: 0, node: "aaaaaaaa".into() };
+        let a = Hlc {
+            wall_ms: 100,
+            counter: 99,
+            node: "zzzzzzzz".into(),
+        };
+        let b = Hlc {
+            wall_ms: 200,
+            counter: 0,
+            node: "aaaaaaaa".into(),
+        };
         assert!(a < b);
     }
 
     #[test]
     fn ordering_counter_second() {
-        let a = Hlc { wall_ms: 100, counter: 1, node: "zzzzzzzz".into() };
-        let b = Hlc { wall_ms: 100, counter: 2, node: "aaaaaaaa".into() };
+        let a = Hlc {
+            wall_ms: 100,
+            counter: 1,
+            node: "zzzzzzzz".into(),
+        };
+        let b = Hlc {
+            wall_ms: 100,
+            counter: 2,
+            node: "aaaaaaaa".into(),
+        };
         assert!(a < b);
     }
 
     #[test]
     fn ordering_node_tiebreak() {
-        let a = Hlc { wall_ms: 100, counter: 1, node: "aaaaaaaa".into() };
-        let b = Hlc { wall_ms: 100, counter: 1, node: "bbbbbbbb".into() };
+        let a = Hlc {
+            wall_ms: 100,
+            counter: 1,
+            node: "aaaaaaaa".into(),
+        };
+        let b = Hlc {
+            wall_ms: 100,
+            counter: 1,
+            node: "bbbbbbbb".into(),
+        };
         assert!(a < b);
     }
 
@@ -200,7 +256,11 @@ mod tests {
 
     #[test]
     fn append_trailer() {
-        let hlc = Hlc { wall_ms: 100, counter: 0, node: "abcd1234".into() };
+        let hlc = Hlc {
+            wall_ms: 100,
+            counter: 0,
+            node: "abcd1234".into(),
+        };
         let msg = append_hlc_trailer("test commit", &hlc);
         assert!(msg.contains("\n\nHLC: 100-0000-abcd1234"));
     }
