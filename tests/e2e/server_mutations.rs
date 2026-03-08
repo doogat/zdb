@@ -44,32 +44,35 @@ fn sync_mutation_with_remote() {
 
     // Set up a bare remote
     let remote_dir = TempDir::new().unwrap();
-    std::process::Command::new("git")
+    let status = std::process::Command::new("git")
         .args(["init", "--bare"])
         .arg(remote_dir.path())
-        .output()
-        .unwrap();
+        .status()
+        .expect("failed to spawn git init");
+    assert!(status.success(), "git init --bare failed");
 
     let repo = ZdbTestRepo::init();
 
     // Add remote + register node
-    std::process::Command::new("git")
+    let status = std::process::Command::new("git")
         .current_dir(repo.path())
         .args(["remote", "add", "origin"])
         .arg(remote_dir.path())
-        .output()
-        .unwrap();
+        .status()
+        .expect("failed to spawn git remote add");
+    assert!(status.success(), "git remote add failed");
     repo.zdb()
         .args(["register-node", "TestNode"])
         .assert()
         .success();
 
     // Push initial state
-    std::process::Command::new("git")
+    let status = std::process::Command::new("git")
         .current_dir(repo.path())
         .args(["push", "-u", "origin", "master"])
-        .output()
-        .unwrap();
+        .status()
+        .expect("failed to spawn git push");
+    assert!(status.success(), "git push failed");
 
     let server = ServerGuard::start(&repo);
 
