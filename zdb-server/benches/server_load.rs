@@ -374,7 +374,10 @@ fn q_update(id: &str, seq: usize) -> String {
     )
 }
 
-/// Spawn a background write loop that creates and updates zettels until `stop` is set.
+const Q_SYNC: &str =
+    r#"mutation { sync { direction commitsTransferred conflictsResolved resurrected } }"#;
+
+/// Spawn a background write loop that creates, updates, and syncs zettels until `stop` is set.
 /// Returns a JoinHandle and an Arc tracking how many writes completed.
 fn spawn_write_load(
     rt: &tokio::runtime::Runtime,
@@ -401,6 +404,12 @@ fn spawn_write_load(
             }
             if let Some(id) = created_ids.get(seq % created_ids.len().max(1)) {
                 let _ = graphql_request(&c, &u, &q_update(id, seq)).await;
+                wc.fetch_add(1, Ordering::Relaxed);
+            }
+            // Sync every 3rd iteration (no remote configured — exercises the
+            // code path without transferring data, matching real mixed-load).
+            if seq % 3 == 2 {
+                let _ = graphql_request(&c, &u, Q_SYNC).await;
                 wc.fetch_add(1, Ordering::Relaxed);
             }
             seq += 1;
