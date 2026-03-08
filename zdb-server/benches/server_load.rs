@@ -439,7 +439,7 @@ fn bench_mixed_load(c: &mut Criterion) {
 
     // Mixed: reads with background writes
     let stop = Arc::new(AtomicBool::new(false));
-    let (write_handle, _write_count) = spawn_write_load(&rt, &client, &url, stop.clone());
+    let (write_handle, write_count) = spawn_write_load(&rt, &client, &url, stop.clone());
 
     group.bench_function("reads_during_writes", |b| {
         b.iter(|| {
@@ -456,6 +456,7 @@ fn bench_mixed_load(c: &mut Criterion) {
 
     stop.store(true, Ordering::Relaxed);
     rt.block_on(write_handle).unwrap();
+    eprintln!("mixed_load: background writes completed = {}", write_count.load(Ordering::Relaxed));
 
     group.finish();
 }
