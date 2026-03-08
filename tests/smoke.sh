@@ -279,10 +279,7 @@ echo "$RESULT" | grep -q '"gcSuccess"'
 pass "serve: compact(force: true) mutation"
 
 # sync mutation — no remote configured for this repo, expect error not panic
-RESULT=$(curl -s "$GQL_URL" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"query":"mutation { sync { direction commitsTransferred conflictsResolved resurrected } }"}')
+RESULT=$(gql '{"query":"mutation { sync { direction commitsTransferred conflictsResolved resurrected } }"}')
 echo "$RESULT" | grep -q '"errors"'
 pass "serve: sync mutation (no remote → error)"
 
