@@ -96,7 +96,7 @@ Non-mutating queries bypass the actor and read SQLite directly via a shared read
 
 ## Decision
 
-**Keep single actor.** The current model meets NFR-01 latency targets for all protocols. The 45x degradation under mixed load is real but only manifests when writes are sustained — in practice, Zettelkasten writes are infrequent (human-speed note-taking), so reads rarely contend.
+**Keep single actor.** The current model meets NFR-01 latency targets for all protocols at 200 zettels (5K server benchmarks pending; core-library benchmarks pass at 5K). The 45x degradation under mixed load is real but only manifests when writes are sustained — in practice, Zettelkasten writes are infrequent (human-speed note-taking), so reads rarely contend.
 
 ### What scales
 
