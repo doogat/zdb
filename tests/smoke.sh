@@ -268,6 +268,24 @@ HTTP_CODE=$(curl -so /dev/null -w "%{http_code}" "$NOSQL_URL/$ID1" \
 [ "$HTTP_CODE" = "401" ]
 pass "nosql-api: auth rejects missing token"
 
+# compact mutation
+RESULT=$(gql '{"query":"mutation { compact { filesRemoved crdtDocsCompacted gcSuccess } }"}')
+echo "$RESULT" | grep -q '"gcSuccess"'
+pass "serve: compact mutation"
+
+# compact(force: true)
+RESULT=$(gql '{"query":"mutation { compact(force: true) { filesRemoved crdtDocsCompacted gcSuccess } }"}')
+echo "$RESULT" | grep -q '"gcSuccess"'
+pass "serve: compact(force: true) mutation"
+
+# sync mutation — no remote configured for this repo, expect error not panic
+RESULT=$(curl -s "$GQL_URL" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"mutation { sync { direction commitsTransferred conflictsResolved resurrected } }"}')
+echo "$RESULT" | grep -q '"errors"'
+pass "serve: sync mutation (no remote → error)"
+
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
 pass "serve: clean shutdown"
