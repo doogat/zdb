@@ -1,14 +1,13 @@
-use std::sync::Arc;
 use crate::common::{ServerGuard, ZdbTestRepo};
+use std::sync::Arc;
 
 #[test]
 fn compact_mutation_returns_result() {
     let repo = ZdbTestRepo::init();
     let server = ServerGuard::start(&repo);
 
-    let result = server.graphql(
-        r#"mutation { compact { filesRemoved crdtDocsCompacted gcSuccess } }"#,
-    );
+    let result =
+        server.graphql(r#"mutation { compact { filesRemoved crdtDocsCompacted gcSuccess } }"#);
     assert!(result.get("errors").is_none(), "compact failed: {result}");
     let compact = &result["data"]["compact"];
     assert!(compact["filesRemoved"].is_i64());
@@ -24,7 +23,10 @@ fn compact_force_mutation() {
     let result = server.graphql(
         r#"mutation { compact(force: true) { filesRemoved crdtDocsCompacted gcSuccess } }"#,
     );
-    assert!(result.get("errors").is_none(), "compact(force: true) failed: {result}");
+    assert!(
+        result.get("errors").is_none(),
+        "compact(force: true) failed: {result}"
+    );
 }
 
 #[test]
@@ -36,7 +38,10 @@ fn sync_mutation_no_remote_returns_error() {
     let result = server.graphql(
         r#"mutation { sync { direction commitsTransferred conflictsResolved resurrected } }"#,
     );
-    assert!(result.get("errors").is_some(), "sync without remote should error: {result}");
+    assert!(
+        result.get("errors").is_some(),
+        "sync without remote should error: {result}"
+    );
 }
 
 #[test]
@@ -80,7 +85,10 @@ fn sync_mutation_with_remote() {
     let result = server.graphql(
         r#"mutation { sync { direction commitsTransferred conflictsResolved resurrected } }"#,
     );
-    assert!(result.get("errors").is_none(), "sync with remote failed: {result}");
+    assert!(
+        result.get("errors").is_none(),
+        "sync with remote failed: {result}"
+    );
     let sync = &result["data"]["sync"];
     assert!(sync["direction"].is_string());
     assert!(sync["commitsTransferred"].is_i64());
@@ -125,8 +133,19 @@ fn sync_during_writes_serialized_through_actor() {
 
     let server = Arc::new(ServerGuard::start(&repo));
 
-    // Spawn concurrent writers + sync
-    let mut handles = Vec::new();
+    // Count commits before concurrent operations
+    let pre_count = std::process::Command::new("git")
+        .current_dir(repo.path())
+        .args(["rev-list", "--count", "HEAD"])
+        .output()
+        .expect("git rev-list failed");
+    let commits_before: usize = String::from_utf8_lossy(&pre_count.stdout)
+        .trim()
+        .parse()
+        .unwrap();
+
+    // Spawn concurrent writers + sync, collecting created IDs
+    let mut handles: Vec<std::thread::JoinHandle<Option<String>>> = Vec::new();
 
     for i in 0..5 {
         let srv = Arc::clone(&server);
@@ -142,6 +161,10 @@ fn sync_during_writes_serialized_through_actor() {
                 result.get("errors").is_none(),
                 "concurrent write {i} failed: {result}"
             );
+            result
+                .pointer("/data/createZettel/id")
+                .and_then(|v| v.as_str())
+                .map(String::from)
         }));
     }
 
@@ -155,10 +178,56 @@ fn sync_during_writes_serialized_through_actor() {
             result.get("errors").is_none(),
             "concurrent sync failed: {result}"
         );
+        None // sync doesn't create a zettel
     }));
 
     // All must complete without panic or error
+    let mut created_ids = Vec::new();
     for h in handles {
-        h.join().expect("thread panicked during concurrent mutations");
+        let id = h
+            .join()
+            .expect("thread panicked during concurrent mutations");
+        if let Some(id) = id {
+            created_ids.push(id);
+        }
     }
+
+    // Verify serialization: all 5 zettels were created and are queryable
+    assert_eq!(
+        created_ids.len(),
+        5,
+        "expected 5 created IDs, got {}: {:?}",
+        created_ids.len(),
+        created_ids
+    );
+
+    for id in &created_ids {
+        let query = format!(r#"{{ zettel(id: "{id}") {{ id title }} }}"#);
+        let result = server.graphql(&query);
+        assert!(
+            result.get("errors").is_none(),
+            "zettel {id} not found after concurrent writes: {result}"
+        );
+        assert_eq!(
+            result.pointer("/data/zettel/id").and_then(|v| v.as_str()),
+            Some(id.as_str()),
+            "zettel {id} returned wrong data: {result}"
+        );
+    }
+
+    // Verify serialization: each create produced a distinct commit
+    let post_count = std::process::Command::new("git")
+        .current_dir(repo.path())
+        .args(["rev-list", "--count", "HEAD"])
+        .output()
+        .expect("git rev-list failed");
+    let commits_after: usize = String::from_utf8_lossy(&post_count.stdout)
+        .trim()
+        .parse()
+        .unwrap();
+    let new_commits = commits_after - commits_before;
+    assert!(
+        new_commits >= 5,
+        "expected at least 5 new commits (one per create), got {new_commits}"
+    );
 }
