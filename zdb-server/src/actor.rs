@@ -912,14 +912,15 @@ fn unique_id(repo_path: &std::path::Path) -> zdb_core::types::ZettelId {
 fn run_maintenance(repo: &GitRepo, index: &Index, _repo_path: &std::path::Path, force: bool) -> ActorResult<CompactionReport> {
     let mgr = match zdb_core::sync_manager::SyncManager::open(repo) {
         Ok(m) => m,
-        Err(e) => {
-            log::warn!("maintenance: no node registered, skipping compaction: {e}");
+        Err(ZettelError::NotFound(_)) => {
+            log::info!("maintenance: no node registered, skipping compaction");
             return Ok(CompactionReport {
                 files_removed: 0,
                 crdt_docs_compacted: 0,
-                gc_success: true,
+                gc_success: false,
             });
         }
+        Err(e) => return Err(e),
     };
 
     let report = zdb_core::compaction::compact(repo, &mgr, force)?;
