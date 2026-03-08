@@ -12,7 +12,8 @@ use tempfile::TempDir;
 // Zettel content helpers (mirrors zdb-core bench helpers)
 // ---------------------------------------------------------------------------
 
-const ZETTEL_COUNT: usize = 200;
+const ZETTEL_COUNT_DEFAULT: usize = 200;
+const ZETTEL_COUNT_LARGE: usize = 5_000;
 
 fn zettel_content(i: usize) -> String {
     let word = match i % 5 {
@@ -143,7 +144,7 @@ impl Drop for BenchServer {
 // Test repo seeding
 // ---------------------------------------------------------------------------
 
-fn seed_repo(dir: &Path) {
+fn seed_repo_n(dir: &Path, count: usize) {
     // Init via CLI
     let out = std::process::Command::new(zdb_bin())
         .arg("init")
@@ -153,7 +154,7 @@ fn seed_repo(dir: &Path) {
     assert!(out.status.success(), "zdb init: {}", String::from_utf8_lossy(&out.stderr));
 
     // Seed zettels by writing files + git commit
-    for i in 0..ZETTEL_COUNT {
+    for i in 0..count {
         let path = dir.join(zettel_path(i));
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).unwrap();
@@ -179,9 +180,13 @@ fn seed_repo(dir: &Path) {
 }
 
 fn setup_server() -> BenchServer {
+    setup_server_n(ZETTEL_COUNT_DEFAULT)
+}
+
+fn setup_server_n(count: usize) -> BenchServer {
     let dir = TempDir::new().unwrap();
     let remote_dir = TempDir::new().unwrap();
-    seed_repo(dir.path());
+    seed_repo_n(dir.path(), count);
 
     let clone_out = std::process::Command::new("git")
         .args(["clone", "--bare"])
@@ -557,6 +562,106 @@ fn bench_protocol_comparison(c: &mut Criterion) {
     group.finish();
 }
 
+// ---------------------------------------------------------------------------
+// 5K-zettel benchmarks: validates NFR-01 at target scale
+// ---------------------------------------------------------------------------
+
+fn bench_single_reads_5k(c: &mut Criterion) {
+    let server = setup_server_n(ZETTEL_COUNT_LARGE);
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let client = build_client(&server.token);
+    let url = server.url();
+
+    let mut group = c.benchmark_group("server_5k/single_read");
+    group.sample_size(30);
+    group.measurement_time(Duration::from_secs(10));
+
+    group.bench_function("list_zettels", |b| {
+        b.iter(|| {
+            rt.block_on(graphql_request(&client, &url, Q_LIST)).unwrap();
+        });
+    });
+
+    group.bench_function("get_zettel", |b| {
+        b.iter(|| {
+            rt.block_on(graphql_request(&client, &url, &q_get(0)))
+                .unwrap();
+        });
+    });
+
+    group.bench_function("search", |b| {
+        b.iter(|| {
+            rt.block_on(graphql_request(&client, &url, Q_SEARCH))
+                .unwrap();
+        });
+    });
+
+    group.finish();
+}
+
+fn bench_protocol_comparison_5k(c: &mut Criterion) {
+    let server = setup_server_n(ZETTEL_COUNT_LARGE);
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let client = build_client(&server.token);
+    let graphql_url = server.url();
+    let first_id = format!("{:014}", 20260101000000u64);
+    let rest_url = server.rest_url(&format!("/zettels/{first_id}"));
+    let nosql_url = server.nosql_url(&format!("/{first_id}"));
+    let pg_port = server.pg_port();
+    let token = server.token.clone();
+
+    let pg_client: tokio_postgres::Client = rt.block_on(async {
+        let (client, conn) = tokio_postgres::Config::new()
+            .host("127.0.0.1")
+            .port(pg_port)
+            .user("zdb")
+            .password(&token)
+            .dbname("zdb")
+            .connect(tokio_postgres::NoTls)
+            .await
+            .unwrap();
+        tokio::spawn(async move {
+            conn.await.ok();
+        });
+        client
+    });
+
+    let mut group = c.benchmark_group("server_5k/protocol_comparison");
+    group.sample_size(30);
+    group.measurement_time(Duration::from_secs(10));
+
+    let gql_get = q_get(0);
+    group.bench_function("graphql", |b| {
+        b.iter(|| {
+            rt.block_on(graphql_request(&client, &graphql_url, &gql_get))
+                .unwrap();
+        });
+    });
+
+    group.bench_function("rest", |b| {
+        b.iter(|| {
+            rt.block_on(rest_request(&client, &rest_url)).unwrap();
+        });
+    });
+
+    group.bench_function("nosql", |b| {
+        b.iter(|| {
+            rt.block_on(rest_request(&client, &nosql_url)).unwrap();
+        });
+    });
+
+    group.bench_function("pgwire", |b| {
+        b.iter(|| {
+            rt.block_on(pgwire_query_reuse(
+                &pg_client,
+                &format!("SELECT id, title, body FROM zettels WHERE id = '{first_id}'"),
+            ));
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_single_reads,
@@ -565,4 +670,9 @@ criterion_group!(
     bench_mixed_load,
     bench_protocol_comparison
 );
-criterion_main!(benches);
+criterion_group!(
+    benches_5k,
+    bench_single_reads_5k,
+    bench_protocol_comparison_5k
+);
+criterion_main!(benches, benches_5k);

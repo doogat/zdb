@@ -8,20 +8,20 @@ The server serializes reads and writes through a single actor thread. Before bro
 
 ## Benchmark Results
 
-All measurements on 200 zettels, macOS, release build. Full benchmark suite: `cargo bench -p zdb-server` (requires `cargo build -p zdb-cli --release` first — benchmarks launch the `zdb` binary).
+All measurements on macOS, release build. Full benchmark suite: `cargo bench -p zdb-server` (requires `cargo build -p zdb-cli --release` first — benchmarks launch the `zdb` binary).
 
 ### Single-request latency (no contention)
 
-| Protocol | Operation | Latency |
-|----------|-----------|---------|
-| GraphQL | get zettel | 276 µs |
-| GraphQL | list 20 | 2.9 ms |
-| GraphQL | FTS search | 65 µs |
-| REST | get zettel | 211 µs |
-| NoSQL | get zettel | 60 µs |
-| pgwire | SELECT by id | 62 µs |
+| Protocol | Operation | 200 zettels | 5K zettels |
+|----------|-----------|-------------|------------|
+| GraphQL | get zettel | 276 µs | 1.04 ms |
+| GraphQL | list 20 | 2.9 ms | 18.3 ms |
+| GraphQL | FTS search | 65 µs | 65 µs |
+| REST | get zettel | 211 µs | 1.05 ms |
+| NoSQL | get zettel | 60 µs | 64 µs |
+| pgwire | SELECT by id | 62 µs | 69 µs |
 
-All protocols return well under 10 ms at 200 zettels. Core-library benchmarks validate NFR-01 at 5K; server-level 5K benchmarks are pending.
+Get and search stay well under 10 ms at 5K. List (20 zettels) exceeds 10 ms at 5K (18.3 ms) due to index scan overhead on the larger dataset — this is the actor round-trip plus SQLite query time, not a protocol bottleneck.
 
 ### Concurrent reads (list 20 zettels, GraphQL)
 
@@ -48,16 +48,16 @@ Write operations (create + git commit + reindex) dominate actor time. List queri
 
 This is the critical finding: **writes degrade read latency for expensive queries by 45x**.
 
-### Protocol overhead
+### Protocol overhead (get-by-id)
 
-| Protocol | Get-zettel latency | Overhead vs NoSQL |
-|----------|-------------------|-------------------|
-| NoSQL | 60 µs | baseline |
-| pgwire | 62 µs | ~0 |
-| REST | 211 µs | +150 µs |
-| GraphQL | 276 µs | +216 µs |
+| Protocol | 200 zettels | 5K zettels | Overhead vs NoSQL (5K) |
+|----------|------------|------------|----------------------|
+| NoSQL | 60 µs | 64 µs | baseline |
+| pgwire | 62 µs | 69 µs | +5 µs |
+| REST | 211 µs | 1.05 ms | +986 µs |
+| GraphQL | 276 µs | 1.07 ms | +1.0 ms |
 
-GraphQL and REST add serialization/schema overhead. For latency-sensitive reads, NoSQL and pgwire are 4x faster.
+At 5K, REST and GraphQL show higher absolute overhead (schema resolution scales with type count). NoSQL and pgwire remain fast.
 
 ## Options
 
@@ -96,7 +96,7 @@ Non-mutating queries bypass the actor and read SQLite directly via a shared read
 
 ## Decision
 
-**Keep single actor.** The current model meets NFR-01 latency targets for all protocols at 200 zettels (5K server benchmarks pending; core-library benchmarks pass at 5K). The 45x degradation under mixed load is real but only manifests when writes are sustained — in practice, Zettelkasten writes are infrequent (human-speed note-taking), so reads rarely contend.
+**Keep single actor.** The current model meets NFR-01 latency targets for get and search at 5K zettels. List queries exceed 10 ms at 5K (18.3 ms) but remain acceptable for the expected access pattern. The 45x degradation under mixed load is real but only manifests when writes are sustained — in practice, Zettelkasten writes are infrequent (human-speed note-taking), so reads rarely contend.
 
 ### What scales
 
@@ -124,7 +124,7 @@ These are the supported performance boundaries for the single-actor design.
 | Parameter | Limit | Notes |
 |-----------|-------|-------|
 | Concurrent readers (no writes) | Up to 16 | Latency grows linearly; p99 stays under 50 ms for list queries |
-| Single-request latency | < 3 ms (list), < 300 µs (get/search) | Measured at 200 zettels; 5K server benchmarks pending |
+| Single-request latency | < 1.1 ms (get), < 70 µs (search), ~18 ms (list) | Measured at 5K zettels |
 | Throughput (read-only) | ~360 req/s (list), ~15K req/s (search) | Actor-serialized ceiling |
 | Write frequency | Human-speed (< 1 write/sec) | Reads remain responsive at this rate |
 
