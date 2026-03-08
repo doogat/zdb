@@ -69,6 +69,10 @@ fn median_ms<F: FnMut()>(mut f: F) -> u128 {
 }
 
 #[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "performance thresholds require --release; debug CI runners are too noisy"
+)]
 fn nfr01_fts_query_under_10ms_at_5k() {
     let (_dir, index) = setup(ZETTEL_COUNT_5K);
     let ms = median_ms(|| {
@@ -81,6 +85,10 @@ fn nfr01_fts_query_under_10ms_at_5k() {
 }
 
 #[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "performance thresholds require --release; debug CI runners are too noisy"
+)]
 fn nfr01_sql_query_under_10ms_at_5k() {
     let (_dir, index) = setup(ZETTEL_COUNT_5K);
     let ms = median_ms(|| {

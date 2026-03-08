@@ -9,3 +9,4 @@ mod sync_crdt;
 mod rename;
 mod delete_backlinks;
 mod search_links;
+mod server_mutations;

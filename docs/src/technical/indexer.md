@@ -165,7 +165,9 @@ Returns `None` if no match found at any step.
 
 `search(query: &str) -> Result<Vec<SearchResult>>`
 
-Convenience wrapper — delegates to `search_paginated(query, usize::MAX, 0)` and returns just the hits.
+Runs the FTS query directly and returns just the hits.
+
+Unlike `search_paginated`, this path does not issue a separate `COUNT(*)` query, so callers that only need ranked results avoid the extra pass over the FTS table.
 
 ### search_paginated
 

@@ -1,0 +1,85 @@
+use crate::common::{ServerGuard, ZdbTestRepo};
+
+#[test]
+fn compact_mutation_returns_result() {
+    let repo = ZdbTestRepo::init();
+    let server = ServerGuard::start(&repo);
+
+    let result = server.graphql(
+        r#"mutation { compact { filesRemoved crdtDocsCompacted gcSuccess } }"#,
+    );
+    assert!(result.get("errors").is_none(), "compact failed: {result}");
+    let compact = &result["data"]["compact"];
+    assert!(compact["filesRemoved"].is_i64());
+    assert!(compact["crdtDocsCompacted"].is_i64());
+    assert!(compact["gcSuccess"].is_boolean());
+}
+
+#[test]
+fn compact_force_mutation() {
+    let repo = ZdbTestRepo::init();
+    let server = ServerGuard::start(&repo);
+
+    let result = server.graphql(
+        r#"mutation { compact(force: true) { filesRemoved crdtDocsCompacted gcSuccess } }"#,
+    );
+    assert!(result.get("errors").is_none(), "compact(force: true) failed: {result}");
+}
+
+#[test]
+fn sync_mutation_no_remote_returns_error() {
+    let repo = ZdbTestRepo::init();
+    let server = ServerGuard::start(&repo);
+
+    // No remote configured — should return an error, not panic
+    let result = server.graphql(
+        r#"mutation { sync { direction commitsTransferred conflictsResolved resurrected } }"#,
+    );
+    assert!(result.get("errors").is_some(), "sync without remote should error: {result}");
+}
+
+#[test]
+fn sync_mutation_with_remote() {
+    use tempfile::TempDir;
+
+    // Set up a bare remote
+    let remote_dir = TempDir::new().unwrap();
+    std::process::Command::new("git")
+        .args(["init", "--bare"])
+        .arg(remote_dir.path())
+        .output()
+        .unwrap();
+
+    let repo = ZdbTestRepo::init();
+
+    // Add remote + register node
+    std::process::Command::new("git")
+        .current_dir(repo.path())
+        .args(["remote", "add", "origin"])
+        .arg(remote_dir.path())
+        .output()
+        .unwrap();
+    repo.zdb()
+        .args(["register-node", "TestNode"])
+        .assert()
+        .success();
+
+    // Push initial state
+    std::process::Command::new("git")
+        .current_dir(repo.path())
+        .args(["push", "-u", "origin", "master"])
+        .output()
+        .unwrap();
+
+    let server = ServerGuard::start(&repo);
+
+    let result = server.graphql(
+        r#"mutation { sync { direction commitsTransferred conflictsResolved resurrected } }"#,
+    );
+    assert!(result.get("errors").is_none(), "sync with remote failed: {result}");
+    let sync = &result["data"]["sync"];
+    assert!(sync["direction"].is_string());
+    assert!(sync["commitsTransferred"].is_i64());
+    assert!(sync["conflictsResolved"].is_i64());
+    assert!(sync["resurrected"].is_i64());
+}

@@ -825,6 +825,7 @@ dependencies = [
  "ciborium",
  "clap",
  "criterion-plot",
+ "futures",
  "is-terminal",
  "itertools 0.10.5",
  "num-traits",
@@ -837,6 +838,7 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "tinytemplate",
+ "tokio",
  "walkdir",
 ]
 
@@ -4997,6 +4999,7 @@ dependencies = [
  "axum",
  "base64",
  "chrono",
+ "criterion",
  "futures",
  "futures-util",
  "indexmap",
@@ -5009,6 +5012,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-postgres",
  "toml 0.8.23",
  "uuid",
  "zdb-core",

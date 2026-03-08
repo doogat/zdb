@@ -866,8 +866,30 @@ impl Index {
     /// Full-text search with snippets and ranking.
     #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
     pub fn search(&self, query: &str) -> Result<Vec<SearchResult>> {
-        self.search_paginated(query, usize::MAX, 0)
-            .map(|r| r.hits)
+        let mut stmt = self.conn.prepare(
+            "SELECT z.id, z.title, z.path, snippet(_zdb_fts, 1, '<b>', '</b>', '...', 32), rank
+             FROM _zdb_fts
+             JOIN zettels z ON z.rowid = _zdb_fts.rowid
+             WHERE _zdb_fts MATCH ?1
+             ORDER BY rank",
+        )?;
+
+        let results = stmt.query_map(params![query], |row| {
+            Ok(SearchResult {
+                id: row.get(0)?,
+                title: row.get(1)?,
+                path: row.get(2)?,
+                snippet: row.get(3)?,
+                rank: row.get(4)?,
+            })
+        })?;
+
+        let mut hits = Vec::new();
+        for r in results {
+            hits.push(r?);
+        }
+
+        Ok(hits)
     }
 
     /// Paginated full-text search with snippets, ranking, and total count.
@@ -2157,14 +2179,21 @@ Widget
     }
 
     #[test]
-    fn search_delegates_to_paginated() {
+    fn search_returns_same_hits_as_paginated() {
         let idx = in_memory_index();
         for i in 0..5 {
             idx.index_zettel(&make_zettel(i)).unwrap();
         }
 
         let results = idx.search("searchable").unwrap();
+        let paginated = idx.search_paginated("searchable", usize::MAX, 0).unwrap();
+
         assert_eq!(results.len(), 5);
+        assert_eq!(results.len(), paginated.hits.len());
+        assert_eq!(
+            results.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
+            paginated.hits.iter().map(|r| r.id.as_str()).collect::<Vec<_>>()
+        );
     }
 
     #[test]

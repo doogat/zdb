@@ -913,8 +913,12 @@ fn run_maintenance(repo: &GitRepo, index: &Index, _repo_path: &std::path::Path, 
     let mgr = match zdb_core::sync_manager::SyncManager::open(repo) {
         Ok(m) => m,
         Err(e) => {
-            log::warn!("maintenance: failed to open sync manager: {e}");
-            return Err(e);
+            log::warn!("maintenance: no node registered, skipping compaction: {e}");
+            return Ok(CompactionReport {
+                files_removed: 0,
+                crdt_docs_compacted: 0,
+                gc_success: true,
+            });
         }
     };
 

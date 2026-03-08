@@ -33,7 +33,7 @@ Run 5K benchmarks: `cargo bench -p zdb-core --bench search -- "5k"`
 
 Run 50K benchmarks: `cargo bench -p zdb-core --bench large_scale`
 
-Threshold tests: `cargo test -p zdb-core --test query_thresholds`
+5K threshold tests: `cargo test --release -p zdb-core --test query_thresholds nfr01_`
 
 50K threshold tests (slow): `cargo test --release -p zdb-core --test query_thresholds -- --ignored`
 

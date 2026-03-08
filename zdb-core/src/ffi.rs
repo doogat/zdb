@@ -188,7 +188,18 @@ impl ZettelDriver {
     }
 
     pub fn search(&self, query: String) -> Result<Vec<SearchResult>, ZdbError> {
-        Ok(self.search_paginated(query, u32::MAX, 0)?.hits)
+        let index = self.index.lock().unwrap();
+        let results = index.search(&query).map_err(ZdbError::from)?;
+        Ok(results
+            .into_iter()
+            .map(|r| SearchResult {
+                id: r.id,
+                title: r.title,
+                path: r.path,
+                snippet: r.snippet,
+                rank: r.rank,
+            })
+            .collect())
     }
 
     pub fn search_paginated(&self, query: String, limit: u32, offset: u32) -> Result<PaginatedSearchResult, ZdbError> {
