@@ -8,7 +8,7 @@ The server serializes reads and writes through a single actor thread. Before bro
 
 ## Benchmark Results
 
-All measurements on 200 zettels, macOS, release build. Full benchmark suite: `cargo bench -p zdb-server`.
+All measurements on 200 zettels, macOS, release build. Full benchmark suite: `cargo bench -p zdb-server` (requires `cargo build -p zdb-cli --release` first — benchmarks launch the `zdb` binary).
 
 ### Single-request latency (no contention)
 

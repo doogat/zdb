@@ -73,4 +73,4 @@ Threshold test (ignored): `cargo test --release -p zdb-core --test sync_threshol
 
 The actor serializes all operations. Reads meet NFR-01 targets under normal use but degrade 45x under sustained write load. Decision: keep single actor; see [Server Read-Path Decision](./server-read-path.md) for full analysis and operating envelope.
 
-Run: `cargo bench -p zdb-server`
+Run: `cargo build -p zdb-cli --release && cargo bench -p zdb-server`
