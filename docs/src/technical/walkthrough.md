@@ -1941,6 +1941,7 @@ pub enum ActorCommand {
         params: Vec<rusqlite::types::Value>,
     },
     RunMaintenance { force: bool },
+    Sync { remote: String, branch: String },
     NoSqlGet { id: String },
     NoSqlScanType { type_name: String },
     NoSqlScanTag { tag: String },
@@ -1958,8 +1959,9 @@ pub enum ActorReply {
     Deleted(ActorResult<()>),
     Count(ActorResult<i64>),
     AggregateRow(ActorResult<Vec<String>>),
-    Maintenance(ActorResult<()>),
-    NoSqlZettel(Box<ActorResult<ParsedZettel>>),
+    Maintenance(ActorResult<CompactionReport>),
+    SyncResult(ActorResult<SyncReport>),
+    NoSqlZettel(Box<ActorResult<Option<ParsedZettel>>>),
     NoSqlIds(ActorResult<Vec<String>>),
 }
 
@@ -1992,6 +1994,27 @@ impl ActorHandle {
 `ActorHandle` is `Clone + Send + Sync` — it's just an `mpsc::Sender`. Async route handlers send commands through the channel and `await` a oneshot reply. The actor thread runs a blocking loop (`rx.blocking_recv()`) processing one command at a time — no locks needed since it's single-threaded.
 
 Mutations (create, update, delete) emit events through an `EventBus` for WebSocket subscribers. When the `nosql` feature is active, the actor also dual-writes to `RedbIndex` after each mutation for O(1) key-value access.
+
+#### Sync & Compact Commands
+
+Two operational commands extend the actor beyond CRUD. `Sync` triggers a full sync cycle, and `RunMaintenance` runs compaction — both return structured reports to the GraphQL layer.
+
+`run_sync` creates a per-call SyncManager, calls `sync()`, then rebuilds the index:
+
+```bash
+grep -A5 '^fn run_sync' zdb-server/src/actor.rs
+```
+
+```rust
+fn run_sync(repo: &GitRepo, index: &Index, remote: &str, branch: &str) -> ActorResult<SyncReport> {
+    let mut mgr = zdb_core::sync_manager::SyncManager::open(repo)?;
+    let report = mgr.sync(remote, branch, index)?;
+    // Rebuild index after sync
+    let _ = index.rebuild_if_stale(repo);
+    Ok(report)
+```
+
+`run_maintenance` returns a no-op `CompactionReport` when no node is registered (matching the old behavior of returning `Ok(())`). The GraphQL `compact` mutation exposes these fields as `CompactResult`, and `sync` exposes `SyncReport` fields as `SyncResult`.
 
 ### Server Startup
 
@@ -3285,4 +3308,350 @@ Run 50K benchmarks: `cargo bench -p zdb-core --bench large_scale`
 50K threshold tests (slow): `cargo test --release -p zdb-core --test query_thresholds -- --ignored`
 
 ## Repo Growth (NFR-02 / AC-08)
+```
+
+## Release Script Performance Gate
+
+If performance validation is meant to happen locally before shipping, it has to sit on the release path itself rather than in a separate checklist. The release script now runs the release-profile 5K query threshold tests as part of preflight, before any version bump, commit, tag, or push. That makes the local machine that cuts the release responsible for proving the NFR gate passed.
+
+```bash
+sed -n '1,120p' dev/bin/release
+```
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  echo "Usage: dev/release [--dry-run] [--pre <suffix>] [patch|minor|major|local]"
+  exit 1
+}
+
+run_preflight() {
+  echo "running release preflight checks..."
+  cargo check --workspace --quiet
+  echo "running release performance thresholds..."
+  cargo test --release -p zdb-core --test query_thresholds nfr01_
+}
+
+DRY_RUN=false
+PRE=""
+BUMP=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dry-run) DRY_RUN=true; shift ;;
+    --pre)     PRE="$2"; shift 2 ;;
+    patch|minor|major|local) BUMP="$1"; shift ;;
+    *) usage ;;
+  esac
+done
+
+[[ -z "$BUMP" ]] && usage
+
+CARGO_FILES=(
+  zdb-core/Cargo.toml
+  zdb-cli/Cargo.toml
+  zdb-server/Cargo.toml
+  tests/Cargo.toml
+)
+
+# --- local install mode ---
+if [[ "$BUMP" == "local" ]]; then
+  cargo install --path zdb-cli
+  echo "installed: $(zdb --version 2>/dev/null || echo 'zdb (version unknown)')"
+  exit 0
+fi
+
+# --- read current version ---
+CURRENT=$(sed -n 's/^version = "\(.*\)"/\1/p' zdb-core/Cargo.toml | head -1)
+IFS='.' read -r MAJOR MINOR PATCH <<< "${CURRENT%%-*}"
+
+# --- compute new version ---
+case "$BUMP" in
+  patch) PATCH=$((PATCH + 1)) ;;
+  minor) MINOR=$((MINOR + 1)); PATCH=0 ;;
+  major) MAJOR=$((MAJOR + 1)); MINOR=0; PATCH=0 ;;
+esac
+
+NEW="${MAJOR}.${MINOR}.${PATCH}"
+[[ -n "$PRE" ]] && NEW="${NEW}-${PRE}"
+TAG="v${NEW}"
+
+# --- dry run ---
+if $DRY_RUN; then
+  echo "${CURRENT} -> ${NEW} (tag: ${TAG})"
+  exit 0
+fi
+
+# --- preflight checks ---
+git pull --ff-only
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "error: working tree not clean" >&2
+  exit 1
+fi
+if git rev-parse "$TAG" >/dev/null 2>&1; then
+  echo "error: tag ${TAG} already exists" >&2
+  exit 1
+fi
+run_preflight
+
+# --- bump versions ---
+for f in "${CARGO_FILES[@]}"; do
+  sed -i.bak "s/^version = \".*\"/version = \"${NEW}\"/" "$f"
+  rm -f "${f}.bak"
+done
+
+# --- update lockfile ---
+cargo check --workspace --quiet
+
+# --- commit, tag, push ---
+git add "${CARGO_FILES[@]}" Cargo.lock
+git commit -m "build(zdb): bump to ${TAG}"
+git tag "$TAG"
+git push origin HEAD --tags
+
+echo "released ${TAG}"
+```
+
+## Growth Threshold Gate
+
+The repo-growth limit is now enforced as a normal release-only integration test instead of a Criterion assertion embedded in a benchmark. The benchmark still measures growth, but the pass/fail policy moved into `growth_thresholds.rs`, and the release script now runs both the query-latency and repo-growth thresholds before it bumps versions, tags, or pushes.
+
+## E2E Server Log Handling
+
+The compact mutation failures that showed up during workspace validation were caused by the e2e harness, not by compaction itself. `ServerGuard` used stderr as a readiness channel and then dropped that pipe after startup; when the server later emitted a warning during `compact` on an unregistered repo, the actor-side logging path could fail under test. The harness now points tracing logs at a temp directory inside the test repo so runtime warnings no longer depend on that startup pipe remaining open.
+
+```bash
+sed -n '1,120p' zdb-core/tests/growth_thresholds.rs
+```
+
+```rust
+use tempfile::TempDir;
+use zdb_core::git_ops::GitRepo;
+
+const INITIAL_ZETTELS: usize = 5000;
+const DAYS: usize = 365;
+const EDITS_PER_DAY: usize = 10;
+const GROWTH_THRESHOLD_BYTES: u64 = 50 * 1024 * 1024; // 50MB
+
+fn zettel_content(i: usize) -> String {
+    let word = match i % 5 {
+        0 => "architecture",
+        1 => "refactoring",
+        2 => "deployment",
+        3 => "performance",
+        _ => "documentation",
+    };
+    format!(
+        "---\ntitle: Note about {word} {i}\ndate: 2026-01-01\ntags:\n  - bench\n  - {word}\n---\n\
+         This zettel discusses {word} in the context of item {i}.\n\
+         ---\n- source:: bench-{i}"
+    )
+}
+
+fn zettel_path(i: usize) -> String {
+    format!("zettelkasten/{:014}.md", 20260101000000u64 + i as u64)
+}
+
+fn dir_size(path: &std::path::Path) -> u64 {
+    walkdir::WalkDir::new(path)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
+        .sum()
+}
+
+/// NFR-02 / AC-08: repo growth < 50MB/year at 5K zettels.
+/// Run with: cargo test --release --test growth_thresholds
+#[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "growth thresholds require --release; debug runs are too slow"
+)]
+fn nfr02_repo_growth_under_50mb_per_year_at_5k() {
+    let dir = TempDir::new().unwrap();
+    let repo = GitRepo::init(dir.path()).unwrap();
+
+    let files: Vec<(String, String)> = (0..INITIAL_ZETTELS)
+        .map(|i| (zettel_path(i), zettel_content(i)))
+        .collect();
+    let refs: Vec<(&str, &str)> = files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+    repo.commit_files(&refs, "seed").unwrap();
+
+    let size_before = dir_size(dir.path());
+
+    for day in 0..DAYS {
+        let batch: Vec<(String, String)> = (0..EDITS_PER_DAY)
+            .map(|edit| {
+                let idx = (day * EDITS_PER_DAY + edit) % INITIAL_ZETTELS;
+                let content = format!(
+                    "---\ntitle: Updated note {idx} day {day}\ndate: 2026-01-01\ntags:\n  - bench\n---\n\
+                     Modified on day {day}, edit {edit}.\n\
+                     ---\n- source:: bench-{idx}"
+                );
+                (zettel_path(idx), content)
+            })
+            .collect();
+        let refs: Vec<(&str, &str)> = batch.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+        repo.commit_files(&refs, &format!("day {day}")).unwrap();
+    }
+
+    let size_after = dir_size(dir.path());
+    let growth = size_after - size_before;
+
+    assert!(
+        growth < GROWTH_THRESHOLD_BYTES,
+        "NFR-02: repo grew {:.1}MB, threshold is {:.1}MB",
+        growth as f64 / (1024.0 * 1024.0),
+        GROWTH_THRESHOLD_BYTES as f64 / (1024.0 * 1024.0),
+    );
+}
+```
+
+```bash
+sed -n '1,105p' zdb-core/benches/growth.rs
+```
+
+```rust
+use std::path::Path;
+use std::hint::black_box;
+
+use criterion::{criterion_group, criterion_main, Criterion};
+use tempfile::TempDir;
+use zdb_core::git_ops::GitRepo;
+
+/// Simulate repo growth: create zettels, then modify them over time.
+/// NFR-02 / AC-08: repo growth < 50MB/year at 5K zettels.
+///
+/// Strategy: start with 5K zettels, then simulate 365 days of edits
+/// (10 modifications/day = 3650 commits) and measure repo size.
+/// Using 10/day instead of 100/day to keep bench runtime reasonable;
+/// the threshold is scaled proportionally.
+const INITIAL_ZETTELS: usize = 5000;
+const DAYS: usize = 365;
+const EDITS_PER_DAY: usize = 10;
+
+fn zettel_content(i: usize) -> String {
+    let word = match i % 5 {
+        0 => "architecture",
+        1 => "refactoring",
+        2 => "deployment",
+        3 => "performance",
+        _ => "documentation",
+    };
+    format!(
+        "---\ntitle: Note about {word} {i}\ndate: 2026-01-01\ntags:\n  - bench\n  - {word}\n---\n\
+         This zettel discusses {word} in the context of item {i}.\n\
+         ---\n- source:: bench-{i}"
+    )
+}
+
+fn zettel_path(i: usize) -> String {
+    format!("zettelkasten/{:014}.md", 20260101000000u64 + i as u64)
+}
+
+fn dir_size(path: &Path) -> u64 {
+    walkdir::WalkDir::new(path)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .map(|e| e.metadata().map(|m| m.len()).unwrap_or(0))
+        .sum()
+}
+
+fn bench_growth(c: &mut Criterion) {
+    let mut group = c.benchmark_group("growth");
+    // Only run once — this is a measurement, not a hot-path benchmark
+    group.sample_size(10);
+
+    group.bench_function("repo_size_after_1yr", |b| {
+        b.iter_with_setup(
+            || {
+                let dir = TempDir::new().unwrap();
+                let repo = GitRepo::init(dir.path()).unwrap();
+
+                // Seed with initial zettels
+                let files: Vec<(String, String)> = (0..INITIAL_ZETTELS)
+                    .map(|i| (zettel_path(i), zettel_content(i)))
+                    .collect();
+                let refs: Vec<(&str, &str)> =
+                    files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+                repo.commit_files(&refs, "seed").unwrap();
+
+                (dir, repo)
+            },
+            |(dir, repo)| {
+                let size_before = dir_size(dir.path());
+
+                // Simulate edits over a year
+                for day in 0..DAYS {
+                    let batch: Vec<(String, String)> = (0..EDITS_PER_DAY)
+                        .map(|edit| {
+                            let idx = (day * EDITS_PER_DAY + edit) % INITIAL_ZETTELS;
+                            let content = format!(
+                                "---\ntitle: Updated note {idx} day {day}\ndate: 2026-01-01\ntags:\n  - bench\n---\n\
+                                 Modified on day {day}, edit {edit}.\n\
+                                 ---\n- source:: bench-{idx}"
+                            );
+                            (zettel_path(idx), content)
+                        })
+                        .collect();
+                    let refs: Vec<(&str, &str)> =
+                        batch.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+                    repo.commit_files(&refs, &format!("day {day}")).unwrap();
+                }
+
+                let size_after = dir_size(dir.path());
+                let growth = size_after - size_before;
+
+                black_box(growth);
+            },
+        );
+    });
+
+    group.finish();
+}
+
+criterion_group!(benches, bench_growth);
+criterion_main!(benches);
+```
+
+```bash
+sed -n '40,70p' tests/e2e/common.rs
+```
+
+```rust
+impl ServerGuard {
+    pub fn start(repo: &ZdbTestRepo) -> Self {
+        let port = SERVER_PORT_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let pg_port = SERVER_PORT_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let log_dir = repo.path().join(".local/test-logs");
+
+        let mut child = std::process::Command::new(zdb_bin())
+            .arg("--repo")
+            .arg(repo.path())
+            .arg("--log-dir")
+            .arg(&log_dir)
+            .arg("serve")
+            .arg("--port")
+            .arg(port.to_string())
+            .arg("--pg-port")
+            .arg(pg_port.to_string())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to start server");
+
+        let stderr = child.stderr.take().unwrap();
+        let reader = BufReader::new(stderr);
+        let mut token = String::new();
+        let mut http_ready = false;
+        let mut pg_ready = false;
+
+        for line in reader.lines() {
+            let line = line.unwrap();
+            if line.contains("auth token:") {
+                if let Some(path) = line.split("auth token: ").nth(1) {
+                    token = std::fs::read_to_string(path.trim())
 ```
