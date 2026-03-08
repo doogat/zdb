@@ -361,13 +361,8 @@ if ($result -notmatch "gcSuccess") { throw "compact(force:true) mutation failed"
 pass "serve: compact(force: true) mutation"
 
 # sync mutation — no remote configured, expect error not panic
-try {
-    $result = gql '{"query":"mutation { sync { direction commitsTransferred conflictsResolved resurrected } }"}'
-    # If no error thrown, check for GraphQL errors in response
-    if ($result -notmatch "errors") { throw "sync should have errored without remote" }
-} catch {
-    # HTTP error or GraphQL error — both acceptable
-}
+$result = gql '{"query":"mutation { sync { direction commitsTransferred conflictsResolved resurrected } }"}'
+if ($result -notmatch "errors") { throw "sync should have errored without remote" }
 pass "serve: sync mutation (no remote)"
 
 Stop-Process -Id $serverProc.Id -Force -ErrorAction SilentlyContinue
