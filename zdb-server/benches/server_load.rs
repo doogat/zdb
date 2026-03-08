@@ -59,10 +59,11 @@ struct BenchServer {
     port: u16,
     token: String,
     _dir: TempDir,
+    _remote_dir: TempDir,
 }
 
 impl BenchServer {
-    fn start(dir: TempDir) -> Self {
+    fn start(dir: TempDir, remote_dir: TempDir) -> Self {
         let port = PORT_COUNTER.fetch_add(2, Ordering::SeqCst);
         let pg_port = port + 1;
 
@@ -110,6 +111,7 @@ impl BenchServer {
             port,
             token,
             _dir: dir,
+            _remote_dir: remote_dir,
         }
     }
 
@@ -178,8 +180,34 @@ fn seed_repo(dir: &Path) {
 
 fn setup_server() -> BenchServer {
     let dir = TempDir::new().unwrap();
+    let remote_dir = TempDir::new().unwrap();
     seed_repo(dir.path());
-    BenchServer::start(dir)
+
+    let clone_out = std::process::Command::new("git")
+        .args(["clone", "--bare"])
+        .arg(dir.path())
+        .arg(remote_dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        clone_out.status.success(),
+        "git clone --bare: {}",
+        String::from_utf8_lossy(&clone_out.stderr)
+    );
+
+    let add_remote_out = std::process::Command::new("git")
+        .current_dir(dir.path())
+        .args(["remote", "add", "origin"])
+        .arg(remote_dir.path())
+        .output()
+        .unwrap();
+    assert!(
+        add_remote_out.status.success(),
+        "git remote add origin: {}",
+        String::from_utf8_lossy(&add_remote_out.stderr)
+    );
+
+    BenchServer::start(dir, remote_dir)
 }
 
 // ---------------------------------------------------------------------------
@@ -406,10 +434,13 @@ fn spawn_write_load(
                 let _ = graphql_request(&c, &u, &q_update(id, seq)).await;
                 wc.fetch_add(1, Ordering::Relaxed);
             }
-            // Sync every 3rd iteration (no remote configured — exercises the
-            // code path without transferring data, matching real mixed-load).
+            // Sync every 3rd iteration to exercise fetch/merge under mixed load.
             if seq % 3 == 2 {
-                let _ = graphql_request(&c, &u, Q_SYNC).await;
+                let sync_resp = graphql_request(&c, &u, Q_SYNC).await.unwrap();
+                assert!(
+                    sync_resp.get("errors").is_none(),
+                    "sync mutation returned errors: {sync_resp}"
+                );
                 wc.fetch_add(1, Ordering::Relaxed);
             }
             seq += 1;
