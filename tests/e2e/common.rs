@@ -41,10 +41,13 @@ impl ServerGuard {
     pub fn start(repo: &ZdbTestRepo) -> Self {
         let port = SERVER_PORT_COUNTER.fetch_add(1, Ordering::SeqCst);
         let pg_port = SERVER_PORT_COUNTER.fetch_add(1, Ordering::SeqCst);
+        let log_dir = repo.path().join(".local/test-logs");
 
         let mut child = std::process::Command::new(zdb_bin())
             .arg("--repo")
             .arg(repo.path())
+            .arg("--log-dir")
+            .arg(&log_dir)
             .arg("serve")
             .arg("--port")
             .arg(port.to_string())

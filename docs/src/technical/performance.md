@@ -35,6 +35,8 @@ Run 50K benchmarks: `cargo bench -p zdb-core --bench large_scale`
 
 5K threshold tests: `cargo test --release -p zdb-core --test query_thresholds nfr01_`
 
+The local release script (`dev/bin/release`) runs the 5K release-profile threshold tests before it bumps versions, creates a tag, or pushes.
+
 50K threshold tests (slow): `cargo test --release -p zdb-core --test query_thresholds -- --ignored`
 
 ## Repo Growth (NFR-02 / AC-08)
@@ -43,7 +45,11 @@ Run 50K benchmarks: `cargo bench -p zdb-core --bench large_scale`
 |-------|--------|--------|
 | 5K zettels, 365 days × 10 edits/day | < 50MB | PASS |
 
-Run: `cargo bench -p zdb-core --bench growth -- --test`
+Benchmark: `cargo bench -p zdb-core --bench growth -- --test`
+
+Release threshold test: `cargo test --release -p zdb-core --test growth_thresholds nfr02_`
+
+The local release script (`dev/bin/release`) runs the repo-growth release threshold before it bumps versions, creates a tag, or pushes.
 
 ## Sync Latency (NFR-03 / AC-02)
 

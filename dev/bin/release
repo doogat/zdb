@@ -6,6 +6,14 @@ usage() {
   exit 1
 }
 
+run_preflight() {
+  echo "running release preflight checks..."
+  cargo check --workspace --quiet
+  echo "running release performance thresholds..."
+  cargo test --release -p zdb-core --test query_thresholds nfr01_
+  cargo test --release -p zdb-core --test growth_thresholds nfr02_
+}
+
 DRY_RUN=false
 PRE=""
 BUMP=""
@@ -66,6 +74,7 @@ if git rev-parse "$TAG" >/dev/null 2>&1; then
   echo "error: tag ${TAG} already exists" >&2
   exit 1
 fi
+run_preflight
 
 # --- bump versions ---
 for f in "${CARGO_FILES[@]}"; do
