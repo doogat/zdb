@@ -3171,7 +3171,7 @@ The server crate adds a Criterion benchmark suite (`zdb-server/benches/server_lo
 
 ### Benchmark Harness
 
-The server benchmark spawns a real `zdb serve` subprocess (just like e2e tests), seeds it with 200 zettels, then measures via HTTP (reqwest) and pgwire (tokio-postgres). A lightweight `BenchServer` struct mirrors the e2e `ServerGuard` pattern:
+The server benchmark spawns a real `zdb serve` subprocess (just like e2e tests), seeds it with 200 or 5,000 zettels, then measures via HTTP (reqwest) and pgwire (tokio-postgres). A lightweight `BenchServer` struct mirrors the e2e `ServerGuard` pattern:
 
 ```bash
 sed -n "/^struct BenchServer/,/^}/p" zdb-server/benches/server_load.rs
@@ -3183,12 +3183,13 @@ struct BenchServer {
     port: u16,
     token: String,
     _dir: TempDir,
+    _remote_dir: TempDir,
 }
 ```
 
 ### Benchmark Groups
 
-The suite contains five benchmark groups measuring different aspects of server performance:
+The suite contains seven benchmark groups across two scales — five at 200 zettels and two at 5,000 — measuring different aspects of server performance:
 
 ```bash
 grep -E "benchmark_group\(\"" zdb-server/benches/server_load.rs | sed "s/.*benchmark_group(\"/- /" | sed "s/\".*//"
@@ -3200,20 +3201,24 @@ grep -E "benchmark_group\(\"" zdb-server/benches/server_load.rs | sed "s/.*bench
 - server/concurrent_search
 - server/mixed_load
 - server/protocol_comparison
+- server_5k/single_read
+- server_5k/protocol_comparison
 ```
 
-- **single_read** — baseline latency for individual GraphQL queries (list, get, search)
-- **concurrent_reads** — list query latency at 1/4/8/16 concurrent readers, measures actor serialization cost
-- **concurrent_search** — FTS search at same concurrency levels
-- **mixed_load** — read latency with and without background write mutations
-- **protocol_comparison** — same get-zettel query across GraphQL, REST, NoSQL, and pgwire
+- **server/single_read** — baseline latency for individual GraphQL queries (list, get, search)
+- **server/concurrent_reads** — list query latency at 1/4/8/16 concurrent readers, measures actor serialization cost
+- **server/concurrent_search** — FTS search at same concurrency levels
+- **server/mixed_load** — read latency with and without background write mutations (includes sync every 3rd iteration)
+- **server/protocol_comparison** — same get-zettel query across GraphQL, REST, NoSQL, and pgwire
+- **server_5k/single_read** — repeats single-read benchmarks at 5,000 zettels for NFR-01 validation at target scale
+- **server_5k/protocol_comparison** — repeats protocol comparison at 5,000 zettels
 
 ### Mixed-Load Pattern
 
-The mixed-load benchmark spawns a background write loop that continuously creates and updates zettels while the benchmark measures read latency. This reveals actor contention:
+The mixed-load benchmark spawns a background write loop that continuously creates, updates, and syncs zettels while the benchmark measures read latency. This reveals actor contention:
 
 ```bash
-grep -A5 'fn spawn_write_load' zdb-server/benches/server_load.rs
+grep -A5 "fn spawn_write_load" zdb-server/benches/server_load.rs
 ```
 
 ```rust
@@ -3225,7 +3230,7 @@ fn spawn_write_load(
 ) -> (tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
 ```
 
-The write loop alternates between `createZettel` and `updateZettel` mutations with a 1ms yield between operations, simulating sustained write activity. Criterion measures read latency both with and without this background load, producing a direct comparison.
+The write loop alternates between `createZettel` and `updateZettel` mutations with a 1ms yield between operations, and runs a sync mutation every third iteration to exercise fetch/merge under mixed load. Criterion measures read latency both with and without this background load, producing a direct comparison.
 
 ### Cross-Protocol Comparison
 
@@ -3234,6 +3239,58 @@ The protocol comparison benchmark runs the same get-zettel-by-id query through a
 ```bash
 grep 'bench_function' zdb-server/benches/server_load.rs
 ```
+
+### Concurrency Serialization Test
+
+The `sync_during_writes_serialized_through_actor` e2e test in `tests/e2e/server_mutations.rs` validates that concurrent mutations serialize correctly through the actor. It spawns five concurrent writers and one sync thread, then verifies all creates succeed and each produced a distinct commit:
+
+```bash
+sed -n "/Verify serialization: all 5/,/^}/p" tests/e2e/server_mutations.rs
+```
+
+```rust
+    // Verify serialization: all 5 zettels were created and are queryable
+    assert_eq!(
+        created_ids.len(),
+        5,
+        "expected 5 created IDs, got {}: {:?}",
+        created_ids.len(),
+        created_ids
+    );
+
+    for id in &created_ids {
+        let query = format!(r#"{{ zettel(id: "{id}") {{ id title }} }}"#);
+        let result = server.graphql(&query);
+        assert!(
+            result.get("errors").is_none(),
+            "zettel {id} not found after concurrent writes: {result}"
+        );
+        assert_eq!(
+            result.pointer("/data/zettel/id").and_then(|v| v.as_str()),
+            Some(id.as_str()),
+            "zettel {id} returned wrong data: {result}"
+        );
+    }
+
+    // Verify serialization: each create produced a distinct commit
+    let post_count = std::process::Command::new("git")
+        .current_dir(repo.path())
+        .args(["rev-list", "--count", "HEAD"])
+        .output()
+        .expect("git rev-list failed");
+    let commits_after: usize = String::from_utf8_lossy(&post_count.stdout)
+        .trim()
+        .parse()
+        .unwrap();
+    let new_commits = commits_after - commits_before;
+    assert!(
+        new_commits >= 5,
+        "expected at least 5 new commits (one per create), got {new_commits}"
+    );
+}
+```
+
+The test confirms single-writer semantics: five concurrent creates each produce a distinct commit (at least 5 new commits), and all five zettels are queryable after the concurrent operations complete.
 
 ## Search Fast Path and Release-Only Threshold Gates
 
