@@ -114,12 +114,30 @@ type Mutation {
   executeSql(sql: String!): SqlResult!
   attachFile(input: AttachFileInput!): Attachment!
   detachFile(zettelId: ID!, filename: String!): Boolean!
+  sync(remote: String, branch: String): SyncResult!
+  compact(force: Boolean): CompactResult!
 }
 
 input CreateZettelInput { title: String!, content: String, tags: [String!], type: String }
 input UpdateZettelInput { id: ID!, title: String, content: String, tags: [String!], type: String }
 input AttachFileInput { zettelId: ID!, filename: String!, dataBase64: String!, mime: String }
+
+type SyncResult {
+  direction: String!
+  commitsTransferred: Int!
+  conflictsResolved: Int!
+  resurrected: Int!
+}
+
+type CompactResult {
+  filesRemoved: Int!
+  crdtDocsCompacted: Int!
+  gcSuccess: Boolean!
+}
 ```
+
+`sync` defaults to `remote: "origin"`, `branch: "master"`. Returns an error if no remote is configured.
+`compact` defaults to `force: false`. When no node is registered, returns a no-op report (zeros).
 
 ### Subscriptions
 
@@ -312,7 +330,8 @@ Set `enabled = false` to disable. CLI flags don't override maintenance config â€
 
 - Spawns on startup if `maintenance_enabled` is true
 - Skips the first tick (waits one full interval before first run)
-- Calls `compact()` + `detect_stale_nodes()` via `ActorCommand::RunMaintenance`
+- Calls `compact()` + `detect_stale_nodes()` via `ActorCommand::RunMaintenance`, returns `CompactionReport`
+- Also available on demand via the `compact` GraphQL mutation
 - Logs at `info` on success, `warn` on failure â€” maintenance errors are non-fatal
 
 ## NoSQL REST API
