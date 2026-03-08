@@ -67,11 +67,32 @@ pub struct SearchResult {
     pub rank: f64,
 }
 
+impl From<crate::types::SearchResult> for SearchResult {
+    fn from(r: crate::types::SearchResult) -> Self {
+        Self {
+            id: r.id,
+            title: r.title,
+            path: r.path,
+            snippet: r.snippet,
+            rank: r.rank,
+        }
+    }
+}
+
 /// FFI-safe paginated search result.
 #[derive(uniffi::Record)]
 pub struct PaginatedSearchResult {
     pub hits: Vec<SearchResult>,
     pub total_count: u64,
+}
+
+impl From<crate::types::PaginatedSearchResult> for PaginatedSearchResult {
+    fn from(r: crate::types::PaginatedSearchResult) -> Self {
+        Self {
+            hits: r.hits.into_iter().map(Into::into).collect(),
+            total_count: r.total_count as u64,
+        }
+    }
 }
 
 /// FFI-safe rebuild report.
@@ -190,35 +211,20 @@ impl ZettelDriver {
     pub fn search(&self, query: String) -> Result<Vec<SearchResult>, ZdbError> {
         let index = self.index.lock().unwrap();
         let results = index.search(&query).map_err(ZdbError::from)?;
-        Ok(results
-            .into_iter()
-            .map(|r| SearchResult {
-                id: r.id,
-                title: r.title,
-                path: r.path,
-                snippet: r.snippet,
-                rank: r.rank,
-            })
-            .collect())
+        Ok(results.into_iter().map(Into::into).collect())
     }
 
-    pub fn search_paginated(&self, query: String, limit: u32, offset: u32) -> Result<PaginatedSearchResult, ZdbError> {
+    pub fn search_paginated(
+        &self,
+        query: String,
+        limit: u32,
+        offset: u32,
+    ) -> Result<PaginatedSearchResult, ZdbError> {
         let index = self.index.lock().unwrap();
-        let result = index.search_paginated(&query, limit as usize, offset as usize).map_err(ZdbError::from)?;
-        Ok(PaginatedSearchResult {
-            hits: result
-                .hits
-                .into_iter()
-                .map(|r| SearchResult {
-                    id: r.id,
-                    title: r.title,
-                    path: r.path,
-                    snippet: r.snippet,
-                    rank: r.rank,
-                })
-                .collect(),
-            total_count: result.total_count as u64,
-        })
+        let result = index
+            .search_paginated(&query, limit as usize, offset as usize)
+            .map_err(ZdbError::from)?;
+        Ok(result.into())
     }
 
     pub fn reindex(&self) -> Result<RebuildReport, ZdbError> {
@@ -250,12 +256,18 @@ impl ZettelDriver {
         Ok(affected.to_string())
     }
 
-    pub fn attach_file(&self, zettel_id: String, file_path: String) -> Result<AttachmentInfo, ZdbError> {
+    pub fn attach_file(
+        &self,
+        zettel_id: String,
+        file_path: String,
+    ) -> Result<AttachmentInfo, ZdbError> {
         let bytes = std::fs::read(&file_path).map_err(|e| ZdbError::from(ZettelError::Io(e)))?;
         let filename = Path::new(&file_path)
             .file_name()
             .and_then(|n| n.to_str())
-            .ok_or_else(|| ZdbError::Validation { msg: "invalid filename".into() })?
+            .ok_or_else(|| ZdbError::Validation {
+                msg: "invalid filename".into(),
+            })?
             .to_owned();
         let mime = crate::types::AttachmentInfo::mime_from_filename(&filename).to_owned();
         let id = crate::types::ZettelId(zettel_id);
