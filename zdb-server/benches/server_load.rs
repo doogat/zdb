@@ -662,6 +662,76 @@ fn bench_protocol_comparison_5k(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_concurrent_reads_5k(c: &mut Criterion) {
+    let server = setup_server_n(ZETTEL_COUNT_LARGE);
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let client = build_client(&server.token);
+    let url = server.url();
+
+    let mut group = c.benchmark_group("server_5k/concurrent_reads");
+    group.sample_size(30);
+    group.measurement_time(Duration::from_secs(15));
+
+    for concurrency in [1, 4, 8, 16] {
+        group.throughput(Throughput::Elements(concurrency as u64));
+        group.bench_with_input(
+            BenchmarkId::from_parameter(concurrency),
+            &concurrency,
+            |b, &n| {
+                b.iter(|| {
+                    rt.block_on(concurrent_reads(&client, &url, Q_LIST, n));
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_mixed_load_5k(c: &mut Criterion) {
+    let server = setup_server_n(ZETTEL_COUNT_LARGE);
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let client = build_client(&server.token);
+    let url = server.url();
+
+    let mut group = c.benchmark_group("server_5k/mixed_load");
+    group.sample_size(30);
+    group.measurement_time(Duration::from_secs(15));
+
+    // Baseline: read-only (no background writes)
+    group.bench_function("reads_only", |b| {
+        b.iter(|| {
+            rt.block_on(concurrent_reads(&client, &url, Q_LIST, 4));
+        });
+    });
+
+    // Mixed: reads with background writes
+    let stop = Arc::new(AtomicBool::new(false));
+    let (write_handle, write_count) = spawn_write_load(&rt, &client, &url, stop.clone());
+
+    group.bench_function("reads_during_writes", |b| {
+        b.iter(|| {
+            rt.block_on(concurrent_reads(&client, &url, Q_LIST, 4));
+        });
+    });
+
+    // Mixed: search with background writes
+    group.bench_function("search_during_writes", |b| {
+        b.iter(|| {
+            rt.block_on(concurrent_reads(&client, &url, Q_SEARCH, 4));
+        });
+    });
+
+    stop.store(true, Ordering::Relaxed);
+    rt.block_on(write_handle).unwrap();
+    eprintln!(
+        "mixed_load_5k: background writes completed = {}",
+        write_count.load(Ordering::Relaxed)
+    );
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_single_reads,
@@ -673,6 +743,8 @@ criterion_group!(
 criterion_group!(
     benches_5k,
     bench_single_reads_5k,
+    bench_concurrent_reads_5k,
+    bench_mixed_load_5k,
     bench_protocol_comparison_5k
 );
 criterion_main!(benches, benches_5k);

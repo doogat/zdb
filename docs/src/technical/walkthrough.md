@@ -3189,7 +3189,7 @@ struct BenchServer {
 
 ### Benchmark Groups
 
-The suite contains seven benchmark groups across two scales — five at 200 zettels and two at 5,000 — measuring different aspects of server performance:
+The suite contains nine benchmark groups across two scales — five at 200 zettels and four at 5,000 — measuring different aspects of server performance:
 
 ```bash
 grep -E "benchmark_group\(\"" zdb-server/benches/server_load.rs | sed "s/.*benchmark_group(\"/- /" | sed "s/\".*//"
@@ -3202,6 +3202,8 @@ grep -E "benchmark_group\(\"" zdb-server/benches/server_load.rs | sed "s/.*bench
 - server/mixed_load
 - server/protocol_comparison
 - server_5k/single_read
+- server_5k/concurrent_reads
+- server_5k/mixed_load
 - server_5k/protocol_comparison
 ```
 
@@ -3211,6 +3213,8 @@ grep -E "benchmark_group\(\"" zdb-server/benches/server_load.rs | sed "s/.*bench
 - **server/mixed_load** — read latency with and without background write mutations (includes sync every 3rd iteration)
 - **server/protocol_comparison** — same get-zettel query across GraphQL, REST, NoSQL, and pgwire
 - **server_5k/single_read** — repeats single-read benchmarks at 5,000 zettels for NFR-01 validation at target scale
+- **server_5k/concurrent_reads** — repeats concurrent read benchmarks at 5,000 zettels
+- **server_5k/mixed_load** — repeats mixed-load benchmarks at 5,000 zettels to validate operating envelope claims
 - **server_5k/protocol_comparison** — repeats protocol comparison at 5,000 zettels
 
 ### Mixed-Load Pattern
