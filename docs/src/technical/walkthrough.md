@@ -1858,6 +1858,73 @@ enum Command {
 
 Each command follows the same pattern: open repo → open index → perform operation → print result. The CLI delegates directly to `zdb-core` functions, adding only I/O formatting.
 
+
+### Pipe-Safe Stdout
+
+Pipe-oriented commands such as `zdb type suggest foo | grep -q bar` and `zdb register-node Laptop | head -n 1` used to panic when the downstream process closed stdout early. The CLI now routes normal stdout through fallible helpers so a broken pipe returns cleanly instead of surfacing as a Rust panic.
+
+```bash
+sed -n '1,41p' zdb-cli/src/main.rs
+```
+
+```rust
+use std::io::{self, Write};
+use std::path::PathBuf;
+
+use clap::{Parser, Subcommand};
+use zdb_core::compaction;
+use zdb_core::git_ops::{self, GitRepo};
+use zdb_core::indexer::Index;
+use zdb_core::parser;
+use zdb_core::sql_engine::{SqlEngine, SqlResult};
+use zdb_core::sync_manager::{self, SyncManager};
+
+mod updater;
+
+macro_rules! out {
+    ($($arg:tt)*) => {
+        write_stdout(format_args!($($arg)*))
+    };
+}
+
+macro_rules! outln {
+    ($($arg:tt)*) => {
+        writeln_stdout(format_args!($($arg)*))
+    };
+}
+
+fn write_stdout(args: std::fmt::Arguments<'_>) -> zdb_core::error::Result<()> {
+    let mut stdout = io::stdout().lock();
+    stdout.write_fmt(args)?;
+    stdout.flush()?;
+    Ok(())
+}
+
+fn writeln_stdout(args: std::fmt::Arguments<'_>) -> zdb_core::error::Result<()> {
+    let mut stdout = io::stdout().lock();
+    stdout.write_fmt(args)?;
+    stdout.write_all(b"\n")?;
+    stdout.flush()?;
+    Ok(())
+}
+
+fn is_broken_pipe(err: &zdb_core::error::ZettelError) -> bool {
+```
+
+```bash
+sed -n '291,297p' zdb-cli/src/main.rs
+```
+
+```rust
+    if let Err(e) = run(cli) {
+        if is_broken_pipe(&e) {
+            return;
+        }
+        eprintln!("error: {e}");
+        std::process::exit(1);
+    }
+```
+
 The `Serve` command bootstraps a tokio runtime and launches the async server. Logging supports two modes: NDJSON to a file (for structured logging) or stderr with `RUST_LOG` env filter (for development).
 
 ### Self-Update — `zdb-cli/src/updater.rs`
@@ -2002,7 +2069,7 @@ Two operational commands extend the actor beyond CRUD. `Sync` triggers a full sy
 `run_sync` creates a per-call SyncManager, calls `sync()`, then rebuilds the index:
 
 ```bash
-grep -A5 '^fn run_sync' zdb-server/src/actor.rs
+grep -A7 '^fn run_sync' zdb-server/src/actor.rs
 ```
 
 ```rust
@@ -2010,8 +2077,9 @@ fn run_sync(repo: &GitRepo, index: &Index, remote: &str, branch: &str) -> ActorR
     let mut mgr = zdb_core::sync_manager::SyncManager::open(repo)?;
     let report = mgr.sync(remote, branch, index)?;
     // Rebuild index after sync
-    let _ = index.rebuild_if_stale(repo);
+    index.rebuild_if_stale(repo)?;
     Ok(report)
+}
 ```
 
 `run_maintenance` returns a no-op `CompactionReport` when no node is registered (matching the old behavior of returning `Ok(())`). The GraphQL `compact` mutation exposes these fields as `CompactResult`, and `sync` exposes `SyncReport` fields as `SyncResult`.

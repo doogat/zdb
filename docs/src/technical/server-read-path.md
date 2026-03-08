@@ -57,7 +57,7 @@ This is the critical finding: **writes degrade read latency for expensive querie
 | REST | 211 µs | 1.05 ms | +986 µs |
 | GraphQL | 276 µs | 1.07 ms | +1.0 ms |
 
-At 5K, REST and GraphQL show higher absolute overhead (schema resolution scales with type count). NoSQL and pgwire remain fast.
+At 5K, REST and GraphQL show higher absolute overhead (schema resolution scales with type count). NoSQL and pgwire remain fast. Note: pgwire benchmarks cover get-by-id only; search and list via pgwire are not yet benchmarked.
 
 ## Options
 

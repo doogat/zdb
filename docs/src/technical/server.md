@@ -136,7 +136,7 @@ type CompactResult {
 }
 ```
 
-`sync` defaults to `remote: "origin"`, `branch: "master"`. Returns an error if no remote is configured.
+`sync` defaults to `remote: "origin"`, `branch: "master"` (override via arguments for repos using a different default branch). Returns an error if no remote is configured.
 `compact` defaults to `force: false`. When no node is registered, returns a no-op report (zeros).
 
 ### Subscriptions
@@ -333,6 +333,7 @@ Set `enabled = false` to disable. CLI flags don't override maintenance config â€
 - Calls `compact()` + `detect_stale_nodes()` via `ActorCommand::RunMaintenance`, returns `CompactionReport`
 - Also available on demand via the `compact` GraphQL mutation
 - Logs at `info` on success, `warn` on failure â€” maintenance errors are non-fatal
+- `run_maintenance` propagates errors (returns `Err` on compaction failure); callers handle this gracefully
 
 ## NoSQL REST API
 
