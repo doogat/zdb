@@ -415,7 +415,9 @@ fn actor_loop(repo_path: PathBuf, mut rx: mpsc::Receiver<ActorMsg>, event_bus: E
     };
 
     // Ensure index is up to date
-    let _ = index.rebuild_if_stale(&repo);
+    if let Err(e) = index.rebuild_if_stale(&repo) {
+        log::warn!("actor: index rebuild on startup failed: {e}");
+    }
 
     // Open redb NoSQL index
     let redb_index = {
@@ -931,7 +933,7 @@ fn run_maintenance(repo: &GitRepo, index: &Index, _repo_path: &std::path::Path, 
     );
 
     // Rebuild index after compaction
-    let _ = index.rebuild_if_stale(repo);
+    index.rebuild_if_stale(repo)?;
 
     let config = repo.load_config().unwrap_or_default();
     match mgr.detect_stale_nodes(config.compaction.stale_ttl_days) {
@@ -953,6 +955,6 @@ fn run_sync(repo: &GitRepo, index: &Index, remote: &str, branch: &str) -> ActorR
     let mut mgr = zdb_core::sync_manager::SyncManager::open(repo)?;
     let report = mgr.sync(remote, branch, index)?;
     // Rebuild index after sync
-    let _ = index.rebuild_if_stale(repo);
+    index.rebuild_if_stale(repo)?;
     Ok(report)
 }
