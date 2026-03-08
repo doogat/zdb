@@ -253,11 +253,14 @@ impl Index {
             return Ok(Some(path));
         }
         // 2. Try as direct path
-        let path_exists: bool = self.conn.query_row(
-            "SELECT COUNT(*) > 0 FROM zettels WHERE path = ?1",
-            params![target],
-            |row| row.get(0),
-        ).unwrap_or(false);
+        let path_exists: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM zettels WHERE path = ?1",
+                params![target],
+                |row| row.get(0),
+            )
+            .unwrap_or(false);
         if path_exists {
             return Ok(Some(target.to_string()));
         }
@@ -275,11 +278,16 @@ impl Index {
                 "DELETE FROM _zdb_fts WHERE rowid = (SELECT rowid FROM zettels WHERE id = ?1)",
                 params![id],
             )?;
-            self.conn.execute("DELETE FROM _zdb_tags WHERE zettel_id = ?1", params![id])?;
-            self.conn.execute("DELETE FROM _zdb_fields WHERE zettel_id = ?1", params![id])?;
-            self.conn.execute("DELETE FROM _zdb_links WHERE source_id = ?1", params![id])?;
-            self.conn.execute("DELETE FROM _zdb_aliases WHERE zettel_id = ?1", params![id])?;
-            self.conn.execute("DELETE FROM zettels WHERE id = ?1", params![id])?;
+            self.conn
+                .execute("DELETE FROM _zdb_tags WHERE zettel_id = ?1", params![id])?;
+            self.conn
+                .execute("DELETE FROM _zdb_fields WHERE zettel_id = ?1", params![id])?;
+            self.conn
+                .execute("DELETE FROM _zdb_links WHERE source_id = ?1", params![id])?;
+            self.conn
+                .execute("DELETE FROM _zdb_aliases WHERE zettel_id = ?1", params![id])?;
+            self.conn
+                .execute("DELETE FROM zettels WHERE id = ?1", params![id])?;
             Ok(())
         })
     }
@@ -296,7 +304,15 @@ impl Index {
         }
 
         // Verify core tables exist
-        for table in &["zettels", "_zdb_fts", "_zdb_tags", "_zdb_fields", "_zdb_links", "_zdb_aliases", "_zdb_meta"] {
+        for table in &[
+            "zettels",
+            "_zdb_fts",
+            "_zdb_tags",
+            "_zdb_fields",
+            "_zdb_links",
+            "_zdb_aliases",
+            "_zdb_meta",
+        ] {
             let exists: bool = self
                 .conn
                 .query_row(
@@ -457,10 +473,8 @@ impl Index {
 
     /// Drop and recreate a materialized SQLite table from a schema.
     fn drop_and_create_materialized_table(&self, schema: &crate::types::TableSchema) -> Result<()> {
-        self.conn.execute(
-            &format!("DROP TABLE IF EXISTS {}", schema.table_name),
-            [],
-        )?;
+        self.conn
+            .execute(&format!("DROP TABLE IF EXISTS {}", schema.table_name), [])?;
 
         let mut col_defs = vec!["id TEXT PRIMARY KEY".to_string()];
         for col in &schema.columns {
@@ -471,8 +485,16 @@ impl Index {
                 _ => "TEXT",
             };
             let check = if let Some(ref vals) = col.allowed_values {
-                let quoted: Vec<String> = vals.iter().map(|v| format!("'{}'", v.replace('\'', "''"))).collect();
-                format!(" CHECK(\"{}\" IS NULL OR \"{}\" IN ({}))", col.name, col.name, quoted.join(", "))
+                let quoted: Vec<String> = vals
+                    .iter()
+                    .map(|v| format!("'{}'", v.replace('\'', "''")))
+                    .collect();
+                format!(
+                    " CHECK(\"{}\" IS NULL OR \"{}\" IN ({}))",
+                    col.name,
+                    col.name,
+                    quoted.join(", ")
+                )
             } else {
                 String::new()
             };
@@ -496,13 +518,11 @@ impl Index {
         type_name: &str,
         repo: &(impl ZettelSource + ?Sized),
     ) -> Result<()> {
-        let mut data_stmt = self.conn.prepare(
-            "SELECT id, path FROM zettels WHERE type = ?1",
-        )?;
+        let mut data_stmt = self
+            .conn
+            .prepare("SELECT id, path FROM zettels WHERE type = ?1")?;
         let data_zettels: Vec<(String, String)> = data_stmt
-            .query_map(params![type_name], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })?
+            .query_map(params![type_name], |row| Ok((row.get(0)?, row.get(1)?)))?
             .filter_map(|r| r.ok())
             .collect();
 
@@ -516,17 +536,19 @@ impl Index {
 
     /// Rematerialize a single type's SQLite table.
     /// Loads typedef (if any), infers schema from data, merges, drops/creates table, populates rows.
-    pub fn rematerialize_type(&self, type_name: &str, repo: &(impl ZettelSource + ?Sized)) -> Result<()> {
+    pub fn rematerialize_type(
+        &self,
+        type_name: &str,
+        repo: &(impl ZettelSource + ?Sized),
+    ) -> Result<()> {
         use crate::sql_engine::schema_from_parsed;
 
         // Load typedef if exists
         let typedef: Option<crate::types::TableSchema> = {
-            let mut stmt = self.conn.prepare(
-                "SELECT path FROM zettels WHERE type = '_typedef' AND title = ?1",
-            )?;
-            let path: Option<String> = stmt
-                .query_row(params![type_name], |row| row.get(0))
-                .ok();
+            let mut stmt = self
+                .conn
+                .prepare("SELECT path FROM zettels WHERE type = '_typedef' AND title = ?1")?;
+            let path: Option<String> = stmt.query_row(params![type_name], |row| row.get(0)).ok();
             path.and_then(|p| {
                 let content = repo.read_file(&p).ok()?;
                 let parsed = crate::parser::parse(&content, &p).ok()?;
@@ -597,14 +619,18 @@ impl Index {
     }
 
     /// Infer a TableSchema for a type by scanning all data zettels of that type.
-    pub fn infer_schema(&self, type_name: &str, repo: &(impl ZettelSource + ?Sized)) -> Result<crate::types::TableSchema> {
+    pub fn infer_schema(
+        &self,
+        type_name: &str,
+        repo: &(impl ZettelSource + ?Sized),
+    ) -> Result<crate::types::TableSchema> {
         use crate::types::{ColumnDef, TableSchema, Zone};
         use std::collections::HashMap;
 
         // Query all zettels of this type
-        let mut stmt = self.conn.prepare(
-            "SELECT path FROM zettels WHERE type = ?1",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path FROM zettels WHERE type = ?1")?;
         let paths: Vec<String> = stmt
             .query_map(params![type_name], |row| row.get(0))?
             .filter_map(|r| r.ok())
@@ -747,7 +773,11 @@ impl Index {
                         if let Some(schema) = typedef_schemas.get(type_name.as_str()) {
                             for col in &schema.columns {
                                 if col.required {
-                                    let has_value = match col.zone.as_ref().unwrap_or(&crate::types::Zone::Frontmatter) {
+                                    let has_value = match col
+                                        .zone
+                                        .as_ref()
+                                        .unwrap_or(&crate::types::Zone::Frontmatter)
+                                    {
                                         crate::types::Zone::Frontmatter => {
                                             parsed.meta.extra.contains_key(&col.name)
                                         }
@@ -783,14 +813,18 @@ impl Index {
     }
 
     /// Load all _typedef schemas from the index.
-    fn load_all_typedefs(&self, repo: &impl ZettelSource) -> std::collections::HashMap<String, crate::types::TableSchema> {
+    fn load_all_typedefs(
+        &self,
+        repo: &impl ZettelSource,
+    ) -> std::collections::HashMap<String, crate::types::TableSchema> {
         use crate::sql_engine::schema_from_parsed;
 
         let mut schemas = std::collections::HashMap::new();
 
-        let mut stmt = match self.conn.prepare(
-            "SELECT path FROM zettels WHERE type = '_typedef'",
-        ) {
+        let mut stmt = match self
+            .conn
+            .prepare("SELECT path FROM zettels WHERE type = '_typedef'")
+        {
             Ok(s) => s,
             Err(_) => return schemas,
         };
@@ -839,14 +873,19 @@ impl Index {
             placeholders.join(", ")
         );
 
-        let params: Vec<&dyn rusqlite::types::ToSql> =
-            vals.iter().map(|v| v as &dyn rusqlite::types::ToSql).collect();
+        let params: Vec<&dyn rusqlite::types::ToSql> = vals
+            .iter()
+            .map(|v| v as &dyn rusqlite::types::ToSql)
+            .collect();
         self.conn.execute(&sql, params.as_slice())?;
         Ok(())
     }
 
     /// Rebuild if stale or corrupt. Uses incremental reindex when possible.
-    pub fn rebuild_if_stale(&self, repo: &impl ZettelSource) -> Result<Option<crate::types::RebuildReport>> {
+    pub fn rebuild_if_stale(
+        &self,
+        repo: &impl ZettelSource,
+    ) -> Result<Option<crate::types::RebuildReport>> {
         let corrupt = !self.check_integrity()?;
         if corrupt {
             tracing::warn!("index corruption detected, forcing full rebuild");
@@ -866,30 +905,7 @@ impl Index {
     /// Full-text search with snippets and ranking.
     #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
     pub fn search(&self, query: &str) -> Result<Vec<SearchResult>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT z.id, z.title, z.path, snippet(_zdb_fts, 1, '<b>', '</b>', '...', 32), rank
-             FROM _zdb_fts
-             JOIN zettels z ON z.rowid = _zdb_fts.rowid
-             WHERE _zdb_fts MATCH ?1
-             ORDER BY rank",
-        )?;
-
-        let results = stmt.query_map(params![query], |row| {
-            Ok(SearchResult {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                path: row.get(2)?,
-                snippet: row.get(3)?,
-                rank: row.get(4)?,
-            })
-        })?;
-
-        let mut hits = Vec::new();
-        for r in results {
-            hits.push(r?);
-        }
-
-        Ok(hits)
+        self.search_hits(query, None)
     }
 
     /// Paginated full-text search with snippets, ranking, and total count.
@@ -900,29 +916,7 @@ impl Index {
         limit: usize,
         offset: usize,
     ) -> Result<PaginatedSearchResult> {
-        let mut stmt = self.conn.prepare(
-            "SELECT z.id, z.title, z.path, snippet(_zdb_fts, 1, '<b>', '</b>', '...', 32), rank
-             FROM _zdb_fts
-             JOIN zettels z ON z.rowid = _zdb_fts.rowid
-             WHERE _zdb_fts MATCH ?1
-             ORDER BY rank
-             LIMIT ?2 OFFSET ?3",
-        )?;
-
-        let results = stmt.query_map(params![query, limit as i64, offset as i64], |row| {
-            Ok(SearchResult {
-                id: row.get(0)?,
-                title: row.get(1)?,
-                path: row.get(2)?,
-                snippet: row.get(3)?,
-                rank: row.get(4)?,
-            })
-        })?;
-
-        let mut hits = Vec::new();
-        for r in results {
-            hits.push(r?);
-        }
+        let hits = self.search_hits(query, Some((limit, offset)))?;
 
         let total_count: usize = self.conn.query_row(
             "SELECT COUNT(*) FROM _zdb_fts WHERE _zdb_fts MATCH ?1",
@@ -933,12 +927,54 @@ impl Index {
         Ok(PaginatedSearchResult { hits, total_count })
     }
 
+    fn search_hits(
+        &self,
+        query: &str,
+        pagination: Option<(usize, usize)>,
+    ) -> Result<Vec<SearchResult>> {
+        let base = "SELECT z.id, z.title, z.path, \
+                    snippet(_zdb_fts, 1, '<b>', '</b>', '...', 32), rank \
+                    FROM _zdb_fts \
+                    JOIN zettels z ON z.rowid = _zdb_fts.rowid \
+                    WHERE _zdb_fts MATCH ?1 \
+                    ORDER BY rank";
+        let sql = match pagination {
+            Some(_) => format!("{base} LIMIT ?2 OFFSET ?3"),
+            None => base.to_string(),
+        };
+
+        let mut stmt = self.conn.prepare(&sql)?;
+
+        let rows = match pagination {
+            Some((limit, offset)) => {
+                stmt.query_map(params![query, limit as i64, offset as i64], Self::map_search_row)?
+            }
+            None => stmt.query_map(params![query], Self::map_search_row)?,
+        };
+
+        let mut hits = Vec::new();
+        for r in rows {
+            hits.push(r?);
+        }
+        Ok(hits)
+    }
+
+    fn map_search_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<SearchResult> {
+        Ok(SearchResult {
+            id: row.get(0)?,
+            title: row.get(1)?,
+            path: row.get(2)?,
+            snippet: row.get(3)?,
+            rank: row.get(4)?,
+        })
+    }
+
     /// Find zettels by hierarchical tag prefix.
     pub fn by_tag(&self, prefix: &str) -> Result<Vec<String>> {
         let pattern = format!("{prefix}%");
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT zettel_id FROM _zdb_tags WHERE tag LIKE ?1",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT zettel_id FROM _zdb_tags WHERE tag LIKE ?1")?;
         let ids = stmt.query_map(params![pattern], |row| row.get(0))?;
         let mut out = Vec::new();
         for id in ids {
@@ -949,9 +985,9 @@ impl Index {
 
     /// Find all zettels linking to a given target.
     pub fn backlinks(&self, target_path: &str) -> Result<Vec<String>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT source_id FROM _zdb_links WHERE target_path = ?1",
-        )?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT DISTINCT source_id FROM _zdb_links WHERE target_path = ?1")?;
         let ids = stmt.query_map(params![target_path], |row| row.get(0))?;
         let mut out = Vec::new();
         for id in ids {
@@ -1005,7 +1041,8 @@ impl Index {
         while let Some(row) = query_rows.next()? {
             let mut values = Vec::new();
             for i in 0..col_count {
-                let val: String = row.get::<_, rusqlite::types::Value>(i)
+                let val: String = row
+                    .get::<_, rusqlite::types::Value>(i)
                     .map(|v| match v {
                         rusqlite::types::Value::Null => "NULL".to_string(),
                         rusqlite::types::Value::Integer(i) => i.to_string(),
@@ -1032,8 +1069,10 @@ impl Index {
         let col_count = stmt.column_count();
         let mut rows = Vec::new();
 
-        let param_refs: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|v| v as &dyn rusqlite::types::ToSql).collect();
+        let param_refs: Vec<&dyn rusqlite::types::ToSql> = params
+            .iter()
+            .map(|v| v as &dyn rusqlite::types::ToSql)
+            .collect();
         let mut query_rows = stmt.query(param_refs.as_slice())?;
         while let Some(row) = query_rows.next()? {
             let mut values = Vec::new();
@@ -1067,7 +1106,8 @@ impl Index {
         while let Some(row) = query_rows.next()? {
             let mut values = Vec::new();
             for i in 0..col_count {
-                let val: String = row.get::<_, rusqlite::types::Value>(i)
+                let val: String = row
+                    .get::<_, rusqlite::types::Value>(i)
                     .map(|v| match v {
                         rusqlite::types::Value::Null => "NULL".to_string(),
                         rusqlite::types::Value::Integer(i) => i.to_string(),
@@ -1100,8 +1140,10 @@ impl Index {
 
     /// Execute a SQL statement with string parameters. Returns rows affected.
     pub fn execute_sql(&self, sql: &str, params: &[&str]) -> Result<usize> {
-        let p: Vec<&dyn rusqlite::types::ToSql> =
-            params.iter().map(|s| s as &dyn rusqlite::types::ToSql).collect();
+        let p: Vec<&dyn rusqlite::types::ToSql> = params
+            .iter()
+            .map(|s| s as &dyn rusqlite::types::ToSql)
+            .collect();
         let count = self.conn.execute(sql, p.as_slice())?;
         Ok(count)
     }
@@ -1120,7 +1162,12 @@ impl crate::traits::ZettelIndex for Index {
         self.search(query)
     }
 
-    fn search_paginated(&self, query: &str, limit: usize, offset: usize) -> Result<PaginatedSearchResult> {
+    fn search_paginated(
+        &self,
+        query: &str,
+        limit: usize,
+        offset: usize,
+    ) -> Result<PaginatedSearchResult> {
         self.search_paginated(query, limit, offset)
     }
 
@@ -1151,7 +1198,10 @@ fn extract_column_value(
     let zone = col.zone.clone().unwrap_or_else(|| {
         if col.references.is_some() {
             Zone::Reference
-        } else if matches!(col.data_type.to_uppercase().as_str(), "INTEGER" | "REAL" | "BOOLEAN") {
+        } else if matches!(
+            col.data_type.to_uppercase().as_str(),
+            "INTEGER" | "REAL" | "BOOLEAN"
+        ) {
             Zone::Frontmatter
         } else {
             Zone::Body
@@ -1171,19 +1221,17 @@ fn extract_column_value(
             }
             String::new()
         }
-        Zone::Frontmatter => {
-            zettel
-                .meta
-                .extra
-                .get(&col.name)
-                .map(|v| match v {
-                    crate::types::Value::Number(n) => n.to_string(),
-                    crate::types::Value::Bool(b) => b.to_string(),
-                    crate::types::Value::String(s) => s.clone(),
-                    _ => format!("{v:?}"),
-                })
-                .unwrap_or_default()
-        }
+        Zone::Frontmatter => zettel
+            .meta
+            .extra
+            .get(&col.name)
+            .map(|v| match v {
+                crate::types::Value::Number(n) => n.to_string(),
+                crate::types::Value::Bool(b) => b.to_string(),
+                crate::types::Value::String(s) => s.clone(),
+                _ => format!("{v:?}"),
+            })
+            .unwrap_or_default(),
         Zone::Body => extract_body_section(&zettel.body, &col.name),
     }
 }
@@ -1311,11 +1359,14 @@ mod tests {
         // Opening again should not error
         let _idx2 = Index::open(Path::new(":memory:")).unwrap();
         // Verify tables exist
-        let count: i64 = idx.conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='zettels'",
-            [],
-            |row| row.get(0),
-        ).unwrap();
+        let count: i64 = idx
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='zettels'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
         assert_eq!(count, 1);
     }
 
@@ -1388,10 +1439,14 @@ mod tests {
         z.meta.tags = vec!["newtag".into()];
         idx.index_zettel(&z).unwrap();
 
-        let rows = idx.query_raw("SELECT title FROM zettels WHERE id = '20260226120000'").unwrap();
+        let rows = idx
+            .query_raw("SELECT title FROM zettels WHERE id = '20260226120000'")
+            .unwrap();
         assert_eq!(rows[0][0], "Updated Title");
 
-        let rows = idx.query_raw("SELECT COUNT(*) FROM _zdb_tags WHERE zettel_id = '20260226120000'").unwrap();
+        let rows = idx
+            .query_raw("SELECT COUNT(*) FROM _zdb_tags WHERE zettel_id = '20260226120000'")
+            .unwrap();
         assert_eq!(rows[0][0], "1");
     }
 
@@ -1400,8 +1455,14 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let repo = GitRepo::init(dir.path()).unwrap();
 
-        let zettel_content = "---\nid: 20260226120000\ntitle: Rebuild Test\ntags:\n  - test\n---\nBody here.";
-        repo.commit_file("zettelkasten/20260226120000.md", zettel_content, "add zettel").unwrap();
+        let zettel_content =
+            "---\nid: 20260226120000\ntitle: Rebuild Test\ntags:\n  - test\n---\nBody here.";
+        repo.commit_file(
+            "zettelkasten/20260226120000.md",
+            zettel_content,
+            "add zettel",
+        )
+        .unwrap();
 
         let db_path = dir.path().join(".zdb/index.db");
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
@@ -1420,7 +1481,12 @@ mod tests {
         assert!(idx.rebuild_if_stale(&repo).unwrap().is_none());
 
         // After new commit, should be stale again
-        repo.commit_file("zettelkasten/20260226130000.md", "---\ntitle: New\n---\nNew body.", "add another").unwrap();
+        repo.commit_file(
+            "zettelkasten/20260226130000.md",
+            "---\ntitle: New\n---\nNew body.",
+            "add another",
+        )
+        .unwrap();
         assert!(idx.is_stale(&repo).unwrap());
 
         // Incremental reindex only processes changed files (1 new zettel)
@@ -1467,12 +1533,8 @@ count: 42
 
 Widget
 ";
-        repo.commit_file(
-            "zettelkasten/20260226140100.md",
-            data_content,
-            "add item",
-        )
-        .unwrap();
+        repo.commit_file("zettelkasten/20260226140100.md", data_content, "add item")
+            .unwrap();
 
         let db_path = dir.path().join(".zdb/index.db");
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
@@ -1482,9 +1544,7 @@ Widget
         assert_eq!(report.indexed, 2);
 
         // Materialized table should exist and have data
-        let rows = idx
-            .query_raw("SELECT name, count FROM items")
-            .unwrap();
+        let rows = idx.query_raw("SELECT name, count FROM items").unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0][0], "Widget");
         assert_eq!(rows[0][1], "42");
@@ -1497,8 +1557,10 @@ Widget
 
         let z1 = "---\nid: 20260226150000\ntitle: Task 1\ntype: task\npriority: 1\ndone: true\nscore: 3.5\n---\nBody.";
         let z2 = "---\nid: 20260226150100\ntitle: Task 2\ntype: task\npriority: 2\ndone: false\nscore: 7.0\n---\nBody.";
-        repo.commit_file("zettelkasten/20260226150000.md", z1, "add task 1").unwrap();
-        repo.commit_file("zettelkasten/20260226150100.md", z2, "add task 2").unwrap();
+        repo.commit_file("zettelkasten/20260226150000.md", z1, "add task 1")
+            .unwrap();
+        repo.commit_file("zettelkasten/20260226150100.md", z2, "add task 2")
+            .unwrap();
 
         let db_path = dir.path().join(".zdb/index.db");
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
@@ -1527,7 +1589,8 @@ Widget
         let repo = GitRepo::init(dir.path()).unwrap();
 
         let z1 = "---\nid: 20260226160000\ntitle: Note 1\ntype: article\n---\n\n## Summary\n\nSome text\n\n## Details\n\nMore text";
-        repo.commit_file("zettelkasten/20260226160000.md", z1, "add article").unwrap();
+        repo.commit_file("zettelkasten/20260226160000.md", z1, "add article")
+            .unwrap();
 
         let db_path = dir.path().join(".zdb/index.db");
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
@@ -1552,7 +1615,8 @@ Widget
         let repo = GitRepo::init(dir.path()).unwrap();
 
         let z1 = "---\nid: 20260226170000\ntitle: Proj 1\ntype: project\n---\n\nBody\n\n---\n\n- parent:: [[20260226170100]]\n- ticket:: JIRA-123";
-        repo.commit_file("zettelkasten/20260226170000.md", z1, "add project").unwrap();
+        repo.commit_file("zettelkasten/20260226170000.md", z1, "add project")
+            .unwrap();
 
         let db_path = dir.path().join(".zdb/index.db");
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
@@ -1573,7 +1637,12 @@ Widget
     fn infer_schema_empty_type() {
         let dir = tempfile::TempDir::new().unwrap();
         let repo = GitRepo::init(dir.path()).unwrap();
-        repo.commit_file("zettelkasten/20260226180000.md", "---\ntitle: Dummy\n---\nBody", "add").unwrap();
+        repo.commit_file(
+            "zettelkasten/20260226180000.md",
+            "---\ntitle: Dummy\n---\nBody",
+            "add",
+        )
+        .unwrap();
 
         let db_path = dir.path().join(".zdb/index.db");
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
@@ -1592,8 +1661,10 @@ Widget
 
         let z1 = "---\nid: 20260226190000\ntitle: A\ntype: mixed\ncount: 5\n---\nBody.";
         let z2 = "---\nid: 20260226190100\ntitle: B\ntype: mixed\ncount: many\n---\nBody.";
-        repo.commit_file("zettelkasten/20260226190000.md", z1, "add A").unwrap();
-        repo.commit_file("zettelkasten/20260226190100.md", z2, "add B").unwrap();
+        repo.commit_file("zettelkasten/20260226190000.md", z1, "add A")
+            .unwrap();
+        repo.commit_file("zettelkasten/20260226190100.md", z2, "add B")
+            .unwrap();
 
         let db_path = dir.path().join(".zdb/index.db");
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
@@ -1601,7 +1672,11 @@ Widget
         idx.rebuild(&repo).unwrap();
 
         let schema = idx.infer_schema("mixed", &repo).unwrap();
-        let count = schema.columns.iter().find(|c| c.name == "count").expect("count column");
+        let count = schema
+            .columns
+            .iter()
+            .find(|c| c.name == "count")
+            .expect("count column");
         assert_eq!(count.data_type, "TEXT");
     }
 
@@ -1612,7 +1687,8 @@ Widget
 
         // Frontmatter with case-variant keys: xP and xp
         let z1 = "---\nid: 20260226200000\ntitle: Dupe\ntype: dupe\nxP: a\nxp: A\n---\nBody.";
-        repo.commit_file("zettelkasten/20260226200000.md", z1, "add dupe").unwrap();
+        repo.commit_file("zettelkasten/20260226200000.md", z1, "add dupe")
+            .unwrap();
 
         let db_path = dir.path().join(".zdb/index.db");
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
@@ -1620,8 +1696,16 @@ Widget
         idx.rebuild(&repo).unwrap();
 
         let schema = idx.infer_schema("dupe", &repo).unwrap();
-        let xp_cols: Vec<_> = schema.columns.iter().filter(|c| c.name.eq_ignore_ascii_case("xp")).collect();
-        assert_eq!(xp_cols.len(), 1, "case-variant keys should merge into one column");
+        let xp_cols: Vec<_> = schema
+            .columns
+            .iter()
+            .filter(|c| c.name.eq_ignore_ascii_case("xp"))
+            .collect();
+        assert_eq!(
+            xp_cols.len(),
+            1,
+            "case-variant keys should merge into one column"
+        );
         assert_eq!(xp_cols[0].name, "xp");
     }
 
@@ -1632,8 +1716,26 @@ Widget
         let typedef = TableSchema {
             table_name: "foo".to_string(),
             columns: vec![
-                ColumnDef { name: "a".into(), data_type: "TEXT".into(), references: None, zone: Some(Zone::Body), required: false, search_boost: None, allowed_values: None, default_value: None },
-                ColumnDef { name: "b".into(), data_type: "INTEGER".into(), references: None, zone: Some(Zone::Frontmatter), required: true, search_boost: None, allowed_values: None, default_value: None },
+                ColumnDef {
+                    name: "a".into(),
+                    data_type: "TEXT".into(),
+                    references: None,
+                    zone: Some(Zone::Body),
+                    required: false,
+                    search_boost: None,
+                    allowed_values: None,
+                    default_value: None,
+                },
+                ColumnDef {
+                    name: "b".into(),
+                    data_type: "INTEGER".into(),
+                    references: None,
+                    zone: Some(Zone::Frontmatter),
+                    required: true,
+                    search_boost: None,
+                    allowed_values: None,
+                    default_value: None,
+                },
             ],
             crdt_strategy: Some("preset:default".into()),
             template_sections: vec!["A".into()],
@@ -1656,9 +1758,16 @@ Widget
 
         let inferred = TableSchema {
             table_name: "bar".to_string(),
-            columns: vec![
-                ColumnDef { name: "x".into(), data_type: "INTEGER".into(), references: None, zone: Some(Zone::Frontmatter), required: false, search_boost: None, allowed_values: None, default_value: None },
-            ],
+            columns: vec![ColumnDef {
+                name: "x".into(),
+                data_type: "INTEGER".into(),
+                references: None,
+                zone: Some(Zone::Frontmatter),
+                required: false,
+                search_boost: None,
+                allowed_values: None,
+                default_value: None,
+            }],
             crdt_strategy: None,
             template_sections: vec![],
         };
@@ -1674,17 +1783,42 @@ Widget
 
         let typedef = TableSchema {
             table_name: "baz".to_string(),
-            columns: vec![
-                ColumnDef { name: "shared".into(), data_type: "INTEGER".into(), references: None, zone: Some(Zone::Frontmatter), required: true, search_boost: Some(2.0), allowed_values: None, default_value: None },
-            ],
+            columns: vec![ColumnDef {
+                name: "shared".into(),
+                data_type: "INTEGER".into(),
+                references: None,
+                zone: Some(Zone::Frontmatter),
+                required: true,
+                search_boost: Some(2.0),
+                allowed_values: None,
+                default_value: None,
+            }],
             crdt_strategy: None,
             template_sections: vec![],
         };
         let inferred = TableSchema {
             table_name: "baz".to_string(),
             columns: vec![
-                ColumnDef { name: "shared".into(), data_type: "TEXT".into(), references: None, zone: Some(Zone::Body), required: false, search_boost: None, allowed_values: None, default_value: None },
-                ColumnDef { name: "extra".into(), data_type: "TEXT".into(), references: None, zone: Some(Zone::Body), required: false, search_boost: None, allowed_values: None, default_value: None },
+                ColumnDef {
+                    name: "shared".into(),
+                    data_type: "TEXT".into(),
+                    references: None,
+                    zone: Some(Zone::Body),
+                    required: false,
+                    search_boost: None,
+                    allowed_values: None,
+                    default_value: None,
+                },
+                ColumnDef {
+                    name: "extra".into(),
+                    data_type: "TEXT".into(),
+                    references: None,
+                    zone: Some(Zone::Body),
+                    required: false,
+                    search_boost: None,
+                    allowed_values: None,
+                    default_value: None,
+                },
             ],
             crdt_strategy: None,
             template_sections: vec![],
@@ -1704,17 +1838,42 @@ Widget
 
         let typedef = TableSchema {
             table_name: "qux".to_string(),
-            columns: vec![
-                ColumnDef { name: "a".into(), data_type: "TEXT".into(), references: None, zone: Some(Zone::Body), required: false, search_boost: None, allowed_values: None, default_value: None },
-            ],
+            columns: vec![ColumnDef {
+                name: "a".into(),
+                data_type: "TEXT".into(),
+                references: None,
+                zone: Some(Zone::Body),
+                required: false,
+                search_boost: None,
+                allowed_values: None,
+                default_value: None,
+            }],
             crdt_strategy: None,
             template_sections: vec![],
         };
         let inferred = TableSchema {
             table_name: "qux".to_string(),
             columns: vec![
-                ColumnDef { name: "b".into(), data_type: "INTEGER".into(), references: None, zone: Some(Zone::Frontmatter), required: false, search_boost: None, allowed_values: None, default_value: None },
-                ColumnDef { name: "c".into(), data_type: "REAL".into(), references: None, zone: Some(Zone::Frontmatter), required: false, search_boost: None, allowed_values: None, default_value: None },
+                ColumnDef {
+                    name: "b".into(),
+                    data_type: "INTEGER".into(),
+                    references: None,
+                    zone: Some(Zone::Frontmatter),
+                    required: false,
+                    search_boost: None,
+                    allowed_values: None,
+                    default_value: None,
+                },
+                ColumnDef {
+                    name: "c".into(),
+                    data_type: "REAL".into(),
+                    references: None,
+                    zone: Some(Zone::Frontmatter),
+                    required: false,
+                    search_boost: None,
+                    allowed_values: None,
+                    default_value: None,
+                },
             ],
             crdt_strategy: None,
             template_sections: vec![],
@@ -1730,7 +1889,8 @@ Widget
         let repo = GitRepo::init(dir.path()).unwrap();
 
         let z = "---\nid: 20260226200000\ntitle: Valid\ntype: note\n---\nBody text.";
-        repo.commit_file("zettelkasten/20260226200000.md", z, "add").unwrap();
+        repo.commit_file("zettelkasten/20260226200000.md", z, "add")
+            .unwrap();
 
         let db_path = dir.path().join(".zdb/index.db");
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
@@ -1747,10 +1907,16 @@ Widget
         let repo = GitRepo::init(dir.path()).unwrap();
 
         let typedef_content = "---\nid: 20260226210000\ntitle: task\ntype: _typedef\ncolumns:\n  - name: priority\n    data_type: INTEGER\n    zone: frontmatter\n    required: true\n---\n";
-        repo.commit_file("zettelkasten/_typedef/20260226210000.md", typedef_content, "add typedef").unwrap();
+        repo.commit_file(
+            "zettelkasten/_typedef/20260226210000.md",
+            typedef_content,
+            "add typedef",
+        )
+        .unwrap();
 
         let z = "---\nid: 20260226210100\ntitle: My Task\ntype: task\n---\nBody.";
-        repo.commit_file("zettelkasten/20260226210100.md", z, "add task").unwrap();
+        repo.commit_file("zettelkasten/20260226210100.md", z, "add task")
+            .unwrap();
 
         let db_path = dir.path().join(".zdb/index.db");
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
@@ -1762,7 +1928,10 @@ Widget
         let has_missing = warnings.iter().any(|w| matches!(w,
             crate::types::ConsistencyWarning::MissingRequired { field, .. } if field == "priority"
         ));
-        assert!(has_missing, "should warn about missing required 'priority' field");
+        assert!(
+            has_missing,
+            "should warn about missing required 'priority' field"
+        );
     }
 
     #[test]
@@ -1773,8 +1942,10 @@ Widget
         // Create zettels with type "foo" — no _typedef exists
         let z1 = "---\nid: 20260226220000\ntitle: Foo 1\ntype: foo\npriority: 3\n---\n\n## Description\n\nFirst foo\n\n---\n\n- owner:: [[20260226220100]]";
         let z2 = "---\nid: 20260226220100\ntitle: Foo 2\ntype: foo\npriority: 7\n---\n\n## Description\n\nSecond foo\n\n---\n\n- owner:: [[20260226220000]]";
-        repo.commit_file("zettelkasten/20260226220000.md", z1, "add foo 1").unwrap();
-        repo.commit_file("zettelkasten/20260226220100.md", z2, "add foo 2").unwrap();
+        repo.commit_file("zettelkasten/20260226220000.md", z1, "add foo 1")
+            .unwrap();
+        repo.commit_file("zettelkasten/20260226220100.md", z2, "add foo 2")
+            .unwrap();
 
         let db_path = dir.path().join(".zdb/index.db");
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
@@ -1786,7 +1957,9 @@ Widget
         assert!(report.tables_materialized > 0);
 
         // SELECT should return data
-        let rows = idx.query_raw("SELECT id, priority FROM foo ORDER BY id").unwrap();
+        let rows = idx
+            .query_raw("SELECT id, priority FROM foo ORDER BY id")
+            .unwrap();
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0][1], "3");
         assert_eq!(rows[1][1], "7");
@@ -1799,11 +1972,17 @@ Widget
 
         // Create typedef with 2 columns
         let typedef = "---\nid: 20260226230000\ntitle: widget\ntype: _typedef\ncolumns:\n  - name: weight\n    data_type: REAL\n    zone: frontmatter\n  - name: color\n    data_type: TEXT\n    zone: frontmatter\n---\n";
-        repo.commit_file("zettelkasten/_typedef/20260226230000.md", typedef, "add typedef").unwrap();
+        repo.commit_file(
+            "zettelkasten/_typedef/20260226230000.md",
+            typedef,
+            "add typedef",
+        )
+        .unwrap();
 
         // Create zettel with 3 extra fields (2 from typedef + 1 new)
         let z = "---\nid: 20260226230100\ntitle: Red Widget\ntype: widget\nweight: 2.5\ncolor: red\nsize: large\n---\n\nBody";
-        repo.commit_file("zettelkasten/20260226230100.md", z, "add widget").unwrap();
+        repo.commit_file("zettelkasten/20260226230100.md", z, "add widget")
+            .unwrap();
 
         let db_path = dir.path().join(".zdb/index.db");
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
@@ -1811,7 +1990,9 @@ Widget
         idx.rebuild(&repo).unwrap();
 
         // Table should have 3 columns (2 typedef + 1 inferred "size")
-        let rows = idx.query_raw("SELECT weight, color, size FROM widget").unwrap();
+        let rows = idx
+            .query_raw("SELECT weight, color, size FROM widget")
+            .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0][0], "2.5");
         assert_eq!(rows[0][1], "red");
@@ -1825,7 +2006,8 @@ Widget
 
         // Initial zettel with type "doc" and one field
         let z1 = "---\nid: 20260226240000\ntitle: Doc 1\ntype: doc\nversion: 1\n---\nBody";
-        repo.commit_file("zettelkasten/20260226240000.md", z1, "add doc").unwrap();
+        repo.commit_file("zettelkasten/20260226240000.md", z1, "add doc")
+            .unwrap();
 
         let db_path = dir.path().join(".zdb/index.db");
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
@@ -1834,14 +2016,17 @@ Widget
 
         // Externally add a zettel with a new field
         let z2 = "---\nid: 20260226240100\ntitle: Doc 2\ntype: doc\nversion: 2\nauthor: Alice\n---\nBody";
-        repo.commit_file("zettelkasten/20260226240100.md", z2, "add doc externally").unwrap();
+        repo.commit_file("zettelkasten/20260226240100.md", z2, "add doc externally")
+            .unwrap();
 
         // Rebuild picks up new fields
         let report = idx.rebuild(&repo).unwrap();
         assert_eq!(report.indexed, 2);
 
         // Table should now have "author" column from inferred merge
-        let rows = idx.query_raw("SELECT id, author FROM doc WHERE author != ''").unwrap();
+        let rows = idx
+            .query_raw("SELECT id, author FROM doc WHERE author != ''")
+            .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0][1], "Alice");
     }
@@ -1853,11 +2038,17 @@ Widget
 
         // Create typedef with required field
         let typedef = "---\nid: 20260226250000\ntitle: strict\ntype: _typedef\ncolumns:\n  - name: status\n    data_type: TEXT\n    zone: frontmatter\n    required: true\n---\n";
-        repo.commit_file("zettelkasten/_typedef/20260226250000.md", typedef, "add typedef").unwrap();
+        repo.commit_file(
+            "zettelkasten/_typedef/20260226250000.md",
+            typedef,
+            "add typedef",
+        )
+        .unwrap();
 
         // Create zettel missing required field
         let z = "---\nid: 20260226250100\ntitle: Incomplete\ntype: strict\n---\nBody";
-        repo.commit_file("zettelkasten/20260226250100.md", z, "add incomplete").unwrap();
+        repo.commit_file("zettelkasten/20260226250100.md", z, "add incomplete")
+            .unwrap();
 
         let db_path = dir.path().join(".zdb/index.db");
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
@@ -1869,7 +2060,9 @@ Widget
         assert_eq!(report.indexed, 2); // typedef + data zettel both indexed
 
         // Data should still be accessible
-        let rows = idx.query_raw("SELECT id FROM zettels WHERE type = 'strict'").unwrap();
+        let rows = idx
+            .query_raw("SELECT id FROM zettels WHERE type = 'strict'")
+            .unwrap();
         assert_eq!(rows.len(), 1);
     }
 
@@ -1934,7 +2127,8 @@ Widget
         let dir = tempfile::TempDir::new().unwrap();
         let db_path = dir.path().join("index.db");
         let conn = rusqlite::Connection::open(&db_path).unwrap();
-        conn.execute_batch("CREATE TABLE zettels (id TEXT PRIMARY KEY)").unwrap();
+        conn.execute_batch("CREATE TABLE zettels (id TEXT PRIMARY KEY)")
+            .unwrap();
         drop(conn);
 
         // Open via Index — schema creates missing tables, but let's test
@@ -2004,9 +2198,7 @@ Widget
         let mut extra = std::collections::BTreeMap::new();
         extra.insert(
             "aliases".to_string(),
-            crate::types::Value::List(vec![
-                crate::types::Value::String("alias1".to_string()),
-            ]),
+            crate::types::Value::List(vec![crate::types::Value::String("alias1".to_string())]),
         );
 
         let zettel = crate::types::ParsedZettel {
@@ -2041,9 +2233,7 @@ Widget
         let mut extra = std::collections::BTreeMap::new();
         extra.insert(
             "aliases".to_string(),
-            crate::types::Value::List(vec![
-                crate::types::Value::String("My Note".to_string()),
-            ]),
+            crate::types::Value::List(vec![crate::types::Value::String("My Note".to_string())]),
         );
 
         let zettel = crate::types::ParsedZettel {
@@ -2083,7 +2273,12 @@ Widget
         let repo = GitRepo::init(dir.path()).unwrap();
 
         let typedef = "---\nid: 20260301100000\ntitle: task\ntype: _typedef\ncolumns:\n  - name: status\n    data_type: TEXT\n    zone: frontmatter\n    allowed_values:\n      - todo\n      - doing\n      - done\n    default_value: todo\n  - name: priority\n    data_type: TEXT\n    zone: frontmatter\n---\n";
-        repo.commit_file("zettelkasten/_typedef/20260301100000.md", typedef, "add typedef").unwrap();
+        repo.commit_file(
+            "zettelkasten/_typedef/20260301100000.md",
+            typedef,
+            "add typedef",
+        )
+        .unwrap();
 
         let db_path = dir.path().join(".zdb/index.db");
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
@@ -2093,10 +2288,17 @@ Widget
         let schemas = idx.load_all_typedefs(&repo);
         let schema = schemas.get("task").unwrap();
         let status_col = schema.columns.iter().find(|c| c.name == "status").unwrap();
-        assert_eq!(status_col.allowed_values.as_ref().unwrap(), &["todo", "doing", "done"]);
+        assert_eq!(
+            status_col.allowed_values.as_ref().unwrap(),
+            &["todo", "doing", "done"]
+        );
         assert_eq!(status_col.default_value.as_deref(), Some("todo"));
 
-        let priority_col = schema.columns.iter().find(|c| c.name == "priority").unwrap();
+        let priority_col = schema
+            .columns
+            .iter()
+            .find(|c| c.name == "priority")
+            .unwrap();
         assert!(priority_col.allowed_values.is_none());
         assert!(priority_col.default_value.is_none());
     }
@@ -2107,7 +2309,12 @@ Widget
         let repo = GitRepo::init(dir.path()).unwrap();
 
         let typedef = "---\nid: 20260301100100\ntitle: task\ntype: _typedef\ncolumns:\n  - name: status\n    data_type: TEXT\n    zone: frontmatter\n    allowed_values:\n      - todo\n      - doing\n      - done\n---\n";
-        repo.commit_file("zettelkasten/_typedef/20260301100100.md", typedef, "add typedef").unwrap();
+        repo.commit_file(
+            "zettelkasten/_typedef/20260301100100.md",
+            typedef,
+            "add typedef",
+        )
+        .unwrap();
 
         let db_path = dir.path().join(".zdb/index.db");
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
@@ -2115,11 +2322,14 @@ Widget
         idx.rebuild(&repo).unwrap();
 
         // Verify CHECK constraint exists by reading table info
-        let sql = idx.conn.query_row(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='task'",
-            [],
-            |row| row.get::<_, String>(0),
-        ).unwrap();
+        let sql = idx
+            .conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='task'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap();
         assert!(sql.contains("CHECK"), "expected CHECK constraint in: {sql}");
         assert!(sql.contains("'todo'"));
         assert!(sql.contains("'doing'"));
@@ -2192,7 +2402,11 @@ Widget
         assert_eq!(results.len(), paginated.hits.len());
         assert_eq!(
             results.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
-            paginated.hits.iter().map(|r| r.id.as_str()).collect::<Vec<_>>()
+            paginated
+                .hits
+                .iter()
+                .map(|r| r.id.as_str())
+                .collect::<Vec<_>>()
         );
     }
 
@@ -2256,9 +2470,24 @@ Widget
         let repo = GitRepo::init(dir.path()).unwrap();
 
         // Create 3 zettels
-        repo.commit_file("zettelkasten/20240101000000.md", "---\ntitle: A\n---\nBody A.", "add a").unwrap();
-        repo.commit_file("zettelkasten/20240102000000.md", "---\ntitle: B\n---\nBody B.", "add b").unwrap();
-        repo.commit_file("zettelkasten/20240103000000.md", "---\ntitle: C\n---\nBody C.", "add c").unwrap();
+        repo.commit_file(
+            "zettelkasten/20240101000000.md",
+            "---\ntitle: A\n---\nBody A.",
+            "add a",
+        )
+        .unwrap();
+        repo.commit_file(
+            "zettelkasten/20240102000000.md",
+            "---\ntitle: B\n---\nBody B.",
+            "add b",
+        )
+        .unwrap();
+        repo.commit_file(
+            "zettelkasten/20240103000000.md",
+            "---\ntitle: C\n---\nBody C.",
+            "add c",
+        )
+        .unwrap();
 
         let db_path = dir.path().join(".zdb/index.db");
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
@@ -2267,14 +2496,21 @@ Widget
         assert_eq!(report.indexed, 3);
 
         // Modify one zettel
-        repo.commit_file("zettelkasten/20240101000000.md", "---\ntitle: A Modified\n---\nBody A modified.", "modify a").unwrap();
+        repo.commit_file(
+            "zettelkasten/20240101000000.md",
+            "---\ntitle: A Modified\n---\nBody A modified.",
+            "modify a",
+        )
+        .unwrap();
         let old_head = idx.stored_head_oid().unwrap();
 
         let report = idx.incremental_reindex(&repo, &old_head).unwrap();
         assert_eq!(report.indexed, 1); // Only the modified file
 
         // Verify the modification is reflected
-        let rows = idx.query_raw("SELECT title FROM zettels WHERE id = '20240101000000'").unwrap();
+        let rows = idx
+            .query_raw("SELECT title FROM zettels WHERE id = '20240101000000'")
+            .unwrap();
         assert_eq!(rows[0][0], "A Modified");
     }
 
@@ -2283,8 +2519,18 @@ Widget
         let dir = tempfile::TempDir::new().unwrap();
         let repo = GitRepo::init(dir.path()).unwrap();
 
-        repo.commit_file("zettelkasten/20240101000000.md", "---\ntitle: A\n---\nBody A.", "add a").unwrap();
-        repo.commit_file("zettelkasten/20240102000000.md", "---\ntitle: B\n---\nBody B.", "add b").unwrap();
+        repo.commit_file(
+            "zettelkasten/20240101000000.md",
+            "---\ntitle: A\n---\nBody A.",
+            "add a",
+        )
+        .unwrap();
+        repo.commit_file(
+            "zettelkasten/20240102000000.md",
+            "---\ntitle: B\n---\nBody B.",
+            "add b",
+        )
+        .unwrap();
 
         let db_path = dir.path().join(".zdb/index.db");
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
@@ -2292,14 +2538,17 @@ Widget
         idx.rebuild(&repo).unwrap();
 
         // Delete one zettel
-        repo.delete_file("zettelkasten/20240102000000.md", "delete b").unwrap();
+        repo.delete_file("zettelkasten/20240102000000.md", "delete b")
+            .unwrap();
         let old_head = idx.stored_head_oid().unwrap();
 
         let report = idx.incremental_reindex(&repo, &old_head).unwrap();
         assert_eq!(report.indexed, 0); // No adds/modifies
 
         // Verify deletion
-        let rows = idx.query_raw("SELECT id FROM zettels WHERE id = '20240102000000'").unwrap();
+        let rows = idx
+            .query_raw("SELECT id FROM zettels WHERE id = '20240102000000'")
+            .unwrap();
         assert!(rows.is_empty());
     }
 
@@ -2308,14 +2557,21 @@ Widget
         let dir = tempfile::TempDir::new().unwrap();
         let repo = GitRepo::init(dir.path()).unwrap();
 
-        repo.commit_file("zettelkasten/20240101000000.md", "---\ntitle: A\n---\nBody A.", "add a").unwrap();
+        repo.commit_file(
+            "zettelkasten/20240101000000.md",
+            "---\ntitle: A\n---\nBody A.",
+            "add a",
+        )
+        .unwrap();
 
         let db_path = dir.path().join(".zdb/index.db");
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
         let idx = Index::open(&db_path).unwrap();
 
         // Use a fake old HEAD — should fall back to full rebuild
-        let report = idx.incremental_reindex(&repo, "0000000000000000000000000000000000000000").unwrap();
+        let report = idx
+            .incremental_reindex(&repo, "0000000000000000000000000000000000000000")
+            .unwrap();
         assert_eq!(report.indexed, 1); // Full rebuild found 1 zettel
     }
 
@@ -2326,7 +2582,12 @@ Widget
 
         // Create a typedef
         let typedef = "---\nid: 20260301100100\ntitle: task\ntype: _typedef\ncolumns:\n  - name: status\n    data_type: TEXT\n    zone: frontmatter\n---\n";
-        repo.commit_file("zettelkasten/_typedef/20260301100100.md", typedef, "add typedef").unwrap();
+        repo.commit_file(
+            "zettelkasten/_typedef/20260301100100.md",
+            typedef,
+            "add typedef",
+        )
+        .unwrap();
 
         let db_path = dir.path().join(".zdb/index.db");
         std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
@@ -2336,17 +2597,27 @@ Widget
 
         // Modify the typedef (add a column)
         let typedef2 = "---\nid: 20260301100100\ntitle: task\ntype: _typedef\ncolumns:\n  - name: status\n    data_type: TEXT\n    zone: frontmatter\n  - name: priority\n    data_type: INTEGER\n    zone: frontmatter\n---\n";
-        repo.commit_file("zettelkasten/_typedef/20260301100100.md", typedef2, "modify typedef").unwrap();
+        repo.commit_file(
+            "zettelkasten/_typedef/20260301100100.md",
+            typedef2,
+            "modify typedef",
+        )
+        .unwrap();
 
         let report = idx.incremental_reindex(&repo, &old_head).unwrap();
-        assert!(report.tables_materialized > 0, "typedef change should trigger rematerialization");
+        assert!(
+            report.tables_materialized > 0,
+            "typedef change should trigger rematerialization"
+        );
     }
 
     #[test]
     fn resurrected_zettel_not_duplicated_after_reindex() {
         let idx = in_memory_index();
         let mut z = sample_zettel();
-        z.meta.extra.insert("resurrected".into(), crate::types::Value::Bool(true));
+        z.meta
+            .extra
+            .insert("resurrected".into(), crate::types::Value::Bool(true));
         idx.index_zettel(&z).unwrap();
         // Reindex same zettel
         idx.index_zettel(&z).unwrap();
@@ -2378,9 +2649,16 @@ Widget
     fn frontmatter_extras_indexed_as_fields() {
         let idx = in_memory_index();
         let mut z = sample_zettel();
-        z.meta.extra.insert("resurrected".into(), crate::types::Value::Bool(true));
-        z.meta.extra.insert("priority".into(), crate::types::Value::Number(3.0));
-        z.meta.extra.insert("source_url".into(), crate::types::Value::String("https://example.com".into()));
+        z.meta
+            .extra
+            .insert("resurrected".into(), crate::types::Value::Bool(true));
+        z.meta
+            .extra
+            .insert("priority".into(), crate::types::Value::Number(3.0));
+        z.meta.extra.insert(
+            "source_url".into(),
+            crate::types::Value::String("https://example.com".into()),
+        );
         idx.index_zettel(&z).unwrap();
 
         let id = z.meta.id.as_ref().unwrap().0.as_str();
@@ -2393,11 +2671,17 @@ Widget
             .collect::<std::result::Result<Vec<_>, _>>()
             .unwrap();
 
-        assert!(rows.iter().any(|(k, v, _)| k == "resurrected" && v == "true"));
+        assert!(rows
+            .iter()
+            .any(|(k, v, _)| k == "resurrected" && v == "true"));
         assert!(rows.iter().any(|(k, v, _)| k == "priority" && v == "3"));
-        assert!(rows.iter().any(|(k, v, _)| k == "source_url" && v == "https://example.com"));
+        assert!(rows
+            .iter()
+            .any(|(k, v, _)| k == "source_url" && v == "https://example.com"));
         // List/Map extras should NOT appear
-        assert!(!rows.iter().any(|(k, _, _)| k == "aliases" || k == "attachments"));
+        assert!(!rows
+            .iter()
+            .any(|(k, _, _)| k == "aliases" || k == "attachments"));
     }
 
     #[test]
