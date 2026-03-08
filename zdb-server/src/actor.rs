@@ -7,7 +7,7 @@ use zdb_core::git_ops::GitRepo;
 use zdb_core::indexer::Index;
 use zdb_core::parser;
 use zdb_core::sql_engine::{schema_from_parsed, SqlEngine, SqlResult};
-use zdb_core::types::{PaginatedSearchResult, ParsedZettel, TableSchema, ZettelMeta};
+use zdb_core::types::{CompactionReport, PaginatedSearchResult, ParsedZettel, SyncReport, TableSchema, ZettelMeta};
 
 use crate::events::{EventBus, EventKind, ZettelEvent};
 
@@ -88,6 +88,10 @@ pub enum ActorCommand {
     RunMaintenance {
         force: bool,
     },
+    Sync {
+        remote: String,
+        branch: String,
+    },
     NoSqlGet {
         id: String,
     },
@@ -116,7 +120,8 @@ pub enum ActorReply {
     AggregateRow(ActorResult<Vec<String>>),
     Attachment(ActorResult<zdb_core::types::AttachmentInfo>),
     AttachmentList(ActorResult<Vec<zdb_core::types::AttachmentInfo>>),
-    Maintenance(ActorResult<()>),
+    Maintenance(ActorResult<CompactionReport>),
+    SyncResult(ActorResult<SyncReport>),
     NoSqlZettel(Box<ActorResult<Option<ParsedZettel>>>),
     NoSqlIds(ActorResult<Vec<String>>),
 }
@@ -332,9 +337,16 @@ impl ActorHandle {
         }
     }
 
-    pub async fn run_maintenance(&self, force: bool) -> ActorResult<()> {
+    pub async fn run_maintenance(&self, force: bool) -> ActorResult<CompactionReport> {
         match self.send(ActorCommand::RunMaintenance { force }).await {
             ActorReply::Maintenance(r) => r,
+            _ => Err(ZettelError::Validation("unexpected reply".into())),
+        }
+    }
+
+    pub async fn sync(&self, remote: String, branch: String) -> ActorResult<SyncReport> {
+        match self.send(ActorCommand::Sync { remote, branch }).await {
+            ActorReply::SyncResult(r) => r,
             _ => Err(ZettelError::Validation("unexpected reply".into())),
         }
     }
@@ -593,7 +605,10 @@ fn handle_command_shared(
             )
         }
         ActorCommand::RunMaintenance { force } => {
-            ActorReply::Maintenance(run_maintenance(repo, repo_path, force))
+            ActorReply::Maintenance(run_maintenance(repo, index, repo_path, force))
+        }
+        ActorCommand::Sync { remote, branch } => {
+            ActorReply::SyncResult(run_sync(repo, index, &remote, &branch))
         }
         // NoSQL variants are handled in handle_command before delegation
         ActorCommand::NoSqlGet { .. }
@@ -894,7 +909,7 @@ fn unique_id(repo_path: &std::path::Path) -> zdb_core::types::ZettelId {
 }
 
 /// Run compaction + stale node detection.
-fn run_maintenance(repo: &GitRepo, _repo_path: &std::path::Path, force: bool) -> ActorResult<()> {
+fn run_maintenance(repo: &GitRepo, index: &Index, _repo_path: &std::path::Path, force: bool) -> ActorResult<CompactionReport> {
     let mgr = match zdb_core::sync_manager::SyncManager::open(repo) {
         Ok(m) => m,
         Err(e) => {
@@ -903,18 +918,15 @@ fn run_maintenance(repo: &GitRepo, _repo_path: &std::path::Path, force: bool) ->
         }
     };
 
-    match zdb_core::compaction::compact(repo, &mgr, force) {
-        Ok(report) => {
-            log::info!(
-                "maintenance: compacted — files_removed={} crdt_compacted={} gc={}",
-                report.files_removed, report.crdt_docs_compacted,
-                if report.gc_success { "ok" } else { "failed" }
-            );
-        }
-        Err(e) => {
-            log::warn!("maintenance: compaction failed: {e}");
-        }
-    }
+    let report = zdb_core::compaction::compact(repo, &mgr, force)?;
+    log::info!(
+        "maintenance: compacted — files_removed={} crdt_compacted={} gc={}",
+        report.files_removed, report.crdt_docs_compacted,
+        if report.gc_success { "ok" } else { "failed" }
+    );
+
+    // Rebuild index after compaction
+    let _ = index.rebuild_if_stale(repo);
 
     let config = repo.load_config().unwrap_or_default();
     match mgr.detect_stale_nodes(config.compaction.stale_ttl_days) {
@@ -928,5 +940,14 @@ fn run_maintenance(repo: &GitRepo, _repo_path: &std::path::Path, force: bool) ->
         }
     }
 
-    Ok(())
+    Ok(report)
+}
+
+/// Run sync via SyncManager.
+fn run_sync(repo: &GitRepo, index: &Index, remote: &str, branch: &str) -> ActorResult<SyncReport> {
+    let mut mgr = zdb_core::sync_manager::SyncManager::open(repo)?;
+    let report = mgr.sync(remote, branch, index)?;
+    // Rebuild index after sync
+    let _ = index.rebuild_if_stale(repo);
+    Ok(report)
 }

@@ -12,7 +12,7 @@ pub async fn maintenance_loop(actor: ActorHandle, interval_secs: u64) {
         interval.tick().await;
         log::debug!("maintenance: starting scheduled run");
         match actor.run_maintenance(false).await {
-            Ok(()) => log::debug!("maintenance: completed"),
+            Ok(_report) => log::debug!("maintenance: completed"),
             Err(e) => log::warn!("maintenance: failed: {e}"),
         }
     }
