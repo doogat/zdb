@@ -855,6 +855,68 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
         );
     }
 
+    // -- SyncResult output type --
+    let sync_result_type = Object::new("SyncResult")
+        .field(simple_field("direction", TypeRef::named_nn(TypeRef::STRING)))
+        .field(simple_field("commitsTransferred", TypeRef::named_nn(TypeRef::INT)))
+        .field(simple_field("conflictsResolved", TypeRef::named_nn(TypeRef::INT)))
+        .field(simple_field("resurrected", TypeRef::named_nn(TypeRef::INT)));
+
+    // -- CompactResult output type --
+    let compact_result_type = Object::new("CompactResult")
+        .field(simple_field("filesRemoved", TypeRef::named_nn(TypeRef::INT)))
+        .field(simple_field("crdtDocsCompacted", TypeRef::named_nn(TypeRef::INT)))
+        .field(simple_field("gcSuccess", TypeRef::named_nn(TypeRef::BOOLEAN)));
+
+    // sync mutation
+    {
+        mutation = mutation.field(
+            Field::new("sync", TypeRef::named_nn("SyncResult"), |ctx| {
+                FieldFuture::new(async move {
+                    let a = ctx.data::<ActorHandle>()?;
+                    let remote = ctx.args.get("remote")
+                        .and_then(|v| v.string().ok())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "origin".to_string());
+                    let branch = ctx.args.get("branch")
+                        .and_then(|v| v.string().ok())
+                        .map(|s| s.to_string())
+                        .unwrap_or_else(|| "master".to_string());
+                    let report = a.sync(remote, branch).await.map_err(to_server_error)?;
+                    let mut obj = IndexMap::new();
+                    obj.insert(Name::new("direction"), GqlValue::from(report.direction.as_str()));
+                    obj.insert(Name::new("commitsTransferred"), GqlValue::from(report.commits_transferred as i64));
+                    obj.insert(Name::new("conflictsResolved"), GqlValue::from(report.conflicts_resolved as i64));
+                    obj.insert(Name::new("resurrected"), GqlValue::from(report.resurrected as i64));
+                    Ok(Some(FieldValue::owned_any(GqlValue::Object(obj))))
+                })
+            })
+            .argument(InputValue::new("remote", TypeRef::named(TypeRef::STRING)))
+            .argument(InputValue::new("branch", TypeRef::named(TypeRef::STRING))),
+        );
+    }
+
+    // compact mutation
+    {
+        mutation = mutation.field(
+            Field::new("compact", TypeRef::named_nn("CompactResult"), |ctx| {
+                FieldFuture::new(async move {
+                    let a = ctx.data::<ActorHandle>()?;
+                    let force = ctx.args.get("force")
+                        .and_then(|v| v.boolean().ok())
+                        .unwrap_or(false);
+                    let report = a.run_maintenance(force).await.map_err(to_server_error)?;
+                    let mut obj = IndexMap::new();
+                    obj.insert(Name::new("filesRemoved"), GqlValue::from(report.files_removed as i64));
+                    obj.insert(Name::new("crdtDocsCompacted"), GqlValue::from(report.crdt_docs_compacted as i64));
+                    obj.insert(Name::new("gcSuccess"), GqlValue::from(report.gc_success));
+                    Ok(Some(FieldValue::owned_any(GqlValue::Object(obj))))
+                })
+            })
+            .argument(InputValue::new("force", TypeRef::named(TypeRef::BOOLEAN))),
+        );
+    }
+
     // -- ZettelChangeEvent type --
     let change_event_type = Object::new("ZettelChangeEvent")
         .field(simple_field("action", TypeRef::named_nn(TypeRef::STRING)))
@@ -1051,6 +1113,8 @@ pub fn build_schema(actor: ActorHandle, type_schemas: Vec<TableSchema>, reloader
         .register(update_input)
         .register(attachment_type)
         .register(change_event_type)
+        .register(sync_result_type)
+        .register(compact_result_type)
         // Shared filter/sort types
         .register(crate::filter::string_filter())
         .register(crate::filter::int_filter())
