@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "ZettelDBTests",
-    platforms: [.macOS(.v13), .iOS(.v16)],
+    platforms: [.macOS(.v14), .iOS(.v16)],
     targets: [
         .binaryTarget(
             name: "ZettelDBFFI",
@@ -12,7 +12,11 @@ let package = Package(
         .target(
             name: "ZettelDB",
             dependencies: ["ZettelDBFFI"],
-            path: "Sources/ZettelDB"
+            path: "Sources/ZettelDB",
+            linkerSettings: [
+                .linkedLibrary("z"),
+                .linkedLibrary("iconv"),
+            ]
         ),
         .testTarget(
             name: "ZettelDBTests",

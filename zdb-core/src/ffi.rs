@@ -138,7 +138,10 @@ impl ZettelDriver {
     pub fn new(repo_path: String) -> Result<Self, ZdbError> {
         let path = Path::new(&repo_path);
         let repo = GitRepo::open(path).map_err(ZdbError::from)?;
-        let db_path = path.join(".zdb/index.db");
+        let db_dir = path.join(".zdb");
+        std::fs::create_dir_all(&db_dir)
+            .map_err(|e| ZdbError::from(ZettelError::Io(e)))?;
+        let db_path = db_dir.join("index.db");
         let index = Index::open(&db_path).map_err(ZdbError::from)?;
         Ok(Self {
             repo: Mutex::new(repo),
