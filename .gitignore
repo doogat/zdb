@@ -28,6 +28,7 @@ Thumbs.db
 
 # Build output
 out/
+.build/
 docs/book/
 
 # AI
