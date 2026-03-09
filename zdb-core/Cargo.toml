@@ -5,7 +5,7 @@ edition = "2021"
 autobenches = false
 
 [lib]
-crate-type = ["lib", "cdylib"]
+crate-type = ["lib", "cdylib", "staticlib"]
 
 [[bin]]
 name = "uniffi-bindgen"
@@ -35,6 +35,7 @@ serde_json = { version = "1", optional = true }
 [features]
 profiling = []
 nosql = ["redb", "serde_json"]
+vendored = ["git2/vendored-libgit2", "git2/vendored-openssl"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

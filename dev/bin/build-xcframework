@@ -27,7 +27,7 @@ command -v xcodebuild >/dev/null 2>&1 || { echo "xcodebuild not found — instal
 
 echo "==> Building for ${#TARGETS[@]} targets..."
 for t in "${TARGETS[@]}"; do
-    cargo build -p zdb-core --release --target "$t"
+    cargo build -p zdb-core --release --features vendored --target "$t"
 done
 
 echo "==> Generating Swift bindings..."
