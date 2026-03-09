@@ -294,4 +294,21 @@ impl ZettelDriver {
         let list = crate::attachments::list_attachments(&repo, &id).map_err(ZdbError::from)?;
         Ok(list.into_iter().map(AttachmentInfo::from).collect())
     }
+
+    pub fn export_full_bundle(&self, output_path: String) -> Result<String, ZdbError> {
+        let repo = self.repo.lock().unwrap();
+        let sync_mgr = SyncManager::open(&repo).map_err(ZdbError::from)?;
+        let path = crate::bundle::export_full_bundle(&repo, &sync_mgr, Path::new(&output_path))
+            .map_err(ZdbError::from)?;
+        Ok(path.to_string_lossy().into_owned())
+    }
+
+    pub fn import_bundle(&self, bundle_path: String) -> Result<(), ZdbError> {
+        let repo = self.repo.lock().unwrap();
+        let mut sync_mgr = SyncManager::open(&repo).map_err(ZdbError::from)?;
+        let index = self.index.lock().unwrap();
+        crate::bundle::import_bundle(&repo, &mut sync_mgr, &index, Path::new(&bundle_path))
+            .map_err(ZdbError::from)?;
+        Ok(())
+    }
 }

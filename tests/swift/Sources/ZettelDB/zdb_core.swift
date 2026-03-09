@@ -506,6 +506,10 @@ public protocol ZettelDriverProtocol: AnyObject, Sendable {
     
     func executeSql(sql: String) throws  -> String
     
+    func exportFullBundle(outputPath: String) throws  -> String
+    
+    func importBundle(bundlePath: String) throws 
+    
     func listAttachments(zettelId: String) throws  -> [AttachmentInfo]
     
     func listZettels() throws  -> [String]
@@ -630,6 +634,21 @@ open func executeSql(sql: String)throws  -> String  {
         FfiConverterString.lower(sql),$0
     )
 })
+}
+    
+open func exportFullBundle(outputPath: String)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypeZdbError_lift) {
+    uniffi_zdb_core_fn_method_zetteldriver_export_full_bundle(self.uniffiClonePointer(),
+        FfiConverterString.lower(outputPath),$0
+    )
+})
+}
+    
+open func importBundle(bundlePath: String)throws   {try rustCallWithError(FfiConverterTypeZdbError_lift) {
+    uniffi_zdb_core_fn_method_zetteldriver_import_bundle(self.uniffiClonePointer(),
+        FfiConverterString.lower(bundlePath),$0
+    )
+}
 }
     
 open func listAttachments(zettelId: String)throws  -> [AttachmentInfo]  {
@@ -1369,6 +1388,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zdb_core_checksum_method_zetteldriver_execute_sql() != 61268) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zdb_core_checksum_method_zetteldriver_export_full_bundle() != 37132) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_zdb_core_checksum_method_zetteldriver_import_bundle() != 52952) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_zdb_core_checksum_method_zetteldriver_list_attachments() != 50289) {

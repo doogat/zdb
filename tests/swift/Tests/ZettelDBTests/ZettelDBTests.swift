@@ -24,14 +24,7 @@ final class ZettelDBTests: XCTestCase {
         try! FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
 
         // Use zdb CLI to init the repo (creates dirs, version file, initial commit)
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: Self.zdbBinary)
-        process.arguments = ["init", tmpDir.path]
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try! process.run()
-        process.waitUntilExit()
-        XCTAssertEqual(process.terminationStatus, 0, "zdb init failed")
+        zdb(["init", tmpDir.path], in: tmpDir)
     }
 
     override func tearDown() {
@@ -90,5 +83,55 @@ final class ZettelDBTests: XCTestCase {
         let list = try driver.listZettels()
         XCTAssertTrue(list.contains(where: { $0.contains(id) }),
                        "listZettels should include created zettel")
+    }
+
+    /// Run a zdb CLI command in a given directory.
+    private func zdb(_ args: [String], in dir: URL) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: Self.zdbBinary)
+        process.arguments = args
+        process.currentDirectoryURL = dir
+        process.standardOutput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+        try! process.run()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, 0,
+                       "zdb \(args.joined(separator: " ")) failed")
+    }
+
+    func testBundleExportImport() throws {
+        // Register a sync node (required for bundle export)
+        zdb(["register-node", "test-source"], in: tmpDir)
+
+        let driver = try ZettelDriver(repoPath: tmpDir.path)
+
+        // Create some zettels in source repo
+        let content1 = "---\ntitle: Bundle Note 1\n---\nFirst note."
+        let content2 = "---\ntitle: Bundle Note 2\n---\nSecond note."
+        let _ = try driver.createZettel(content: content1, message: "create note 1")
+        let _ = try driver.createZettel(content: content2, message: "create note 2")
+
+        // Export full bundle
+        let bundlePath = tmpDir.appendingPathComponent("export.tar").path
+        let resultPath = try driver.exportFullBundle(outputPath: bundlePath)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: resultPath),
+                       "bundle file should exist")
+
+        // Create a fresh repo and import
+        let importDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zdb-import-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: importDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: importDir) }
+
+        zdb(["init", importDir.path], in: importDir)
+        zdb(["register-node", "test-target"], in: importDir)
+
+        let importDriver = try ZettelDriver(repoPath: importDir.path)
+        try importDriver.importBundle(bundlePath: resultPath)
+        try _ = importDriver.reindex()
+
+        // Verify imported zettels
+        let results = try importDriver.search(query: "Bundle Note")
+        XCTAssertEqual(results.count, 2, "imported repo should contain both zettels")
     }
 }
