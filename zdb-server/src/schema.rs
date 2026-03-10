@@ -1094,6 +1094,30 @@ pub fn build_schema(
         .field(simple_field(
             "gcSuccess",
             TypeRef::named_nn(TypeRef::BOOLEAN),
+        ))
+        .field(simple_field(
+            "crdtTempBytesBefore",
+            TypeRef::named_nn(TypeRef::INT),
+        ))
+        .field(simple_field(
+            "crdtTempBytesAfter",
+            TypeRef::named_nn(TypeRef::INT),
+        ))
+        .field(simple_field(
+            "crdtTempFilesBefore",
+            TypeRef::named_nn(TypeRef::INT),
+        ))
+        .field(simple_field(
+            "crdtTempFilesAfter",
+            TypeRef::named_nn(TypeRef::INT),
+        ))
+        .field(simple_field(
+            "repoBytesBefore",
+            TypeRef::named_nn(TypeRef::INT),
+        ))
+        .field(simple_field(
+            "repoBytesAfter",
+            TypeRef::named_nn(TypeRef::INT),
         ));
 
     // sync mutation
@@ -1162,6 +1186,30 @@ pub fn build_schema(
                         GqlValue::from(report.crdt_docs_compacted as i64),
                     );
                     obj.insert(Name::new("gcSuccess"), GqlValue::from(report.gc_success));
+                    obj.insert(
+                        Name::new("crdtTempBytesBefore"),
+                        GqlValue::from(report.crdt_temp_bytes_before as i64),
+                    );
+                    obj.insert(
+                        Name::new("crdtTempBytesAfter"),
+                        GqlValue::from(report.crdt_temp_bytes_after as i64),
+                    );
+                    obj.insert(
+                        Name::new("crdtTempFilesBefore"),
+                        GqlValue::from(report.crdt_temp_files_before as i64),
+                    );
+                    obj.insert(
+                        Name::new("crdtTempFilesAfter"),
+                        GqlValue::from(report.crdt_temp_files_after as i64),
+                    );
+                    obj.insert(
+                        Name::new("repoBytesBefore"),
+                        GqlValue::from(report.repo_bytes_before as i64),
+                    );
+                    obj.insert(
+                        Name::new("repoBytesAfter"),
+                        GqlValue::from(report.repo_bytes_after as i64),
+                    );
                     Ok(Some(FieldValue::owned_any(GqlValue::Object(obj))))
                 })
             })

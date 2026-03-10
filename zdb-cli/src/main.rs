@@ -387,6 +387,18 @@ fn open_index(repo: &std::path::Path) -> zdb_core::error::Result<Index> {
     Index::open(&db_path)
 }
 
+fn fmt_bytes(b: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = 1024 * 1024;
+    if b >= MB {
+        format!("{:.1} MB", b as f64 / MB as f64)
+    } else if b >= KB {
+        format!("{:.1} KB", b as f64 / KB as f64)
+    } else {
+        format!("{b} B")
+    }
+}
+
 fn run(cli: Cli) -> zdb_core::error::Result<()> {
     match cli.command {
         Command::Init { path } => {
@@ -692,6 +704,18 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
                     report.files_removed,
                     report.crdt_docs_compacted,
                     if report.gc_success { "ok" } else { "failed" }
+                )?;
+                outln!(
+                    "crdt temp: {} → {} ({} files → {})",
+                    fmt_bytes(report.crdt_temp_bytes_before),
+                    fmt_bytes(report.crdt_temp_bytes_after),
+                    report.crdt_temp_files_before,
+                    report.crdt_temp_files_after
+                )?;
+                outln!(
+                    "repo (.git): {} → {}",
+                    fmt_bytes(report.repo_bytes_before),
+                    fmt_bytes(report.repo_bytes_after)
                 )?;
             }
         }

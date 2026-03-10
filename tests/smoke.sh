@@ -117,7 +117,10 @@ pass "type suggest"
 # 14. register node + compact
 $ZDB register-node "smoke-test-laptop" | grep -q "registered node"
 $ZDB status | grep -q "registered nodes: 1"
-$ZDB compact | grep -q "gc: ok"
+COMPACT_OUT=$($ZDB compact)
+echo "$COMPACT_OUT" | grep -q "gc: ok"
+echo "$COMPACT_OUT" | grep -q "crdt temp:"
+echo "$COMPACT_OUT" | grep -q "repo (.git):"
 pass "register-node + compact"
 
 # 15. node list + retire
@@ -269,12 +272,12 @@ HTTP_CODE=$(curl -so /dev/null -w "%{http_code}" "$NOSQL_URL/$ID1" \
 pass "nosql-api: auth rejects missing token"
 
 # compact mutation
-RESULT=$(gql '{"query":"mutation { compact { filesRemoved crdtDocsCompacted gcSuccess } }"}')
+RESULT=$(gql '{"query":"mutation { compact { filesRemoved crdtDocsCompacted gcSuccess crdtTempBytesBefore crdtTempBytesAfter crdtTempFilesBefore crdtTempFilesAfter repoBytesBefore repoBytesAfter } }"}')
 echo "$RESULT" | grep -q '"gcSuccess"'
 pass "serve: compact mutation"
 
 # compact(force: true)
-RESULT=$(gql '{"query":"mutation { compact(force: true) { filesRemoved crdtDocsCompacted gcSuccess } }"}')
+RESULT=$(gql '{"query":"mutation { compact(force: true) { filesRemoved crdtDocsCompacted gcSuccess crdtTempBytesBefore crdtTempBytesAfter repoBytesBefore repoBytesAfter } }"}')
 echo "$RESULT" | grep -q '"gcSuccess"'
 pass "serve: compact(force: true) mutation"
 

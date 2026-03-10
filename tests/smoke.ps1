@@ -175,6 +175,8 @@ $output = zdb status
 if ($output -notmatch "registered nodes: 1") { throw "status missing node" }
 $output = zdb compact
 if ($output -notmatch "gc: ok") { throw "compact failed" }
+if ($output -notmatch "crdt temp:") { throw "compact missing crdt temp stats" }
+if ($output -notmatch "repo \(\.git\):") { throw "compact missing repo stats" }
 pass "register-node + compact"
 
 # 15. node list + retire
@@ -351,12 +353,12 @@ try {
 pass "nosql-api: auth rejects missing token"
 
 # compact mutation
-$result = gql '{"query":"mutation { compact { filesRemoved crdtDocsCompacted gcSuccess } }"}'
+$result = gql '{"query":"mutation { compact { filesRemoved crdtDocsCompacted gcSuccess crdtTempBytesBefore crdtTempBytesAfter crdtTempFilesBefore crdtTempFilesAfter repoBytesBefore repoBytesAfter } }"}'
 if ($result -notmatch "gcSuccess") { throw "compact mutation failed" }
 pass "serve: compact mutation"
 
 # compact(force: true)
-$result = gql '{"query":"mutation { compact(force: true) { filesRemoved crdtDocsCompacted gcSuccess } }"}'
+$result = gql '{"query":"mutation { compact(force: true) { filesRemoved crdtDocsCompacted gcSuccess crdtTempBytesBefore crdtTempBytesAfter repoBytesBefore repoBytesAfter } }"}'
 if ($result -notmatch "gcSuccess") { throw "compact(force:true) mutation failed" }
 pass "serve: compact(force: true) mutation"
 
