@@ -229,11 +229,14 @@ Both scripts use the `vendored` feature to compile OpenSSL and libgit2 from sour
 
 - **Platform**: macOS 26.2, Apple Silicon (arm64), Xcode 26.3, Swift 6.2
 - **XCFramework slices**: ios-arm64, ios-arm64_x86_64-simulator, macos-arm64
-- **Tests**: 5/5 passed
+- **Tests**: 8/8 passed
   - `testCreateAndReadZettel` — create zettel via FFI, reindex, read back, verify content
   - `testSearch` — create zettel, reindex, FTS5 search by title
   - `testListZettels` — create zettel, verify it appears in listing
   - `testPerformanceMetrics` — cold start, create, search, reindex latency at 100 zettels
+  - `testExecuteSqlReturnsStructuredResult` — execute SQL via SqlEngine, verify structured row/column result
+  - `testTransactionCommitAndRollback` — begin/commit/rollback lifecycle, verify atomicity
+  - `testListTypeSchemas` — create typedef, list schemas, verify columns and metadata
   - `testBundleExportImport` — export full bundle, import into fresh repo, verify round-trip
 - **Note**: Tests use `ZettelDriver.createRepo()` and `registerNode()` directly (no CLI binary needed), making them compatible with iOS simulator targets. Verified on macOS slice of the XCFramework.
 
@@ -241,10 +244,13 @@ Both scripts use the `vendored` feature to compile OpenSSL and libgit2 from sour
 
 - **Platform**: macOS, JDK 25, Kotlin 2.3.10, JNA 5.16.0
 - **Native lib**: `libzdb_core.dylib` (release build, host platform)
-- **Tests**: 5/5 passed
+- **Tests**: 8/8 passed
   - `testCreateAndReadZettel` — create zettel via FFI, reindex, read back, verify content
   - `testSearch` — create zettel, reindex, FTS5 search by title
   - `testListZettels` — create zettel, verify it appears in listing
   - `testPerformanceMetrics` — cold start, create, search, reindex latency at 100 zettels
+  - `testExecuteSqlReturnsStructuredResult` — execute SQL via SqlEngine, verify structured row/column result
+  - `testTransactionCommitAndRollback` — begin/commit/rollback lifecycle, verify atomicity
+  - `testListTypeSchemas` — create typedef, list schemas, verify columns and metadata
   - `testBundleExportImport` — export full bundle, import into fresh repo, verify round-trip
 - **Note**: Tests run on JVM host (not Android emulator). The native library and FFI bindings are verified via JNA on the host platform.
