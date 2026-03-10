@@ -199,6 +199,9 @@ fn crdt_temp_stats(repo: &GitRepo) -> (u64, usize) {
             let mut bytes = 0u64;
             let mut count = 0usize;
             for entry in entries.flatten() {
+                if entry.file_name() == ".gitkeep" {
+                    continue;
+                }
                 if let Ok(m) = entry.metadata() {
                     if m.is_file() {
                         bytes += m.len();
@@ -252,9 +255,10 @@ pub fn compact(repo: &GitRepo, sync_mgr: &SyncManager, force: bool) -> Result<Co
     // Threshold check: skip if under threshold (unless forced)
     if !force {
         let config = repo.load_config()?;
-        let (size_bytes, _) = crdt_temp_stats(repo);
-        let size_mb = size_bytes as f64 / (1024.0 * 1024.0);
+        let (crdt_bytes, crdt_files) = crdt_temp_stats(repo);
+        let size_mb = crdt_bytes as f64 / (1024.0 * 1024.0);
         if size_mb < config.compaction.threshold_mb as f64 {
+            let repo_bytes = dir_size(&repo.path.join(".git"));
             tracing::debug!(
                 size_mb,
                 threshold_mb = config.compaction.threshold_mb,
@@ -264,12 +268,12 @@ pub fn compact(repo: &GitRepo, sync_mgr: &SyncManager, force: bool) -> Result<Co
                 files_removed: 0,
                 crdt_docs_compacted: 0,
                 gc_success: true,
-                crdt_temp_bytes_before: 0,
-                crdt_temp_bytes_after: 0,
-                crdt_temp_files_before: 0,
-                crdt_temp_files_after: 0,
-                repo_bytes_before: 0,
-                repo_bytes_after: 0,
+                crdt_temp_bytes_before: crdt_bytes,
+                crdt_temp_bytes_after: crdt_bytes,
+                crdt_temp_files_before: crdt_files,
+                crdt_temp_files_after: crdt_files,
+                repo_bytes_before: repo_bytes,
+                repo_bytes_after: repo_bytes,
             });
         }
     }
@@ -488,11 +492,15 @@ mod tests {
         crate::sync_manager::register_node(&repo, "Test").unwrap();
         let mgr = SyncManager::open(&repo).unwrap();
 
-        // No CRDT files → under threshold → should skip but still report success
+        // No CRDT files → under threshold → should skip but still report actual stats
         let report = compact(&repo, &mgr, false).unwrap();
         assert_eq!(report.files_removed, 0);
         assert_eq!(report.crdt_docs_compacted, 0);
         assert!(report.gc_success);
+        // Early return should still measure repo size (git dir exists)
+        assert!(report.repo_bytes_before > 0);
+        assert_eq!(report.repo_bytes_before, report.repo_bytes_after);
+        // No CRDT temp files, so both before/after are zero
         assert_eq!(report.crdt_temp_bytes_before, 0);
         assert_eq!(report.crdt_temp_files_before, 0);
     }
