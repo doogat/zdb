@@ -1461,7 +1461,7 @@ match stmt {
 The SQL engine uses `sqlparser` to parse SQL ASTs, then dispatches:
 
 - **CREATE TABLE** → creates a `_typedef` zettel defining the schema, then materializes the corresponding SQLite table
-- **INSERT** → creates a new zettel of the table's type with the specified field values; rejects `OR REPLACE`, `REPLACE INTO`, and `ON CONFLICT` modifiers (they bypass git)
+- **INSERT** → creates one or more zettels of the table's type; supports multi-row `VALUES (...), (...)`; rejects `OR REPLACE`, `REPLACE INTO`, and `ON CONFLICT` modifiers (they bypass git)
 - **UPDATE** → fast path for `WHERE id = '...'` (single zettel); bulk path delegates WHERE to SQLite via `resolve_matching_ids`, applies changes in batch; rejects `UPDATE...FROM` (ambiguous join-to-document mapping)
 - **DELETE** → fast path for `WHERE id = '...'`; bulk path resolves matching rows via SQLite, deletes in batch via `delete_files`
 - **ALTER TABLE** → ADD/DROP COLUMN modifies typedef and rematerializes; RENAME COLUMN rewrites typedef + all data zettels in a single commit
@@ -1472,6 +1472,61 @@ The SQL engine uses `sqlparser` to parse SQL ASTs, then dispatches:
 The key insight: SQL tables are zettel types. `CREATE TABLE project (...)` creates a `_typedef` zettel that defines the `project` type's schema. `INSERT INTO project VALUES (...)` creates a new zettel with `type: project` and the specified fields in its frontmatter/body/reference section.
 
 The bulk operations pattern uses `resolve_matching_ids` to delegate WHERE evaluation to SQLite — this reconstructs the WHERE clause via sqlparser's `Display` impl, runs `SELECT id FROM {table} WHERE {clause}` against the materialized table, then resolves each ID to a file path. This avoids reimplementing SQL expression evaluation in Rust.
+
+### Multi-Row INSERT
+
+`handle_insert` supports multi-row `VALUES (...), (...)`. The batch ID generator `unique_ids(count)` produces sequential timestamps without sleeping:
+
+```bash
+sed -n '/fn unique_ids/,/^    }/p' zdb-core/src/sql_engine.rs
+```
+
+```rust
+    fn unique_ids(&mut self, count: usize) -> Result<Vec<ZettelId>> {
+        use chrono::NaiveDateTime;
+
+        let mut ids = Vec::with_capacity(count);
+        let first = parser::generate_unique_id(|candidate| {
+            self.index
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) > 0 FROM zettels WHERE id = ?1",
+                    params![candidate],
+                    |row| row.get::<_, bool>(0),
+                )
+                .unwrap_or(false)
+        });
+
+        let mut ts = NaiveDateTime::parse_from_str(&first.0, "%Y%m%d%H%M%S").map_err(|e| {
+            ZettelError::SqlEngine(format!("failed to parse generated id timestamp: {e}"))
+        })?;
+        ids.push(first);
+
+        for _ in 1..count {
+            loop {
+                ts += chrono::Duration::seconds(1);
+                let candidate = ts.format("%Y%m%d%H%M%S").to_string();
+                let exists: bool = self
+                    .index
+                    .conn
+                    .query_row(
+                        "SELECT COUNT(*) > 0 FROM zettels WHERE id = ?1",
+                        params![&candidate],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(false);
+                if !exists {
+                    ids.push(ZettelId(candidate));
+                    break;
+                }
+            }
+        }
+
+        Ok(ids)
+    }
+```
+
+The first ID comes from `generate_unique_id` with an index-checking closure. Subsequent IDs increment by 1 second, skipping existing entries. After the per-row loop (validate, build zettel, index, materialize), all files commit in a single `commit_files` call. Returns comma-separated IDs for multi-row, single ID for single-row.
 
 ### Transactions
 
@@ -3862,3 +3917,68 @@ sed -n '254,263p' zdb-core/src/ffi.rs
 ### Swift/Kotlin Test Compatibility
 
 Both test suites now use `ZettelDriver.createRepo()` and `registerNode()` instead of shelling out to the `zdb` CLI binary. This removes the `Process()` dependency and makes tests portable to iOS simulator and Android instrumented test targets.
+
+## App-Building Integration Surfaces
+
+The app-building guide now documents `zdb serve` as the recommended backend contract for beta applications. That recommendation follows directly from the server code: typed SQL mutations go through the actor, use the SQL engine, and trigger a schema reload when DDL changes the available GraphQL types.
+
+The current UniFFI path is intentionally described more narrowly. `ZettelDriver::execute_sql` does not delegate to the SQL engine or the actor; it calls the low-level SQLite index directly and returns only an affected-row count. That is useful for narrow native integration work, but it is not the same typed app-backend surface that the server exposes.
+
+```bash
+sed -n '1038,1065p' zdb-server/src/schema.rs
+```
+
+```rust
+        );
+    }
+
+    // executeSql
+    {
+        mutation = mutation.field(
+            Field::new("executeSql", TypeRef::named_nn("SqlResult"), |ctx| {
+                FieldFuture::new(async move {
+                    let a = ctx.data::<ActorHandle>()?;
+                    let sql = ctx.args.try_get("sql")?.string()?.to_string();
+                    let result = a.execute_sql(sql.clone()).await.map_err(to_server_error)?;
+
+                    // Await schema reload if this was a typedef-mutating statement
+                    let upper = sql.to_uppercase();
+                    if upper.contains("CREATE TABLE")
+                        || upper.contains("DROP TABLE")
+                        || upper.contains("ALTER TABLE")
+                    {
+                        if let Ok(reloader) = ctx.data::<Arc<SchemaReloader>>() {
+                            reloader.trigger_reload_and_wait().await;
+                        }
+                    }
+
+                    Ok(Some(FieldValue::owned_any(sql_result_to_value(&result))))
+                })
+            })
+            .argument(InputValue::new("sql", TypeRef::named_nn(TypeRef::STRING))),
+        );
+```
+
+```bash
+sed -n '264,280p' zdb-core/src/ffi.rs
+```
+
+```rust
+    }
+
+    pub fn list_zettels(&self) -> Result<Vec<String>, ZdbError> {
+        let repo = self.repo.lock().unwrap();
+        repo.list_zettels().map_err(ZdbError::from)
+    }
+
+    pub fn execute_sql(&self, sql: String) -> Result<String, ZdbError> {
+        let index = self.index.lock().unwrap();
+        let affected = index.execute_sql(&sql, &[]).map_err(ZdbError::from)?;
+        Ok(affected.to_string())
+    }
+
+    pub fn attach_file(
+        &self,
+        zettel_id: String,
+        file_path: String,
+```
