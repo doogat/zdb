@@ -118,6 +118,58 @@ final class ZettelDBTests: XCTestCase {
         print("reindex_100_ms: \(String(format: "%.2f", reindexMs))")
     }
 
+    func testExecuteSqlReturnsStructuredResult() throws {
+        try _ = driver.reindex()
+
+        // DDL returns message
+        let ddl = try driver.executeSql(sql: "CREATE TABLE widget (name TEXT, score INTEGER)")
+        XCTAssertFalse(ddl.message.isEmpty, "DDL should return a message")
+
+        // INSERT returns created ID in message
+        let ins = try driver.executeSql(sql: "INSERT INTO widget (name, score) VALUES ('alpha', 42)")
+        XCTAssertFalse(ins.message.isEmpty, "INSERT should return created ID")
+
+        // SELECT returns columns and rows
+        let sel = try driver.executeSql(sql: "SELECT name, score FROM widget")
+        XCTAssertTrue(sel.columns.contains("name"))
+        XCTAssertTrue(sel.columns.contains("score"))
+        XCTAssertEqual(sel.rows.count, 1)
+        XCTAssertEqual(sel.rows[0][0], "alpha")
+        XCTAssertEqual(sel.rows[0][1], "42")
+    }
+
+    func testTransactionCommitAndRollback() throws {
+        try _ = driver.reindex()
+        try _ = driver.executeSql(sql: "CREATE TABLE txtest (val TEXT)")
+
+        // Commit path
+        try driver.beginTransaction()
+        try _ = driver.executeSql(sql: "INSERT INTO txtest (val) VALUES ('committed')")
+        try driver.commitTransaction()
+        let afterCommit = try driver.executeSql(sql: "SELECT val FROM txtest")
+        XCTAssertEqual(afterCommit.rows.count, 1)
+        XCTAssertEqual(afterCommit.rows[0][0], "committed")
+
+        // Rollback path
+        try driver.beginTransaction()
+        try _ = driver.executeSql(sql: "INSERT INTO txtest (val) VALUES ('rolled-back')")
+        try driver.rollbackTransaction()
+        let afterRollback = try driver.executeSql(sql: "SELECT COUNT(*) FROM txtest")
+        XCTAssertEqual(afterRollback.rows[0][0], "1", "rolled back insert should not appear")
+    }
+
+    func testListTypeSchemas() throws {
+        try _ = driver.reindex()
+        try _ = driver.executeSql(sql: "CREATE TABLE contact (name TEXT, email TEXT)")
+
+        let schemas = try driver.listTypeSchemas()
+        XCTAssertEqual(schemas.count, 1)
+        XCTAssertEqual(schemas[0].tableName, "contact")
+        let colNames = schemas[0].columns.map { $0.name }
+        XCTAssertTrue(colNames.contains("name"))
+        XCTAssertTrue(colNames.contains("email"))
+    }
+
     func testBundleExportImport() throws {
         // Register a sync node via FFI
         let _ = try driver.registerNode(name: "test-source")
