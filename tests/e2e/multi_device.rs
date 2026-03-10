@@ -439,6 +439,68 @@ fn bundle_full_bootstrap() {
     );
 }
 
+// ── Test: bundle-based recovery after compaction ─────────────────
+
+#[test]
+fn bundle_recovery_after_compaction() {
+    let setup = MultiNodeSetup::new(2);
+
+    // Node0 creates content, syncs with node1
+    let id = MultiNodeSetup::create(&setup.nodes[0], "Pre-compaction", "original body");
+    MultiNodeSetup::push(&setup.nodes[0]);
+    MultiNodeSetup::sync(&setup.nodes[1]);
+
+    // Node0 makes many edits and compacts
+    for i in 0..5 {
+        MultiNodeSetup::update(
+            &setup.nodes[0],
+            &id,
+            &format!("Post-compact edit {i}"),
+            &format!("body {i}"),
+        );
+    }
+    ZdbTestRepo::zdb_at(&setup.nodes[0])
+        .args(["compact", "--force"])
+        .assert()
+        .success();
+    MultiNodeSetup::push(&setup.nodes[0]);
+
+    // Export bundle from node0 (after compaction)
+    let bundle_path = setup.remote_dir.path().join("recovery.bundle.tar");
+    ZdbTestRepo::zdb_at(&setup.nodes[0])
+        .args(["bundle", "export", "--full", "--output"])
+        .arg(&bundle_path)
+        .assert()
+        .success();
+
+    // Create a fresh node that never synced with remote
+    let dir3 = tempfile::TempDir::new().unwrap();
+    let path3 = dir3.path().to_path_buf();
+    ZdbTestRepo::zdb_at(&path3)
+        .arg("init")
+        .arg(&path3)
+        .assert()
+        .success();
+    ZdbTestRepo::zdb_at(&path3)
+        .args(["register-node", "Recovery-Node"])
+        .assert()
+        .success();
+
+    // Import the post-compaction bundle
+    ZdbTestRepo::zdb_at(&path3)
+        .args(["bundle", "import"])
+        .arg(&bundle_path)
+        .assert()
+        .success();
+
+    // Verify the zettel exists with latest content
+    let out = MultiNodeSetup::read(&path3, &id);
+    assert!(
+        out.contains("Post-compact edit"),
+        "recovered node should have latest content: {out}"
+    );
+}
+
 // ── Test: air-gapped delta transfer ──────────────────────────────
 
 #[test]
