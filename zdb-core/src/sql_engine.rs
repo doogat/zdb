@@ -1770,6 +1770,80 @@ mod tests {
     }
 
     #[test]
+    fn insert_multi_row_creates_n_zettels() {
+        let (_dir, repo, index) = setup();
+        let mut engine = SqlEngine::new(&index, &repo);
+
+        engine
+            .execute("CREATE TABLE items (name TEXT, score INTEGER)")
+            .unwrap();
+
+        let result = engine
+            .execute(
+                "INSERT INTO items (name, score) VALUES ('alpha', 10), ('beta', 20), ('gamma', 30)",
+            )
+            .unwrap();
+
+        // Returns comma-separated IDs
+        let ids_str = match result {
+            SqlResult::Ok(ids) => ids,
+            _ => panic!("expected Ok with ids"),
+        };
+        let ids: Vec<&str> = ids_str.split(',').collect();
+        assert_eq!(ids.len(), 3, "should return 3 IDs");
+
+        // All IDs are distinct 14-digit timestamps
+        for id in &ids {
+            assert_eq!(id.len(), 14, "ID should be 14 digits: {id}");
+            assert!(id.chars().all(|c| c.is_ascii_digit()), "ID should be numeric: {id}");
+        }
+        let unique: std::collections::HashSet<&&str> = ids.iter().collect();
+        assert_eq!(unique.len(), 3, "all IDs should be unique");
+
+        // 3 rows in materialized table
+        let rows = index
+            .query_raw("SELECT name, score FROM items ORDER BY name")
+            .unwrap();
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0][0], "alpha");
+        assert_eq!(rows[0][1], "10");
+        assert_eq!(rows[1][0], "beta");
+        assert_eq!(rows[1][1], "20");
+        assert_eq!(rows[2][0], "gamma");
+        assert_eq!(rows[2][1], "30");
+
+        // 3 zettels in index
+        let count = index
+            .query_raw("SELECT COUNT(*) FROM zettels WHERE type = 'items'")
+            .unwrap();
+        assert_eq!(count[0][0], "3");
+    }
+
+    #[test]
+    fn insert_multi_row_single_commit() {
+        let (_dir, repo, index) = setup();
+        let mut engine = SqlEngine::new(&index, &repo);
+
+        engine
+            .execute("CREATE TABLE things (label TEXT)")
+            .unwrap();
+
+        let head_before = repo.head_oid().unwrap();
+
+        engine
+            .execute("INSERT INTO things (label) VALUES ('a'), ('b'), ('c')")
+            .unwrap();
+
+        let head_after = repo.head_oid().unwrap();
+        // Head moved (commit happened)
+        assert_ne!(head_before.0, head_after.0);
+
+        // The single commit contains all 3 files
+        let diff = repo.diff_paths(&head_before.0, &head_after.0).unwrap();
+        assert_eq!(diff.len(), 3, "single commit should contain 3 new files");
+    }
+
+    #[test]
     fn select_returns_materialized_data() {
         let (_dir, repo, index) = setup();
         let mut engine = SqlEngine::new(&index, &repo);
