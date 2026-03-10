@@ -562,4 +562,12 @@ $ZDB sync origin master >/dev/null
 $ZDB read "$STALE_ID" | grep -q "title:"
 pass "stale node resync after compaction"
 
+# 34. multi-row INSERT
+cd "$TMPDIR"
+$ZDB query "CREATE TABLE multirow (name TEXT, val INTEGER)" | grep -q "table multirow created"
+MULTI_IDS=$($ZDB query "INSERT INTO multirow (name, val) VALUES ('a', 1), ('b', 2), ('c', 3)")
+echo "$MULTI_IDS" | grep -qE "^[0-9]{14},[0-9]{14},[0-9]{14}$"
+$ZDB query "SELECT COUNT(*) FROM multirow" | grep -q "3"
+pass "multi-row insert"
+
 echo "=== all passed ==="

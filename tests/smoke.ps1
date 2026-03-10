@@ -669,6 +669,15 @@ $output = zdb read $STALE_ID
 if ($output -notmatch "title:") { throw "stale resync failed" }
 pass "stale node resync after compaction"
 
+# 34. multi-row INSERT
+Push-Location $TMPDIR
+zdb query "CREATE TABLE multirow (name TEXT, val INTEGER)" | Out-Null
+$MULTI_IDS = zdb query "INSERT INTO multirow (name, val) VALUES ('a', 1), ('b', 2), ('c', 3)"
+if ($MULTI_IDS -notmatch "^\d{14},\d{14},\d{14}$") { throw "multi-row insert did not return 3 IDs: $MULTI_IDS" }
+$count = zdb query "SELECT COUNT(*) FROM multirow"
+if ($count -notmatch "3") { throw "expected 3 rows, got: $count" }
+pass "multi-row insert"
+
 # Clean up location stack
 while ($true) {
     try { Pop-Location } catch { break }
