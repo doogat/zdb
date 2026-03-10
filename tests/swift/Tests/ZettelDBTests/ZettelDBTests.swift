@@ -11,7 +11,7 @@ final class ZettelDBTests: XCTestCase {
         tmpDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("zdb-test-\(UUID().uuidString)")
         try! FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-        driver = try! ZettelDriver.init(repoPath: tmpDir.path)
+        driver = try! ZettelDriver.createRepo(repoPath: tmpDir.path)
     }
 
     override func tearDown() {
@@ -74,7 +74,7 @@ final class ZettelDBTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: freshDir) }
 
         let initStart = ContinuousClock.now
-        let perfDriver = try ZettelDriver.init(repoPath: freshDir.path)
+        let perfDriver = try ZettelDriver.createRepo(repoPath: freshDir.path)
         let initDuration = ContinuousClock.now - initStart
         let initMs = Double(initDuration.components.attoseconds) / 1e15 +
                      Double(initDuration.components.seconds) * 1000
@@ -140,7 +140,7 @@ final class ZettelDBTests: XCTestCase {
         try FileManager.default.createDirectory(at: importDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: importDir) }
 
-        let importDriver = try ZettelDriver.init(repoPath: importDir.path)
+        let importDriver = try ZettelDriver.createRepo(repoPath: importDir.path)
         let _ = try importDriver.registerNode(name: "test-target")
         try importDriver.importBundle(bundlePath: resultPath)
         try _ = importDriver.reindex()

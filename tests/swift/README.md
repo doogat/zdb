@@ -30,4 +30,4 @@ cp out/swift/zdb_core.swift tests/swift/Sources/ZettelDB/
 cd tests/swift && swift test
 ```
 
-Tests use `ZettelDriver.init()` and `registerNode()` directly (no CLI binary needed), making them compatible with iOS simulator targets.
+Tests use `ZettelDriver.createRepo()` and `registerNode()` directly (no CLI binary needed), making them compatible with iOS simulator targets.

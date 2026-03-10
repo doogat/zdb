@@ -26,10 +26,10 @@ ZettelDriver (ffi.rs)       ← UniFFI proc-macro boundary
 
 ```rust
 ZettelDriver::new(repo_path: String) -> Result<Self, ZdbError>
-ZettelDriver::init(repo_path: String) -> Result<Self, ZdbError>
+ZettelDriver::create_repo(repo_path: String) -> Result<Self, ZdbError>
 ```
 
-`new` opens an existing ZettelDB repo. `init` creates a new repo (directories, `.gitignore`, initial commit) then opens it. Both set up the SQLite index at `.zdb/index.db`.
+`new` opens an existing ZettelDB repo. `create_repo` creates a new repo (directories, `.gitignore`, initial commit) then opens it. Both set up the SQLite index at `.zdb/index.db`.
 
 ### CRUD
 
@@ -202,7 +202,7 @@ Both scripts use the `vendored` feature to compile OpenSSL and libgit2 from sour
   - `testListZettels` — create zettel, verify it appears in listing
   - `testPerformanceMetrics` — cold start, create, search, reindex latency at 100 zettels
   - `testBundleExportImport` — export full bundle, import into fresh repo, verify round-trip
-- **Note**: Tests use `ZettelDriver.init()` and `registerNode()` directly (no CLI binary needed), making them compatible with iOS simulator targets. Verified on macOS slice of the XCFramework.
+- **Note**: Tests use `ZettelDriver.createRepo()` and `registerNode()` directly (no CLI binary needed), making them compatible with iOS simulator targets. Verified on macOS slice of the XCFramework.
 
 #### Kotlin on JVM (2026-03-09)
 

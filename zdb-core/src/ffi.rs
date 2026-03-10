@@ -153,7 +153,7 @@ impl ZettelDriver {
 
     /// Initialize a new ZettelDB repository at `repo_path` and open it.
     #[uniffi::constructor]
-    pub fn init(repo_path: String) -> Result<Self, ZdbError> {
+    pub fn create_repo(repo_path: String) -> Result<Self, ZdbError> {
         let path = Path::new(&repo_path);
         GitRepo::init(path).map_err(ZdbError::from)?;
         Self::new(repo_path)
@@ -336,7 +336,7 @@ mod tests {
     #[test]
     fn init_creates_repo_and_opens_driver() {
         let tmp = TempDir::new().unwrap();
-        let driver = ZettelDriver::init(tmp.path().to_str().unwrap().to_string())
+        let driver = ZettelDriver::create_repo(tmp.path().to_str().unwrap().to_string())
             .expect("init should succeed");
         let list = driver.list_zettels().unwrap();
         assert!(list.is_empty(), "fresh repo should have no zettels");
@@ -345,7 +345,7 @@ mod tests {
     #[test]
     fn register_node_returns_uuid() {
         let tmp = TempDir::new().unwrap();
-        let driver = ZettelDriver::init(tmp.path().to_str().unwrap().to_string()).unwrap();
+        let driver = ZettelDriver::create_repo(tmp.path().to_str().unwrap().to_string()).unwrap();
         let uuid = driver.register_node("TestNode".to_string()).unwrap();
         assert!(!uuid.is_empty(), "uuid should not be empty");
         assert_eq!(uuid.len(), 36, "uuid should be 36 chars");

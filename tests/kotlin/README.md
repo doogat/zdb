@@ -15,10 +15,10 @@ Quick summary:
 
 ## Setup
 
-1. Build native library and CLI (JVM host testing):
+1. Build native library (JVM host testing):
 
 ```bash
-cargo build -p zdb-core -p zdb-cli --release
+cargo build -p zdb-core --release
 ```
 
 2. Generate Kotlin bindings:
@@ -49,3 +49,5 @@ Android emulator (requires full AAR build):
 dev/bin/build-android
 cd tests/kotlin && ./gradlew connectedAndroidTest
 ```
+
+Tests use `ZettelDriver.createRepo()` and `registerNode()` directly (no CLI binary needed), making them compatible with Android instrumented test targets.
