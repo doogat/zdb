@@ -653,8 +653,10 @@ Push-Location $script:STALE_N2
 zdb update $STALE_ID --body "body from node2"
 zdb sync origin master | Out-Null
 
-# Compact to remove CRDT temp files
-zdb compact --force | Out-Null
+# Compact to remove CRDT temp files — verify report includes byte stats
+$compactOut = zdb compact --force
+if ($compactOut -notmatch "crdt temp:") { throw "compact missing crdt temp stats in stale test" }
+if ($compactOut -notmatch "repo \(\.git\):") { throw "compact missing repo stats in stale test" }
 
 # Create another conflict without CRDT state
 Pop-Location  # STALE_N1

@@ -548,8 +548,10 @@ cd "$STALE_N2"
 $ZDB update "$STALE_ID" --body "body from node2"
 $ZDB sync origin master >/dev/null
 
-# Compact to remove CRDT temp files
-$ZDB compact --force >/dev/null
+# Compact to remove CRDT temp files — verify report includes byte stats
+COMPACT_OUT=$($ZDB compact --force)
+echo "$COMPACT_OUT" | grep -q "crdt temp:"
+echo "$COMPACT_OUT" | grep -q "repo (.git):"
 
 # Create another conflict without CRDT state
 cd "$STALE_N1"
