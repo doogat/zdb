@@ -15,10 +15,10 @@ Quick summary:
 
 ## Setup
 
-1. Build native library (JVM host testing):
+1. Build native library and CLI (JVM host testing):
 
 ```bash
-cargo build -p zdb-core --release
+cargo build -p zdb-core -p zdb-cli --release
 ```
 
 2. Generate Kotlin bindings:

@@ -6,7 +6,7 @@ repositories {
     mavenCentral()
 }
 
-// Kotlin 2.1 doesn't support JDK 25 target yet — use 23 as bytecode target
+// JDK 25 bytecode target not yet supported — use 23
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
     compilerOptions {
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_23)

@@ -16,7 +16,7 @@ class ZettelDBTest {
     private val zdbBinary: String by lazy {
         // tests/kotlin/ → workspace root
         val root = File(System.getProperty("user.dir")).parentFile.parentFile
-        root.resolve("target/debug/zdb").absolutePath
+        root.resolve("target/release/zdb").absolutePath
     }
 
     private fun zdb(vararg args: String, dir: File = tmpDir) {
