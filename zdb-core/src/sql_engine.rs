@@ -15,6 +15,12 @@ use crate::types::{
     ColumnDef, InlineField, ParsedZettel, TableSchema, Value, WikiLink, ZettelId, ZettelMeta, Zone,
 };
 
+/// Strip surrounding double-quotes from a SQL identifier.
+/// sqlparser preserves quotes in `to_string()` for identifiers like `"meeting-minutes"`.
+fn unquote_identifier(s: &str) -> String {
+    s.trim_matches('"').to_lowercase()
+}
+
 #[derive(Debug)]
 pub enum SqlResult {
     Rows {
@@ -310,7 +316,7 @@ impl<'a> SqlEngine<'a> {
     }
 
     fn handle_create_table(&mut self, ct: &sqlparser::ast::CreateTable) -> Result<SqlResult> {
-        let table_name = ct.name.to_string().to_lowercase();
+        let table_name = unquote_identifier(&ct.name.to_string());
 
         if is_reserved_table(&table_name) {
             return Err(ZettelError::SqlEngine(format!(
@@ -417,7 +423,7 @@ impl<'a> SqlEngine<'a> {
             col_defs.push(format!("\"{}\" {}{}", col.name, sql_type, check));
         }
         let sql = format!(
-            "CREATE TABLE IF NOT EXISTS {} ({})",
+            "CREATE TABLE IF NOT EXISTS \"{}\" ({})",
             schema.table_name,
             col_defs.join(", ")
         );
@@ -443,7 +449,7 @@ impl<'a> SqlEngine<'a> {
             ));
         }
 
-        let table_name = ins.table.to_string().to_lowercase();
+        let table_name = unquote_identifier(&ins.table.to_string());
         let schema = self.load_schema(&table_name)?;
 
         // Extract column names from INSERT
@@ -582,7 +588,7 @@ impl<'a> SqlEngine<'a> {
         assignments: &[sqlparser::ast::Assignment],
         selection: &Option<Expr>,
     ) -> Result<SqlResult> {
-        let table_name = table.relation.to_string().to_lowercase();
+        let table_name = unquote_identifier(&table.relation.to_string());
         let schema = self.load_schema(&table_name)?;
 
         // Build assignment map
@@ -745,7 +751,7 @@ impl<'a> SqlEngine<'a> {
         name: &sqlparser::ast::ObjectName,
         operations: &[AlterTableOperation],
     ) -> Result<SqlResult> {
-        let table_name = name.to_string().to_lowercase();
+        let table_name = unquote_identifier(&name.to_string());
         let (typedef_id, typedef_path) = self.load_typedef_location(&table_name)?;
         let mut schema = self.load_schema(&table_name)?;
 
@@ -900,7 +906,7 @@ impl<'a> SqlEngine<'a> {
         }
 
         for name in names {
-            let table_name = name.to_string().to_lowercase();
+            let table_name = unquote_identifier(&name.to_string());
             self.handle_drop_table(&table_name, if_exists, cascade)?;
         }
 
@@ -983,7 +989,7 @@ impl<'a> SqlEngine<'a> {
         // Drop materialized SQLite table
         self.index
             .conn
-            .execute(&format!("DROP TABLE IF EXISTS {table_name}"), [])?;
+            .execute(&format!("DROP TABLE IF EXISTS \"{table_name}\""), [])?;
 
         Ok(())
     }
@@ -1010,11 +1016,11 @@ impl<'a> SqlEngine<'a> {
             Some(expr) => {
                 let clause = format!("{expr}");
                 (
-                    format!("SELECT id FROM {table_name} WHERE {clause}"),
+                    format!("SELECT id FROM \"{table_name}\" WHERE {clause}"),
                     Some(clause),
                 )
             }
-            None => (format!("SELECT id FROM {table_name}"), None),
+            None => (format!("SELECT id FROM \"{table_name}\""), None),
         };
 
         let mut stmt = self.index.conn.prepare(&sql).map_err(|e| {
@@ -1065,7 +1071,7 @@ impl<'a> SqlEngine<'a> {
         }
 
         let sql = format!(
-            "INSERT INTO {} ({}) VALUES ({})",
+            "INSERT INTO \"{}\" ({}) VALUES ({})",
             schema.table_name,
             col_names.join(", "),
             placeholders.join(", ")
@@ -1102,7 +1108,7 @@ impl<'a> SqlEngine<'a> {
 
         vals.push(id.to_string());
         let sql = format!(
-            "UPDATE {} SET {} WHERE id = ?{}",
+            "UPDATE \"{}\" SET {} WHERE id = ?{}",
             schema.table_name,
             set_clauses.join(", "),
             vals.len()

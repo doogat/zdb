@@ -474,7 +474,7 @@ impl Index {
     /// Drop and recreate a materialized SQLite table from a schema.
     fn drop_and_create_materialized_table(&self, schema: &crate::types::TableSchema) -> Result<()> {
         self.conn
-            .execute(&format!("DROP TABLE IF EXISTS {}", schema.table_name), [])?;
+            .execute(&format!("DROP TABLE IF EXISTS \"{}\"", schema.table_name), [])?;
 
         let mut col_defs = vec!["id TEXT PRIMARY KEY".to_string()];
         for col in &schema.columns {
@@ -502,7 +502,7 @@ impl Index {
         }
         self.conn.execute(
             &format!(
-                "CREATE TABLE {} ({})",
+                "CREATE TABLE \"{}\" ({})",
                 schema.table_name,
                 col_defs.join(", ")
             ),
@@ -867,7 +867,7 @@ impl Index {
         }
 
         let sql = format!(
-            "INSERT OR REPLACE INTO {} ({}) VALUES ({})",
+            "INSERT OR REPLACE INTO \"{}\" ({}) VALUES ({})",
             schema.table_name,
             col_names.join(", "),
             placeholders.join(", ")

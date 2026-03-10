@@ -243,6 +243,28 @@ fn install_meeting_minutes_type() {
         .stdout(predicate::str::contains(
             "installed type \"meeting-minutes\"",
         ));
+
+    // Hyphenated type names must work in SQL (requires quoted identifiers)
+    let out = repo
+        .zdb()
+        .args([
+            "query",
+            r#"INSERT INTO "meeting-minutes" (date, attendees) VALUES ('2026-03-10', 'alice,bob')"#,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "insert failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+
+    repo.zdb()
+        .args(["read", &id])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("attendees: alice,bob"));
 }
 
 #[test]
