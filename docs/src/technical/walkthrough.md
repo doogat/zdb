@@ -3784,3 +3784,81 @@ impl ServerGuard {
                 if let Some(path) = line.split("auth token: ").nth(1) {
                     token = std::fs::read_to_string(path.trim())
 ```
+
+## FFI: ZettelDriver Lifecycle (create_repo, register_node)
+
+The FFI layer exposes `ZettelDriver` — a high-level facade wrapping `GitRepo` + `Index` behind mutexes. Two constructors and a node registration method enable mobile apps to bootstrap repos without the CLI:
+
+- `create_repo(repo_path)` — initializes a new ZettelDB repo (directories, .gitignore, initial commit) then opens it
+- `new(repo_path)` — opens an existing repo
+- `register_node(name)` — registers a sync node, returning its UUID
+
+These methods were added to eliminate the `Process()`/`ProcessBuilder` dependency in Swift/Kotlin tests, making them compatible with iOS simulator and Android emulator targets where shell access is unavailable.
+
+```bash
+sed -n '135,170p' zdb-core/src/ffi.rs
+```
+
+```rust
+#[uniffi::export]
+impl ZettelDriver {
+    /// Open an existing ZettelDB repository.
+    #[uniffi::constructor]
+    pub fn new(repo_path: String) -> Result<Self, ZdbError> {
+        let path = Path::new(&repo_path);
+        let repo = GitRepo::open(path).map_err(ZdbError::from)?;
+        let db_dir = path.join(".zdb");
+        std::fs::create_dir_all(&db_dir)
+            .map_err(|e| ZdbError::from(ZettelError::Io(e)))?;
+        let db_path = db_dir.join("index.db");
+        let index = Index::open(&db_path).map_err(ZdbError::from)?;
+        Ok(Self {
+            repo: Mutex::new(repo),
+            index: Mutex::new(index),
+            repo_path: path.to_path_buf(),
+        })
+    }
+
+    /// Initialize a new ZettelDB repository at `repo_path` and open it.
+    #[uniffi::constructor]
+    pub fn create_repo(repo_path: String) -> Result<Self, ZdbError> {
+        let path = Path::new(&repo_path);
+        GitRepo::init(path).map_err(ZdbError::from)?;
+        Self::new(repo_path)
+    }
+
+    pub fn create_zettel(&self, content: String, message: String) -> Result<String, ZdbError> {
+        let parsed = parser::parse(&content, "new.md").map_err(ZdbError::from)?;
+        let id = parsed
+            .meta
+            .id
+            .as_ref()
+            .map(|z| z.0.clone())
+            .unwrap_or_else(|| parser::generate_id().0);
+        let rel_path = format!("zettelkasten/{id}.md");
+```
+
+```bash
+sed -n '254,263p' zdb-core/src/ffi.rs
+```
+
+```rust
+        let repo = self.repo.lock().unwrap();
+        let node = crate::sync_manager::register_node(&repo, &name).map_err(ZdbError::from)?;
+        Ok(node.uuid)
+    }
+
+    pub fn compact(&self) -> Result<(), ZdbError> {
+        let repo = self.repo.lock().unwrap();
+        let sync_mgr = SyncManager::open(&repo).map_err(ZdbError::from)?;
+        crate::compaction::compact(&repo, &sync_mgr, true).map_err(ZdbError::from)?;
+        Ok(())
+```
+
+`create_repo` delegates to `GitRepo::init()` which creates the standard directory structure (`zettelkasten/`, `reference/`, `.nodes/`, `.crdt/temp/`), `.gitignore`, version file, and initial commit. Then it calls `new()` to open the repo and SQLite index.
+
+`register_node` delegates to `sync_manager::register_node()` which generates a UUID, writes a `.nodes/{uuid}.toml` file, and stores the UUID locally in `.git/zdb-node`.
+
+### Swift/Kotlin Test Compatibility
+
+Both test suites now use `ZettelDriver.createRepo()` and `registerNode()` instead of shelling out to the `zdb` CLI binary. This removes the `Process()` dependency and makes tests portable to iOS simulator and Android instrumented test targets.
