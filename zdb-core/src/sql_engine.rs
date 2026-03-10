@@ -80,6 +80,19 @@ impl<'a> SqlEngine<'a> {
         }
     }
 
+    /// Restore a previously extracted transaction buffer.
+    /// The caller is responsible for ensuring the SAVEPOINT is still active
+    /// on `index.conn` (i.e. the same connection that created it).
+    pub fn resume_transaction(&mut self, buf: TransactionBuffer) {
+        self.txn = Some(buf);
+    }
+
+    /// Extract the transaction buffer without triggering Drop's rollback.
+    /// Returns `None` if no transaction is active.
+    pub fn suspend_transaction(&mut self) -> Option<TransactionBuffer> {
+        self.txn.take()
+    }
+
     /// Generate a unique ZettelId, waiting if same-second collision detected.
     fn unique_id(&mut self) -> Result<ZettelId> {
         self.unique_ids(1).map(|mut v| v.remove(0))

@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 
 use crate::error::ZettelError;
@@ -213,8 +213,6 @@ pub struct ZettelDriver {
     repo: Mutex<GitRepo>,
     index: Mutex<Index>,
     txn: Mutex<Option<TransactionBuffer>>,
-    #[allow(dead_code)]
-    repo_path: PathBuf,
 }
 
 #[uniffi::export]
@@ -233,7 +231,6 @@ impl ZettelDriver {
             repo: Mutex::new(repo),
             index: Mutex::new(index),
             txn: Mutex::new(None),
-            repo_path: path.to_path_buf(),
         })
     }
 
@@ -436,10 +433,11 @@ impl ZettelDriver {
         let mut schemas = Vec::new();
         for row in rows {
             if let Some(path) = row.first() {
-                let content = repo.read_file(path).map_err(ZdbError::from)?;
-                let parsed = parser::parse(&content, path).map_err(ZdbError::from)?;
-                let schema = crate::sql_engine::schema_from_parsed(&parsed)
-                    .map_err(ZdbError::from)?;
+                let Ok(content) = repo.read_file(path) else { continue };
+                let Ok(parsed) = parser::parse(&content, path) else { continue };
+                let Ok(schema) = crate::sql_engine::schema_from_parsed(&parsed) else {
+                    continue;
+                };
                 schemas.push(schema.into());
             }
         }
