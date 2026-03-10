@@ -29,6 +29,7 @@
 - [Benchmarks](./technical/benchmarks.md)
 - [Git Scalability Audit](./technical/git-scalability-audit.md)
 - [Performance](./technical/performance.md)
+- [Storage Budget](./technical/storage-budget.md)
 - [Server Read-Path Decision](./technical/server-read-path.md)
 
 # User Guide

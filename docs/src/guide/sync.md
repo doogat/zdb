@@ -150,6 +150,8 @@ repo (.git): 8.4 MB → 6.1 MB
 If **crdt temp** shows no reduction, all devices are already caught up — nothing to clean.
 If **repo (.git)** shows little change, Git's pack files are already efficient.
 
+For measured growth data, see [Storage Budget](../technical/storage-budget.md).
+
 ## Checking Status
 
 ```bash
