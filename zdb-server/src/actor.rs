@@ -1027,6 +1027,12 @@ fn run_maintenance(
                 files_removed: 0,
                 crdt_docs_compacted: 0,
                 gc_success: false,
+                crdt_temp_bytes_before: 0,
+                crdt_temp_bytes_after: 0,
+                crdt_temp_files_before: 0,
+                crdt_temp_files_after: 0,
+                repo_bytes_before: 0,
+                repo_bytes_after: 0,
             });
         }
         Err(e) => return Err(e),

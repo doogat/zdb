@@ -187,22 +187,52 @@ pub fn compact_zettel(repo: &GitRepo, zettel_id: &str) -> Result<usize> {
     Ok(1)
 }
 
-/// Get total size of `.crdt/temp/` directory in bytes.
-fn crdt_temp_size(repo: &GitRepo) -> u64 {
+/// Get total size and file count of `.crdt/temp/` directory.
+fn crdt_temp_stats(repo: &GitRepo) -> (u64, usize) {
     let temp_dir = repo.path.join(".crdt/temp");
     if !temp_dir.exists() {
-        return 0;
+        return (0, 0);
     }
     std::fs::read_dir(&temp_dir)
         .ok()
         .map(|entries| {
-            entries
-                .filter_map(|e| e.ok())
-                .filter_map(|e| e.metadata().ok())
-                .map(|m| m.len())
-                .sum()
+            let mut bytes = 0u64;
+            let mut count = 0usize;
+            for entry in entries.flatten() {
+                if let Ok(m) = entry.metadata() {
+                    if m.is_file() {
+                        bytes += m.len();
+                        count += 1;
+                    }
+                }
+            }
+            (bytes, count)
         })
-        .unwrap_or(0)
+        .unwrap_or((0, 0))
+}
+
+/// Recursively compute total size of a directory in bytes.
+fn dir_size(path: &Path) -> u64 {
+    if !path.exists() {
+        return 0;
+    }
+    let mut total = 0u64;
+    let mut stack = vec![path.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            if let Ok(m) = entry.metadata() {
+                if m.is_file() {
+                    total += m.len();
+                } else if m.is_dir() {
+                    stack.push(entry.path());
+                }
+            }
+        }
+    }
+    total
 }
 
 /// Run `git gc` on the repository.
@@ -222,7 +252,8 @@ pub fn compact(repo: &GitRepo, sync_mgr: &SyncManager, force: bool) -> Result<Co
     // Threshold check: skip if under threshold (unless forced)
     if !force {
         let config = repo.load_config()?;
-        let size_mb = crdt_temp_size(repo) as f64 / (1024.0 * 1024.0);
+        let (size_bytes, _) = crdt_temp_stats(repo);
+        let size_mb = size_bytes as f64 / (1024.0 * 1024.0);
         if size_mb < config.compaction.threshold_mb as f64 {
             tracing::debug!(
                 size_mb,
@@ -233,9 +264,18 @@ pub fn compact(repo: &GitRepo, sync_mgr: &SyncManager, force: bool) -> Result<Co
                 files_removed: 0,
                 crdt_docs_compacted: 0,
                 gc_success: true,
+                crdt_temp_bytes_before: 0,
+                crdt_temp_bytes_after: 0,
+                crdt_temp_files_before: 0,
+                crdt_temp_files_after: 0,
+                repo_bytes_before: 0,
+                repo_bytes_after: 0,
             });
         }
     }
+
+    let (crdt_temp_bytes_before, crdt_temp_files_before) = crdt_temp_stats(repo);
+    let repo_bytes_before = dir_size(&repo.path.join(".git"));
 
     let nodes = sync_mgr.list_nodes()?;
     let head = shared_head(repo, &nodes)?;
@@ -250,13 +290,30 @@ pub fn compact(repo: &GitRepo, sync_mgr: &SyncManager, force: bool) -> Result<Co
         tracing::info!(crdt_docs_compacted, "crdt_docs_compacted");
     }
 
+    let (crdt_temp_bytes_after, crdt_temp_files_after) = crdt_temp_stats(repo);
+
     let gc_success = run_gc(&repo.path)?;
-    tracing::info!(gc_success, "gc_result");
+    let repo_bytes_after = dir_size(&repo.path.join(".git"));
+
+    tracing::info!(
+        gc_success,
+        crdt_temp_bytes_before,
+        crdt_temp_bytes_after,
+        repo_bytes_before,
+        repo_bytes_after,
+        "compaction_result"
+    );
 
     Ok(CompactionReport {
         files_removed,
         crdt_docs_compacted,
         gc_success,
+        crdt_temp_bytes_before,
+        crdt_temp_bytes_after,
+        crdt_temp_files_before,
+        crdt_temp_files_after,
+        repo_bytes_before,
+        repo_bytes_after,
     })
 }
 
@@ -436,6 +493,8 @@ mod tests {
         assert_eq!(report.files_removed, 0);
         assert_eq!(report.crdt_docs_compacted, 0);
         assert!(report.gc_success);
+        assert_eq!(report.crdt_temp_bytes_before, 0);
+        assert_eq!(report.crdt_temp_files_before, 0);
     }
 
     #[test]
@@ -446,6 +505,8 @@ mod tests {
 
         let report = compact(&repo, &mgr, true).unwrap();
         assert!(report.gc_success);
+        // Repo bytes should be measured (git dir exists)
+        assert!(report.repo_bytes_before > 0 || report.repo_bytes_after > 0);
     }
 
     #[test]

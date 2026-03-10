@@ -294,6 +294,12 @@ pub struct CompactionReport {
     pub files_removed: usize,
     pub crdt_docs_compacted: usize,
     pub gc_success: bool,
+    pub crdt_temp_bytes_before: u64,
+    pub crdt_temp_bytes_after: u64,
+    pub crdt_temp_files_before: usize,
+    pub crdt_temp_files_after: usize,
+    pub repo_bytes_before: u64,
+    pub repo_bytes_after: u64,
 }
 
 /// Kind of change detected by diff_tree_to_tree.
