@@ -265,6 +265,15 @@ fn install_meeting_minutes_type() {
         .assert()
         .success()
         .stdout(predicate::str::contains("attendees: alice,bob"));
+
+    // DELETE on hyphenated table must work (requires quoted identifiers in SQL)
+    repo.zdb()
+        .args([
+            "query",
+            &format!(r#"DELETE FROM "meeting-minutes" WHERE id = '{id}'"#),
+        ])
+        .assert()
+        .success();
 }
 
 #[test]

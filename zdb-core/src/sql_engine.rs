@@ -692,7 +692,7 @@ impl<'a> SqlEngine<'a> {
         };
         let table_name = from_tables
             .first()
-            .map(|f| f.relation.to_string().to_lowercase())
+            .map(|f| unquote_identifier(&f.relation.to_string()))
             .ok_or_else(|| ZettelError::SqlEngine("missing table in DELETE".into()))?;
         let _schema = self.load_schema(&table_name)?;
 
@@ -710,7 +710,7 @@ impl<'a> SqlEngine<'a> {
             }
             self.index.remove_zettel(&zettel_id)?;
             self.index.conn.execute(
-                &format!("DELETE FROM {} WHERE id = ?1", table_name),
+                &format!("DELETE FROM \"{}\" WHERE id = ?1", table_name),
                 params![zettel_id],
             )?;
             return Ok(SqlResult::Affected(1));
@@ -738,7 +738,7 @@ impl<'a> SqlEngine<'a> {
         for (id, _) in &matches {
             self.index.remove_zettel(id)?;
             self.index.conn.execute(
-                &format!("DELETE FROM {} WHERE id = ?1", table_name),
+                &format!("DELETE FROM \"{}\" WHERE id = ?1", table_name),
                 params![id],
             )?;
         }
@@ -1142,7 +1142,7 @@ fn data_type_to_string(dt: &DataType) -> String {
 fn extract_references(options: &[sqlparser::ast::ColumnOptionDef]) -> Option<String> {
     for opt in options {
         if let ColumnOption::ForeignKey { foreign_table, .. } = &opt.option {
-            return Some(foreign_table.to_string().to_lowercase());
+            return Some(unquote_identifier(&foreign_table.to_string()));
         }
     }
     None
@@ -2965,6 +2965,57 @@ mod tests {
             .unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("UPDATE...FROM not supported"), "{msg}");
+    }
+
+    #[test]
+    fn delete_from_hyphenated_table() {
+        let (_dir, repo, index) = setup();
+        engine_exec_ok(
+            &repo,
+            &index,
+            "CREATE TABLE \"my-items\" (name TEXT)",
+        );
+        let id = engine_exec_id(
+            &repo,
+            &index,
+            r#"INSERT INTO "my-items" (name) VALUES ('test')"#,
+        );
+        let mut engine = SqlEngine::new(&index, &repo);
+        let result = engine
+            .execute(&format!(r#"DELETE FROM "my-items" WHERE id = '{id}'"#))
+            .unwrap();
+        match result {
+            SqlResult::Affected(n) => assert_eq!(n, 1),
+            _ => panic!("expected Affected"),
+        }
+    }
+
+    #[test]
+    fn references_to_hyphenated_table() {
+        let (_dir, repo, index) = setup();
+        engine_exec_ok(
+            &repo,
+            &index,
+            "CREATE TABLE \"my-people\" (name TEXT)",
+        );
+        engine_exec_ok(
+            &repo,
+            &index,
+            r#"CREATE TABLE tasks (title TEXT, assignee TEXT REFERENCES "my-people")"#,
+        );
+        // Verify the typedef stored unquoted reference target
+        let mut engine = SqlEngine::new(&index, &repo);
+        let schema = engine.load_schema("tasks").unwrap();
+        let ref_col = schema
+            .columns
+            .iter()
+            .find(|c| c.name == "assignee")
+            .expect("assignee column");
+        assert_eq!(
+            ref_col.references.as_deref(),
+            Some("my-people"),
+            "reference target should be unquoted"
+        );
     }
 
     #[test]
