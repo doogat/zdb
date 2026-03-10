@@ -433,12 +433,26 @@ impl ZettelDriver {
         let mut schemas = Vec::new();
         for row in rows {
             if let Some(path) = row.first() {
-                let Ok(content) = repo.read_file(path) else { continue };
-                let Ok(parsed) = parser::parse(&content, path) else { continue };
-                let Ok(schema) = crate::sql_engine::schema_from_parsed(&parsed) else {
-                    continue;
+                let content = match repo.read_file(path) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!("typedef {path}: read failed: {e}");
+                        continue;
+                    }
                 };
-                schemas.push(schema.into());
+                let parsed = match parser::parse(&content, path) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::warn!("typedef {path}: parse failed: {e}");
+                        continue;
+                    }
+                };
+                match crate::sql_engine::schema_from_parsed(&parsed) {
+                    Ok(schema) => schemas.push(schema.into()),
+                    Err(e) => {
+                        tracing::warn!("typedef {path}: schema extraction failed: {e}");
+                    }
+                }
             }
         }
         Ok(schemas)
