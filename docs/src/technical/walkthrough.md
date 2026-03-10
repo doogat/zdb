@@ -1723,10 +1723,10 @@ The strategy for each zettel type is looked up from the `_typedef` zettel's `crd
 
 ## 12. Compaction — `zdb-core/src/compaction.rs`
 
-Over time, CRDT temp files accumulate in `.crdt/temp/`. Compaction cleans them up:
+Over time, CRDT temp files accumulate in `.crdt/temp/`. Compaction cleans them up and reports before/after storage measurements:
 
 ```bash
-sed -n '209,247p' zdb-core/src/compaction.rs
+sed -n '249,305p' zdb-core/src/compaction.rs
 ```
 
 ```rust
@@ -1736,16 +1736,30 @@ pub fn compact(repo: &GitRepo, sync_mgr: &SyncManager, force: bool) -> Result<Co
     // Threshold check: skip if under threshold (unless forced)
     if !force {
         let config = repo.load_config()?;
-        let size_mb = crdt_temp_size(repo) as f64 / (1024.0 * 1024.0);
+        let (size_bytes, _) = crdt_temp_stats(repo);
+        let size_mb = size_bytes as f64 / (1024.0 * 1024.0);
         if size_mb < config.compaction.threshold_mb as f64 {
-            tracing::debug!(size_mb, threshold_mb = config.compaction.threshold_mb, "below_threshold_skip");
+            tracing::debug!(
+                size_mb,
+                threshold_mb = config.compaction.threshold_mb,
+                "below_threshold_skip"
+            );
             return Ok(CompactionReport {
                 files_removed: 0,
                 crdt_docs_compacted: 0,
                 gc_success: true,
+                crdt_temp_bytes_before: 0,
+                crdt_temp_bytes_after: 0,
+                crdt_temp_files_before: 0,
+                crdt_temp_files_after: 0,
+                repo_bytes_before: 0,
+                repo_bytes_after: 0,
             });
         }
     }
+
+    let (crdt_temp_bytes_before, crdt_temp_files_before) = crdt_temp_stats(repo);
+    let repo_bytes_before = dir_size(&repo.path.join(".git"));
 
     let nodes = sync_mgr.list_nodes()?;
     let head = shared_head(repo, &nodes)?;
@@ -1760,26 +1774,36 @@ pub fn compact(repo: &GitRepo, sync_mgr: &SyncManager, force: bool) -> Result<Co
         tracing::info!(crdt_docs_compacted, "crdt_docs_compacted");
     }
 
-    let gc_success = run_gc(&repo.path)?;
-    tracing::info!(gc_success, "gc_result");
+    let (crdt_temp_bytes_after, crdt_temp_files_after) = crdt_temp_stats(repo);
 
-    Ok(CompactionReport {
-        files_removed,
-        crdt_docs_compacted,
+    let gc_success = run_gc(&repo.path)?;
+    let repo_bytes_after = dir_size(&repo.path.join(".git"));
+
+    tracing::info!(
         gc_success,
-    })
-}
+        crdt_temp_bytes_before,
+        crdt_temp_bytes_after,
+        repo_bytes_before,
+        repo_bytes_after,
+        "compaction_result"
+    );
 ```
 
-Compaction runs five steps:
+Compaction runs in stages, measuring storage before and after each phase:
 
 1. **Threshold check** — skip if `.crdt/temp/` is under the configured MB limit (default 1MB)
-2. **Shared head** — compute the greatest common ancestor commit across all active nodes. CRDT files older than this are safe to delete because all nodes have seen them.
-3. **Cleanup** — delete temp files at or before the shared head (both `.crdt` and `_fm.crdt`)
-4. **Compact** — merge multiple Automerge documents for the same zettel into one. Body (`.crdt`) and frontmatter (`_fm.crdt`) files are grouped and compacted independently.
-5. **Git GC** — run `git gc` to reclaim space
+2. **Measure before** — record CRDT temp bytes/files and `.git/` size
+3. **Shared head** — compute the greatest common ancestor commit across all active nodes. CRDT files older than this are safe to delete because all nodes have seen them.
+4. **Cleanup** — delete temp files at or before the shared head (both `.crdt` and `_fm.crdt`)
+5. **Compact** — merge multiple Automerge documents for the same zettel into one. Body (`.crdt`) and frontmatter (`_fm.crdt`) files are grouped and compacted independently.
+6. **Measure after** — record CRDT temp bytes/files post-compaction
+7. **Git GC** — run `git gc` to reclaim space, then measure `.git/` again
 
 Stale and retired nodes are excluded from the shared head calculation, so an offline device doesn't block compaction forever.
+
+The `CompactionReport` returned includes `crdt_temp_bytes_before/after`, `crdt_temp_files_before/after`, and `repo_bytes_before/after` — giving operators full visibility into what compaction achieved. See [Storage Budget](storage-budget.md) for measured growth with and without compaction (97% reduction at 10 edits/day).
+
+When a stale node returns after compaction has removed CRDT history, the conflict resolution cascade still works: it reconstructs three-way merges from Git content, falling back to LWW if CRDT merge produces invalid output. See [Conflict Resolution Cascade](sync.md#conflict-resolution-cascade) for the full decision tree.
 
 ## 13. CLI — `zdb-cli/src/main.rs`
 
@@ -3981,4 +4005,53 @@ sed -n '264,280p' zdb-core/src/ffi.rs
         &self,
         zettel_id: String,
         file_path: String,
+```
+
+## Deployment Modes and Mobile Host Shell Direction
+
+The product docs now state the platform model more explicitly. ZettelDB is aiming for one backend contract across server and embedded modes, but mobile mini-apps are expected to live inside one host app bundle rather than several installed apps sharing one localhost backend on the same phone. This keeps the cross-platform promise focused on shared storage semantics and shared backend behavior instead of identical process topology.
+
+```bash
+sed -n '1,38p' docs/src/introduction.md
+```
+
+```output
+# Doogat ZettelDB
+
+A local-first Git-CRDT data engine for Zettelkasten workflows and structured app backends, written in Rust.
+
+ZettelDB stores Markdown records in a Git repository, derives queryable indexes from that source of truth, syncs across personal devices without cloud lock-in, and automatically resolves conflicting edits using Automerge CRDT.
+
+## Key Properties
+
+- **Git-native** — full version history, human-readable Markdown files, durable storage
+- **Decentralized** — no server required; sync via any Git remote (bare repos, SSH, local paths)
+- **Offline-first** — all functionality works without network; sync is explicit
+- **Automatic conflict resolution** — Git handles non-overlapping edits (>99% of cases); Automerge CRDT resolves the rest at character/field/line level
+
+## Product Direction
+
+ZettelDB is not just a note store. The product direction is to make it a cross-platform backend for local-first personal applications.
+
+That requires one clarification:
+
+- **Cross-platform** means the same storage model, typed data model, sync behavior, and backend semantics across platforms.
+- It does **not** mean every platform uses the same transport, process topology, or packaging model.
+
+Today ZettelDB has two deployment modes and is moving toward a third:
+
+- **Server mode** — `zdb serve` for web clients, desktop clients, and any app that wants a network API
+- **Embedded mode** — UniFFI bindings for native apps that embed the Rust core directly
+- **Mobile host-shell mode** — the intended pattern for "mini-apps" on one phone: one app bundle, one embedded backend, multiple modules/widgets/extensions
+
+The mobile host-shell point matters. On iOS and Android, the portable model is not "many separate apps talking to one localhost backend on the same phone." The portable model is one host app containing multiple experiences that share one embedded ZettelDB runtime.
+
+## Current Status
+
+MVP implementation. The core library (`zdb-core`), CLI (`zdb`), GraphQL server, and UniFFI bindings are functional. The product already supports Git-backed storage, typed SQL tables, type inference, bundled type definitions, search, and multi-device sync.
+
+The main platform gap is parity between the server-backed app path and the embedded native path. That work is now explicit product backlog rather than an unstated assumption.
+
+## Documentation Structure
+
 ```
