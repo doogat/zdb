@@ -29,6 +29,8 @@ Thumbs.db
 # Build output
 out/
 .build/
+.gradle/
+build/
 docs/book/
 
 # AI
