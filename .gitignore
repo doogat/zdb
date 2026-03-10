@@ -33,6 +33,10 @@ out/
 build/
 docs/book/
 
+# Generated UniFFI bindings (regenerate via build scripts)
+tests/swift/Sources/ZettelDB/zdb_core.swift
+tests/kotlin/src/main/kotlin/uniffi/
+
 # AI
 .claude/
 .serena/
