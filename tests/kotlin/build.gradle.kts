@@ -30,4 +30,7 @@ tasks.test {
     useJUnitPlatform()
     // Point JNA to the native library built for the host platform
     systemProperty("jna.library.path", rootProject.projectDir.resolve("../../target/release").absolutePath)
+    testLogging {
+        showStandardStreams = true
+    }
 }

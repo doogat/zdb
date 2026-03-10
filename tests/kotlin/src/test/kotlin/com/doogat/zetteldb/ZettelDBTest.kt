@@ -7,6 +7,7 @@ import org.junit.jupiter.api.Assertions.*
 import uniffi.zdb_core.ZettelDriver
 import java.io.File
 import java.nio.file.Files
+import kotlin.system.measureTimeMillis
 
 class ZettelDBTest {
     private lateinit var tmpDir: File
@@ -78,6 +79,44 @@ class ZettelDBTest {
             val list = it.listZettels()
             assertTrue(list.any { path -> path.contains(id) },
                 "listZettels should include created zettel")
+        }
+    }
+
+    @Test
+    fun testPerformanceMetrics() {
+        // Cold start: measure ZettelDriver init time
+        val initMs = measureTimeMillis {
+            ZettelDriver(tmpDir.absolutePath).use { }
+        }
+        println("cold_start_ms: $initMs")
+
+        // Single zettel create latency
+        val driver = ZettelDriver(tmpDir.absolutePath)
+        driver.use {
+            val createMs = measureTimeMillis {
+                it.createZettel("---\ntitle: Perf Test\n---\nBody.", "perf create")
+            }
+            println("single_create_ms: $createMs")
+
+            // Populate ~100 zettels for search benchmark
+            for (i in 1..99) {
+                it.createZettel("---\ntitle: Bulk Note $i\n---\nContent number $i.", "bulk $i")
+            }
+            it.reindex()
+
+            // Search latency with ~100 zettels
+            var results: List<*>? = null
+            val searchMs = measureTimeMillis {
+                results = it.search("Bulk Note")
+            }
+            println("search_100_ms: $searchMs")
+            println("search_100_results: ${results?.size}")
+
+            // Reindex latency with ~100 zettels
+            val reindexMs = measureTimeMillis {
+                it.reindex()
+            }
+            println("reindex_100_ms: $reindexMs")
         }
     }
 

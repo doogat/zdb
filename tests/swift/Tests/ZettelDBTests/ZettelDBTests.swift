@@ -99,6 +99,53 @@ final class ZettelDBTests: XCTestCase {
                        "zdb \(args.joined(separator: " ")) failed")
     }
 
+    func testPerformanceMetrics() throws {
+        // Cold start: measure ZettelDriver init time
+        let initStart = ContinuousClock.now
+        let driver = try ZettelDriver(repoPath: tmpDir.path)
+        let initDuration = ContinuousClock.now - initStart
+        let initMs = Double(initDuration.components.attoseconds) / 1e15 +
+                     Double(initDuration.components.seconds) * 1000
+        print("cold_start_ms: \(String(format: "%.2f", initMs))")
+
+        // Single zettel create latency
+        let createStart = ContinuousClock.now
+        let _ = try driver.createZettel(
+            content: "---\ntitle: Perf Test\n---\nBody.",
+            message: "perf create"
+        )
+        let createDuration = ContinuousClock.now - createStart
+        let createMs = Double(createDuration.components.attoseconds) / 1e15 +
+                       Double(createDuration.components.seconds) * 1000
+        print("single_create_ms: \(String(format: "%.2f", createMs))")
+
+        // Populate ~100 zettels for search benchmark
+        for i in 1...99 {
+            let _ = try driver.createZettel(
+                content: "---\ntitle: Bulk Note \(i)\n---\nContent number \(i).",
+                message: "bulk \(i)"
+            )
+        }
+        try _ = driver.reindex()
+
+        // Search latency with ~100 zettels
+        let searchStart = ContinuousClock.now
+        let results = try driver.search(query: "Bulk Note")
+        let searchDuration = ContinuousClock.now - searchStart
+        let searchMs = Double(searchDuration.components.attoseconds) / 1e15 +
+                       Double(searchDuration.components.seconds) * 1000
+        print("search_100_ms: \(String(format: "%.2f", searchMs))")
+        print("search_100_results: \(results.count)")
+
+        // Reindex latency with ~100 zettels
+        let reindexStart = ContinuousClock.now
+        try _ = driver.reindex()
+        let reindexDuration = ContinuousClock.now - reindexStart
+        let reindexMs = Double(reindexDuration.components.attoseconds) / 1e15 +
+                        Double(reindexDuration.components.seconds) * 1000
+        print("reindex_100_ms: \(String(format: "%.2f", reindexMs))")
+    }
+
     func testBundleExportImport() throws {
         // Register a sync node (required for bundle export)
         zdb(["register-node", "test-source"], in: tmpDir)

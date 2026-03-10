@@ -11,6 +11,7 @@ Measured values for NFR/AC performance targets. All measurements taken on Darwin
 | NFR-03 / AC-02 | Sync < 2s (5K, LAN) | ~12.6s | FAIL |
 | NFR-04 / AC-07 | Binary size profiled | 23.5MB | — |
 | AC-19 | Query < 50ms (50K) | not yet measured | — |
+| Mobile FFI | Baseline measured | init <5ms, search <1ms | — |
 
 ## Binary Size (NFR-04 / AC-07)
 
@@ -74,3 +75,26 @@ Threshold test (ignored): `cargo test --release -p zdb-core --test sync_threshol
 The actor serializes all operations. Reads meet NFR-01 targets under normal use but degrade 45x under sustained write load. Decision: keep single actor; see [Server Read-Path Decision](./server-read-path.md) for full analysis and operating envelope.
 
 Run: `cargo build -p zdb-cli --release && cargo bench -p zdb-server`
+
+## Mobile FFI Baseline (UniFFI / ZettelDriver)
+
+Measured via platform-native timing on Darwin/arm64 (Apple Silicon), debug build.
+
+| Metric | Swift (ContinuousClock) | Kotlin/JVM (measureTimeMillis) |
+|--------|------------------------|-------------------------------|
+| Cold start (ZettelDriver init) | 3.08 ms | 4 ms |
+| Single zettel create | 971.97 ms | 966 ms |
+| FTS search (100 zettels) | 0.83 ms | 1 ms |
+| Reindex (100 zettels) | 47.72 ms | 41 ms |
+
+**Notes:**
+
+- Swift tests run via `swift test` (SPM, macOS host, debug build)
+- Kotlin tests run via `./gradlew test` (JVM host, release native lib)
+- Create latency is dominated by git commit per zettel (~1s each)
+- Search and reindex are fast; both scale sub-linearly with zettel count
+- Cold start is negligible (<5ms) — SQLite + git repo open
+
+Run Swift: `cd tests/swift && swift test --filter testPerformanceMetrics`
+
+Run Kotlin: `cd tests/kotlin && ./gradlew test --rerun --tests '*testPerformanceMetrics'`
