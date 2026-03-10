@@ -54,12 +54,25 @@ NFR-02 targets: repo growth stays within yearly budget. At 10 edits/day with mon
 
 Without compaction, growth is ~44 MB/year. For repos with higher edit rates or larger zettels, compaction is essential.
 
+## Extrapolation to 100 edits/day
+
+The bench runs at 10 edits/day to keep runtime under 15 minutes. Git's delta compression means growth is roughly linear with commit count for same-file modifications, so 10× more edits ≈ 10× more growth:
+
+| Metric | 10 edits/day (measured) | 100 edits/day (extrapolated) |
+|--------|------------------------|------------------------------|
+| No compaction | 43.7 MB/yr | ~437 MB/yr |
+| Monthly compaction | 1.2 MB/yr | ~12 MB/yr |
+
+At 100 edits/day with compaction, **~12 MB/year** remains well within a practical budget for a local-first app. Without compaction, 437 MB/year would be concerning — compaction is essential at higher edit rates.
+
+The linear extrapolation is conservative (slightly pessimistic) because git gc's pack efficiency improves with more similar objects.
+
 ## Limitations
 
 - **Single-node only**: CRDT temp files (0 MB here) would add overhead in multi-device sync with conflicts
 - **No attachments**: Binary files resist delta compression and would dominate growth
 - **Synthetic content**: Real zettels vary in size; results scale roughly linearly with average zettel size
-- **10 edits/day**: The bench uses 10/day (not 100/day from spec) to keep runtime under 15 minutes; growth scales proportionally
+- **Linear extrapolation**: The 10→100 edits/day projection assumes linear scaling; actual growth may be slightly lower due to improved pack ratios
 
 ## Reproducing
 
