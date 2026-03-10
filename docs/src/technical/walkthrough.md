@@ -1396,8 +1396,8 @@ sed -n '1,35p' zdb-core/src/sql_engine.rs
 ```rust
 use rusqlite::params;
 use sqlparser::ast::{
-    AssignmentTarget, ColumnOption, DataType, Expr, FromTable, SetExpr, Statement,
-    Value as SqlValue,
+    AlterTableOperation, AssignmentTarget, ColumnOption, DataType, Expr, FromTable, ObjectType,
+    SetExpr, Statement, Value as SqlValue,
 };
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
@@ -1405,30 +1405,26 @@ use std::collections::BTreeMap;
 
 use crate::error::{Result, ZettelError};
 use crate::indexer::Index;
-use crate::traits::ZettelStore;
 use crate::parser;
+use crate::traits::ZettelStore;
 use crate::types::{
     ColumnDef, InlineField, ParsedZettel, TableSchema, Value, WikiLink, ZettelId, ZettelMeta, Zone,
 };
 
+/// Strip surrounding double-quotes from a SQL identifier.
+/// sqlparser preserves quotes in `to_string()` for identifiers like `"meeting-minutes"`.
+fn unquote_identifier(s: &str) -> String {
+    s.trim_matches('"').to_lowercase()
+}
+
 #[derive(Debug)]
 pub enum SqlResult {
-    Rows { columns: Vec<String>, rows: Vec<Vec<String>> },
+    Rows {
+        columns: Vec<String>,
+        rows: Vec<Vec<String>>,
+    },
     Affected(usize),
     Ok(String),
-}
-
-pub struct SqlEngine<'a> {
-    index: &'a Index,
-    repo: &'a dyn ZettelStore,
-    txn: Option<TransactionBuffer>,
-}
-
-/// Reserved table names that cannot be used for CREATE TABLE.
-fn is_reserved_table(name: &str) -> bool {
-    name == "zettels"
-        || name.starts_with("_zdb_")
-        || name.starts_with("sqlite_")
 }
 ```
 
@@ -1472,6 +1468,22 @@ The SQL engine uses `sqlparser` to parse SQL ASTs, then dispatches:
 The key insight: SQL tables are zettel types. `CREATE TABLE project (...)` creates a `_typedef` zettel that defines the `project` type's schema. `INSERT INTO project VALUES (...)` creates a new zettel with `type: project` and the specified fields in its frontmatter/body/reference section.
 
 The bulk operations pattern uses `resolve_matching_ids` to delegate WHERE evaluation to SQLite — this reconstructs the WHERE clause via sqlparser's `Display` impl, runs `SELECT id FROM {table} WHERE {clause}` against the materialized table, then resolves each ID to a file path. This avoids reimplementing SQL expression evaluation in Rust.
+
+### Quoted Identifier Handling
+
+SQL identifiers with hyphens (like `meeting-minutes`) must be double-quoted in SQL. The `unquote_identifier` helper strips quotes for internal use:
+
+```bash
+sed -n '/^fn unquote_identifier/,/^}/p' zdb-core/src/sql_engine.rs
+```
+
+```rust
+fn unquote_identifier(s: &str) -> String {
+    s.trim_matches('"').to_lowercase()
+}
+```
+
+All DDL/DML handlers (`handle_create_table`, `handle_insert`, `handle_update`, `handle_delete`, `handle_alter_table`, `handle_drop`) use `unquote_identifier` to normalize table names from the AST. Generated SQL statements quote table names with `"..."` to support hyphenated identifiers in SQLite.
 
 ### Multi-Row INSERT
 
@@ -4006,4 +4018,3 @@ sed -n '264,280p' zdb-core/src/ffi.rs
         zettel_id: String,
         file_path: String,
 ```
-
