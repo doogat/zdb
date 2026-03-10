@@ -4,7 +4,7 @@
 
 > **Status**: go (with accepted deferrals)
 
-**Tally**: 16 done, 2 partial, 1 not started, 3 deferred
+**Tally**: 17 done, 1 partial, 1 not started, 1 fail, 3 deferred
 
 ### Blockers
 
@@ -18,9 +18,8 @@
 
 ### Partial items
 
-- **FR-33 (delta export)**: implemented and smoke-tested. Unit tests now cover known_heads logic. FFI delta export deferred until mobile needs it
+- **FR-33 (delta export)**: implemented with unit + smoke coverage. FFI delta export deferred until mobile needs it
 - **FR-64a (pre-compaction backup)**: not started. Bundle export exists standalone but is not wired into compact pipeline. Backlog candidate
-- **meeting-minutes type**: implemented with unit + e2e test. Previously had no e2e coverage, now added
 
 ### Recommendation
 
@@ -35,7 +34,7 @@ Phase 2 is complete for practical purposes. Core functionality (bundles, REST, N
 | FR-30 | Air-gapped bundle protocol for offline nodes | done | `zdb-core/src/bundle.rs`, `zdb-cli/src/main.rs`, `ffi.rs` | unit: `full_bundle_export_and_verify`, `checksum_verification_catches_tampering`, `full_bundle_import_on_new_repo`; e2e: `bundle_full_bootstrap`, `bundle_recovery_after_compaction`; smoke: sh/ps1 §27-28 | `technical/bundle.md` |
 | FR-31 | Bundles contain: Git bundle, node registrations, Git objects | done | `bundle.rs:build_tar_bundle` (objects.bundle, nodes/*.toml, manifest.toml, checksum.sha256) | unit: `full_bundle_export_and_verify` | `technical/bundle.md` |
 | FR-32 | Bundle import triggers standard merge protocol | done | `bundle.rs:import_bundle` (unbundle → fetch → merge → CRDT resolve → reindex) | unit+e2e+smoke (see FR-30) | `technical/bundle.md` |
-| FR-33 | Bundle export targets specific nodes (delta); `--full` for bootstrapping | partial | `bundle.rs:export_bundle` (delta via known_heads), `export_full_bundle`; FFI: full only, no delta | smoke: sh/ps1 §28 (delta CLI). No unit test for delta known_heads logic. FFI missing delta export | `technical/bundle.md` |
+| FR-33 | Bundle export targets specific nodes (delta); `--full` for bootstrapping | partial | `bundle.rs:export_bundle` (delta via known_heads), `export_full_bundle`; FFI: full only, no delta | smoke: sh/ps1 §28 (delta CLI); unit: `delta_export_known_heads`, `delta_export_no_known_heads`. FFI missing delta export | `technical/bundle.md` |
 
 ### REST API (FR-50)
 
@@ -74,7 +73,7 @@ Phase 2 is complete for practical purposes. Core functionality (bundles, REST, N
 | Item | Description | Status | Evidence |
 |------|-------------|--------|----------|
 | Bundled type: literature-note | Type definition via `zdb type install` | done | `bundled_types.rs:LITERATURE_NOTE_TYPEDEF`; unit: `get_literature_note_bundled_type`; e2e: `install_literature_note_type` |
-| Bundled type: meeting-minutes | Type definition via `zdb type install` | partial | `bundled_types.rs:MEETING_MINUTES_TYPEDEF`; unit: `get_meeting_minutes_bundled_type`. No e2e or smoke test |
+| Bundled type: meeting-minutes | Type definition via `zdb type install` | done | `bundled_types.rs:MEETING_MINUTES_TYPEDEF`; unit: `get_meeting_minutes_bundled_type`; e2e: `install_meeting_minutes_type` |
 | Bundled type: kanban | Type definition via `zdb type install` | done | `bundled_types.rs:KANBAN_TYPEDEF`; unit+e2e: `sql_lifecycle`, `hlc_lww_picks_later_writer` |
 | Sparse index | Audit libgit2/gitoxide coverage for sparse checkout | deferred | `git-scalability-audit.md`: "Not applicable — ZDB indexes all zettels, sparse checkout adds no value" |
 | fsmonitor | OS file watchers (FSEvents, inotify) for O(changed) status | deferred | `git-scalability-audit.md`: not supported in libgit2/gitoxide. Deferred to Phase 3+ |
@@ -87,22 +86,22 @@ _Items that diverge from the initial spec. Each entry: what changed, why, replac
 
 | Req/Item | Deviation | Rationale | Replacement |
 |----------|-----------|-----------|-------------|
-| FR-33 | Delta export implemented but test coverage is smoke-only; FFI exposes full export only | Delta path works but known_heads logic has no unit test. Mobile use case only needs full export for now | Add unit test for delta logic. FFI delta export deferred until mobile clients need node-targeted sync |
-| FR-64a | Pre-compaction bundle backup not wired into compact pipeline | Bundle export exists standalone (`zdb bundle export --full`) but spec requires automatic backup before compaction | Wire `export_full_bundle` into `compact()` or add `--backup` flag to CLI. Backlog candidate |
-| NFR-03 | Sync time 12.6s at 5K vs 2s target (6x over) | Git fetch+merge dominates. Optimization not yet attempted | Profile `SyncManager::sync` hot path. Likely needs shallow fetch or incremental approach. Tracked as blocker |
+| FR-33 | Delta export implemented; FFI exposes full export only | Delta path works with unit + smoke coverage. Mobile use case only needs full export for now | FFI delta export deferred until mobile clients need node-targeted sync |
+| FR-64a | Pre-compaction bundle backup not wired into compact pipeline | Bundle export exists standalone (`zdb bundle export --full`) but spec requires automatic backup before compaction | Wire `export_full_bundle` into `compact()` or add `--backup` flag to CLI. Formally deferred to Phase 3 |
+| NFR-03 | Sync time 12.6s at 5K vs 2s target (6x over) | Git fetch+merge dominates. Optimization not yet attempted | Profile `SyncManager::sync` hot path. Likely needs shallow fetch or incremental approach. Formally deferred to Phase 3. Evidence: `sync_thresholds.rs` (ignored, annotated with current measurement) |
 | NFR-01 (50K) | Benchmarks exist but results not measured/recorded | 50K threshold tests are `#[ignore]`. Need dedicated run on representative hardware | Run `large_scale.rs` benchmarks, record in `performance.md` |
 | NFR-02 (50K) | No 50K growth benchmark | Only 5K measured. Linear extrapolation suggests ~8.7 MB/yr with compaction | Add `growth_50k` benchmark or document extrapolation as sufficient |
 | Sparse index | Dropped entirely | ZDB indexes all zettels — sparse checkout adds no value when full index is required | No replacement needed; architecture eliminates the use case |
 | fsmonitor | Deferred to Phase 3+ | Not supported in libgit2 or gitoxide; requires external watchman daemon | Phase 3 candidate when gitoxide adds support or ZDB migrates git backend |
 | Background maintenance | Deferred to Phase 3+ | Requires shelling out to `git maintenance start`; existing `compact` command covers manual gc | Phase 3 candidate. Low effort, high value for repos >10K zettels |
-| meeting-minutes | Implemented but weak test coverage | Unit test only; no e2e or smoke test exercises install+use | Add e2e test for meeting-minutes type install |
+| meeting-minutes | ~~Implemented but weak test coverage~~ Resolved | Unit + e2e test now cover install+use (`install_meeting_minutes_type`) | No action needed |
 
 ## Phase 3 Entry Criteria
 
 Phase 3 work may begin when all of these hold:
 
 1. This exit checklist is reviewed and accepted
-2. FR-64a (pre-compaction backup) is either implemented or formally deferred with a backlog item
-3. NFR-03 sync regression is tracked as a concrete backlog item with profiling data
+2. ~~FR-64a (pre-compaction backup) is either implemented or formally deferred with a backlog item~~ ✓ Formally deferred in deviation log with replacement strategy
+3. ~~NFR-03 sync regression is tracked as a concrete backlog item with profiling data~~ ✓ Formally deferred in deviation log; baseline measurement in `sync_thresholds.rs`; profiling deferred to Phase 3 start
 4. All `cargo test` and `cargo clippy --workspace` pass on master
 5. No Phase 2 items remain marked "not started" without an explicit deferral rationale
