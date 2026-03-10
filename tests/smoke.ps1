@@ -162,6 +162,16 @@ $output = zdb type install contact
 if ($output -notmatch "installed type") { throw "type install failed" }
 pass "type install"
 
+# 12a. hyphenated type SQL (quoted identifiers)
+$output = zdb type install meeting-minutes
+if ($output -notmatch "installed type") { throw "meeting-minutes install failed" }
+$HYP_ID = (zdb query 'INSERT INTO "meeting-minutes" (date, attendees) VALUES (''2026-03-10'', ''alice,bob'')').Trim()
+$output = zdb query "SELECT date FROM `"meeting-minutes`" WHERE id = '$HYP_ID'"
+if ($output -notmatch "2026-03-10") { throw "hyphenated select failed" }
+$output = zdb query "DELETE FROM `"meeting-minutes`" WHERE id = '$HYP_ID'"
+if ($output -notmatch "1 row") { throw "hyphenated delete failed" }
+pass "hyphenated type sql (quoted identifiers)"
+
 # 13. type suggest
 zdb query "INSERT INTO foo (title, bar, baz) VALUES ('for suggest', 'val', 1)" | Out-Null
 $output = zdb type suggest foo

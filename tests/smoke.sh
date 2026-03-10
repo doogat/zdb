@@ -109,6 +109,13 @@ pass "sql ddl/dml"
 $ZDB type install contact | grep -q "installed type"
 pass "type install"
 
+# 12a. hyphenated type SQL (quoted identifiers)
+$ZDB type install meeting-minutes | grep -q "installed type"
+HYP_ID=$($ZDB query 'INSERT INTO "meeting-minutes" (date, attendees) VALUES ('\''2026-03-10'\'', '\''alice,bob'\'')' | tr -d '[:space:]')
+$ZDB query "SELECT date FROM \"meeting-minutes\" WHERE id = '$HYP_ID'" | grep -q "2026-03-10"
+$ZDB query "DELETE FROM \"meeting-minutes\" WHERE id = '$HYP_ID'" | grep -q "1 row(s) affected"
+pass "hyphenated type sql (quoted identifiers)"
+
 # 13. type suggest
 $ZDB query "INSERT INTO foo (title, bar, baz) VALUES ('for suggest', 'val', 1)" >/dev/null
 $ZDB type suggest foo | grep -q "bar"
