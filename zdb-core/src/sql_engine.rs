@@ -76,25 +76,55 @@ impl<'a> SqlEngine<'a> {
 
     /// Generate a unique ZettelId, waiting if same-second collision detected.
     fn unique_id(&mut self) -> Result<ZettelId> {
-        for _ in 0..100 {
-            let id = parser::generate_id();
-            let exists: bool = self
-                .index
+        self.unique_ids(1).map(|mut v| v.remove(0))
+    }
+
+    /// Generate `count` unique ZettelIds without sleeping between them.
+    ///
+    /// Gets a base timestamp via `generate_unique_id`, then increments by 1
+    /// second for each subsequent ID, skipping any that already exist in the
+    /// index.
+    fn unique_ids(&mut self, count: usize) -> Result<Vec<ZettelId>> {
+        use chrono::NaiveDateTime;
+
+        let mut ids = Vec::with_capacity(count);
+        let first = parser::generate_unique_id(|candidate| {
+            self.index
                 .conn
                 .query_row(
                     "SELECT COUNT(*) > 0 FROM zettels WHERE id = ?1",
-                    params![&id.0],
-                    |row| row.get(0),
+                    params![candidate],
+                    |row| row.get::<_, bool>(0),
                 )
-                .unwrap_or(false);
-            if !exists {
-                return Ok(id);
+                .unwrap_or(false)
+        });
+
+        let mut ts = NaiveDateTime::parse_from_str(&first.0, "%Y%m%d%H%M%S").map_err(|e| {
+            ZettelError::SqlEngine(format!("failed to parse generated id timestamp: {e}"))
+        })?;
+        ids.push(first);
+
+        for _ in 1..count {
+            loop {
+                ts += chrono::Duration::seconds(1);
+                let candidate = ts.format("%Y%m%d%H%M%S").to_string();
+                let exists: bool = self
+                    .index
+                    .conn
+                    .query_row(
+                        "SELECT COUNT(*) > 0 FROM zettels WHERE id = ?1",
+                        params![&candidate],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(false);
+                if !exists {
+                    ids.push(ZettelId(candidate));
+                    break;
+                }
             }
-            std::thread::sleep(std::time::Duration::from_secs(1));
         }
-        Err(ZettelError::SqlEngine(
-            "failed to generate unique id after 100 attempts".into(),
-        ))
+
+        Ok(ids)
     }
 
     #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
