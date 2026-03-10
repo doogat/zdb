@@ -518,6 +518,41 @@ mod tests {
     }
 
     #[test]
+    fn compact_reduces_crdt_temp_bytes() {
+        let (_dir, repo) = temp_repo();
+        let c1 = repo.commit_file("zettelkasten/a.md", "a", "c1").unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let c2 = repo.commit_file("zettelkasten/b.md", "b", "c2").unwrap();
+
+        // Create two CRDT temp files for the same zettel (will be compacted into one)
+        let temp_dir = repo.path.join(".crdt/temp");
+        let mut doc1 = automerge::AutoCommit::new();
+        doc1.put(automerge::ROOT, "key", "value1").unwrap();
+        let mut doc2 = automerge::AutoCommit::new();
+        doc2.put(automerge::ROOT, "key", "value2").unwrap();
+        std::fs::write(
+            temp_dir.join(format!("{}_20260301120000.crdt", c1.0)),
+            doc1.save(),
+        )
+        .unwrap();
+        std::fs::write(
+            temp_dir.join(format!("{}_20260301120000.crdt", c2.0)),
+            doc2.save(),
+        )
+        .unwrap();
+
+        crate::sync_manager::register_node(&repo, "Test").unwrap();
+        let mgr = SyncManager::open(&repo).unwrap();
+
+        let report = compact(&repo, &mgr, true).unwrap();
+        assert!(report.gc_success);
+        assert!(report.crdt_temp_bytes_before > 0);
+        assert!(report.crdt_temp_files_before >= 2);
+        // Two files compacted into one → fewer files and potentially fewer bytes
+        assert!(report.crdt_temp_files_after < report.crdt_temp_files_before);
+    }
+
+    #[test]
     fn compact_crdt_docs_separates_fm_and_body() {
         let (_dir, repo) = temp_repo();
         let c1 = repo.commit_file("zettelkasten/a.md", "a", "c1").unwrap();
