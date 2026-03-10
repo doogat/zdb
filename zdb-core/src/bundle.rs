@@ -470,4 +470,81 @@ mod tests {
         let content = repo2.read_file("zettelkasten/20260301000000.md").unwrap();
         assert!(content.contains("title: test"));
     }
+
+    #[test]
+    fn delta_export_targets_node_and_uses_known_heads() {
+        let (_dir, repo) = temp_repo();
+
+        // Create initial content
+        repo.commit_file(
+            "zettelkasten/20260301000000.md",
+            "---\ntitle: first\n---\nBody1",
+            "add first",
+        )
+        .unwrap();
+        crate::sync_manager::register_node(&repo, "Node1").unwrap();
+        let mgr = SyncManager::open(&repo).unwrap();
+
+        // Record current head as node2's sync point
+        let sync_point = repo.head_oid().unwrap().to_string();
+
+        // Register a remote node with known_heads at sync_point
+        let node2_uuid = "remote-node-2";
+        let node2_config = format!(
+            "uuid = \"{node2_uuid}\"\nname = \"Node2\"\nknown_heads = [\"{sync_point}\"]\n\
+             status = \"Active\"\n"
+        );
+        repo.commit_file(
+            &format!(".nodes/{node2_uuid}.toml"),
+            &node2_config,
+            "register node2",
+        )
+        .unwrap();
+
+        // Add new content after node2's sync point
+        repo.commit_file(
+            "zettelkasten/20260302000000.md",
+            "---\ntitle: second\n---\nBody2",
+            "add second",
+        )
+        .unwrap();
+
+        // Export delta bundle targeting node2
+        let output = _dir.path().join("delta.bundle.tar");
+        let path = export_bundle(&repo, &mgr, node2_uuid, &output).unwrap();
+        assert!(path.exists());
+
+        // Verify manifest targets the specific node (not "*" like full export)
+        let manifest = verify_bundle(&path).unwrap();
+        assert_eq!(manifest.target_node, node2_uuid);
+        assert_eq!(manifest.format_version, 1);
+
+        // Verify the delta bundle is smaller than a full export
+        let full_output = _dir.path().join("full.bundle.tar");
+        export_full_bundle(&repo, &mgr, &full_output).unwrap();
+        let delta_size = std::fs::metadata(&path).unwrap().len();
+        let full_size = std::fs::metadata(&full_output).unwrap().len();
+        assert!(
+            delta_size < full_size,
+            "delta ({delta_size}B) should be smaller than full ({full_size}B)"
+        );
+    }
+
+    #[test]
+    fn delta_export_fails_for_unknown_node() {
+        let (_dir, repo) = temp_repo();
+        repo.commit_file(
+            "zettelkasten/20260301000000.md",
+            "---\ntitle: test\n---\n",
+            "add",
+        )
+        .unwrap();
+        crate::sync_manager::register_node(&repo, "Node1").unwrap();
+        let mgr = SyncManager::open(&repo).unwrap();
+
+        let output = _dir.path().join("delta.bundle.tar");
+        let result = export_bundle(&repo, &mgr, "nonexistent-uuid", &output);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("nonexistent-uuid"));
+    }
 }

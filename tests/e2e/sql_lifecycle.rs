@@ -234,6 +234,18 @@ fn install_literature_note_type() {
 }
 
 #[test]
+fn install_meeting_minutes_type() {
+    let repo = ZdbTestRepo::init();
+    repo.zdb()
+        .args(["type", "install", "meeting-minutes"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "installed type \"meeting-minutes\"",
+        ));
+}
+
+#[test]
 fn install_kanban_type_and_create_with_default() {
     let repo = ZdbTestRepo::init();
     repo.zdb()
