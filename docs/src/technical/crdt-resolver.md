@@ -138,6 +138,8 @@ Compaction modes:
 
 CLI flags: `zdb compact --force` (ignore threshold), `zdb compact --dry-run` (report what would happen).
 
+When CRDT temp files are missing (compacted away), the resolver still works — it builds fresh Automerge docs from the three-way Git diff. See [Conflict Resolution Cascade](sync.md#conflict-resolution-cascade) for the full fallback decision tree.
+
 ## Round-Trip Validation
 
 After merging all zones, the result is serialized via `parser::serialize()` and the module verifies the output parses correctly as a `ParsedZettel`. If parsing fails, a validation error is returned — this prevents corrupted merges from being committed.

@@ -166,6 +166,65 @@ pub struct CompactionReport {
 }
 ```
 
+## Conflict Resolution Cascade
+
+When a sync detects conflicting changes, resolution follows a three-step cascade (see `cascade_resolve` in `sync_manager.rs`):
+
+```
+Step 1: Git three-way merge (libgit2)
+  ↓ if conflicts remain
+Step 2: CRDT per-zone merge (Automerge)
+  ↓ if result fails validation (parser::parse)
+Step 3: LWW by HLC (whole-file, later timestamp wins)
+  ↓ if LWW also fails (shouldn't happen)
+Step 4: Ours-wins (last resort)
+```
+
+### Step 2: CRDT merge (default strategy)
+
+Each conflicting file is split into three zones and resolved independently:
+
+| Zone | Strategy | What wins on conflict |
+|------|----------|----------------------|
+| Frontmatter scalars | Automerge Map CRDT | Deterministic by actor/op ordering |
+| Frontmatter lists | Three-way set merge | Union of additions, removals honored |
+| Body | Automerge Text CRDT | Non-overlapping edits merge; overlapping resolved by CRDT |
+| References | Automerge List CRDT | Union, deduplicated, sorted alphabetically |
+
+### Step 3: LWW fallback
+
+Triggered when Step 2 produces invalid output or errors (e.g., corrupted CRDT state). Compares HLC timestamps on the conflicting commits; the later writer's **entire file** replaces the earlier one. If no HLC is present, defaults to "ours" (local version).
+
+### After compaction
+
+When CRDT temp files have been compacted away, Step 2 still runs — it reconstructs the three-way merge from `ancestor`/`ours`/`theirs` content in Git. The difference is that prior CRDT operation history is lost, so the merge creates fresh Automerge docs rather than extending existing ones. In practice this produces identical results for most edits.
+
+If the reconstructed merge produces invalid markdown (rare edge case), the cascade falls through to Step 3 (LWW).
+
+### Preset strategies
+
+| Strategy | When used | Behavior |
+|----------|-----------|----------|
+| `preset:default` | No typedef or typedef doesn't specify | Per-zone CRDT merge (Step 2) |
+| `preset:last-writer-wins` | Typedef specifies LWW | Skip Step 2; go straight to HLC comparison |
+| `preset:append-log` | Typedef specifies append-log | Frontmatter + references use CRDT; body log sections use union + chronological sort |
+
+### User-visible outcomes
+
+| Scenario | Result |
+|----------|--------|
+| Non-overlapping edits | Both edits preserved |
+| Same field edited on both sides | CRDT picks one deterministically (not random) |
+| One side deletes, other edits | Edit wins; `resurrected: true` added to frontmatter |
+| Stale node returns after compaction | Step 2 runs from Git content; usually succeeds |
+| CRDT error + no HLC | Falls back to local version (ours-wins) |
+
+**E2E tests proving these paths:**
+- `stale_node_resync_after_compaction` — LWW fallback after CRDT state removed
+- `stale_node_edits_deleted_zettel_after_compaction` — edit-vs-delete after compaction
+- `multiple_stale_nodes_return_sequentially` — cascade through multiple compaction cycles
+- `bundle_recovery_after_compaction` — bootstrap from post-compaction bundle
+
 ## Test Coverage
 
 ### Sync Manager (4 tests)
