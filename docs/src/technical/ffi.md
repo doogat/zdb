@@ -194,8 +194,22 @@ Both scripts use the `vendored` feature to compile OpenSSL and libgit2 from sour
 
 - **Platform**: macOS 26.2, Apple Silicon (arm64), Xcode 26.3, Swift 6.2
 - **XCFramework slices**: ios-arm64, ios-arm64_x86_64-simulator, macos-arm64
-- **Tests**: 3/3 passed
+- **Tests**: 5/5 passed
   - `testCreateAndReadZettel` — create zettel via FFI, reindex, read back, verify content
   - `testSearch` — create zettel, reindex, FTS5 search by title
   - `testListZettels` — create zettel, verify it appears in listing
+  - `testPerformanceMetrics` — cold start, create, search, reindex latency at 100 zettels
+  - `testBundleExportImport` — export full bundle, import into fresh repo, verify round-trip
 - **Note**: Tests run on macOS (not iOS simulator) because `setUp` uses `Process()` for `zdb init`, which is unavailable on iOS. The static library and FFI bindings are verified on the macOS slice of the XCFramework.
+
+#### Kotlin on JVM (2026-03-09)
+
+- **Platform**: macOS, JDK 25, Kotlin 2.3.10, JNA 5.16.0
+- **Native lib**: `libzdb_core.dylib` (release build, host platform)
+- **Tests**: 5/5 passed
+  - `testCreateAndReadZettel` — create zettel via FFI, reindex, read back, verify content
+  - `testSearch` — create zettel, reindex, FTS5 search by title
+  - `testListZettels` — create zettel, verify it appears in listing
+  - `testPerformanceMetrics` — cold start, create, search, reindex latency at 100 zettels
+  - `testBundleExportImport` — export full bundle, import into fresh repo, verify round-trip
+- **Note**: Tests run on JVM host (not Android emulator). The native library and FFI bindings are verified via JNA on the host platform.
