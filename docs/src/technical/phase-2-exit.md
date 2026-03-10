@@ -12,54 +12,54 @@ _To be filled after inventory is complete._
 
 | Req | Description | Status | Source | Tests | Docs |
 |-----|-------------|--------|--------|-------|------|
-| FR-30 | Air-gapped bundle protocol for offline nodes | | | | |
-| FR-31 | Bundles contain: Git bundle, node registrations, Git objects | | | | |
-| FR-32 | Bundle import triggers standard merge protocol | | | | |
-| FR-33 | Bundle export targets specific nodes (delta); `--full` for bootstrapping | | | | |
+| FR-30 | Air-gapped bundle protocol for offline nodes | done | `zdb-core/src/bundle.rs`, `zdb-cli/src/main.rs`, `ffi.rs` | unit: `full_bundle_export_and_verify`, `checksum_verification_catches_tampering`, `full_bundle_import_on_new_repo`; e2e: `bundle_full_bootstrap`, `bundle_recovery_after_compaction`; smoke: sh/ps1 §27-28 | `technical/bundle.md` |
+| FR-31 | Bundles contain: Git bundle, node registrations, Git objects | done | `bundle.rs:build_tar_bundle` (objects.bundle, nodes/*.toml, manifest.toml, checksum.sha256) | unit: `full_bundle_export_and_verify` | `technical/bundle.md` |
+| FR-32 | Bundle import triggers standard merge protocol | done | `bundle.rs:import_bundle` (unbundle → fetch → merge → CRDT resolve → reindex) | unit+e2e+smoke (see FR-30) | `technical/bundle.md` |
+| FR-33 | Bundle export targets specific nodes (delta); `--full` for bootstrapping | partial | `bundle.rs:export_bundle` (delta via known_heads), `export_full_bundle`; FFI: full only, no delta | smoke: sh/ps1 §28 (delta CLI). No unit test for delta known_heads logic. FFI missing delta export | `technical/bundle.md` |
 
 ### REST API (FR-50)
 
 | Req | Description | Status | Source | Tests | Docs |
 |-----|-------------|--------|--------|-------|------|
-| FR-50 | REST API: /rest/zettels CRUD + query, pagination, FTS, type filtering | | | | |
+| FR-50 | REST API: /rest/zettels CRUD + query, pagination, FTS, type filtering | done | `zdb-server/src/rest.rs`, `actor.rs` | e2e: `serve::rest_crud_lifecycle`, `rest_pagination`, `rest_filter_by_tag`, `rest_search`, `rest_auth_required`; smoke: sh §8, ps1 §8 | `technical/rest-api.md` |
 
 ### NoSQL Interface (FR-53)
 
 | Req | Description | Status | Source | Tests | Docs |
 |-----|-------------|--------|--------|-------|------|
-| FR-53 | NoSQL (redb) key-value interface with prefix scans, type-extended schema | | | | |
+| FR-53 | NoSQL (redb) key-value interface with prefix scans, type-extended schema | done | `zdb-core/src/nosql.rs` (`RedbIndex`), `zdb-server/src/nosql_api.rs`, `actor.rs` | unit: `nosql::tests::crud_and_prefix_scan`, `upsert_updates_secondary_indices`, `get_missing_returns_none`; smoke: sh §13/§27, ps1 §13/§27 | `technical/nosql.md` |
 
 ### Storage and Compaction (FR-60–FR-65)
 
 | Req | Description | Status | Source | Tests | Docs |
 |-----|-------------|--------|--------|-------|------|
-| FR-60 | Selective compaction of CRDT history | | | | |
-| FR-61 | Compaction boundary: hash present in ALL active nodes' known_heads | | | | |
-| FR-63 | Annual growth within NFR-02 targets with compaction | | | | |
-| FR-64 | git gc after pruning (not --aggressive) | | | | |
-| FR-64a | Export git bundle backup before compaction | | | | |
-| FR-64b | Dry-run mode: report what would be compacted | | | | |
-| FR-65 | Frontmatter CRDT separate compaction when all nodes sync past commit | | | | |
+| FR-60 | Selective compaction of CRDT history | done | `compaction.rs:cleanup_crdt_temp`, `compact_crdt_docs`, `compact_zettel`, `compact` | unit: 5 tests; e2e: 5 multi_device + 2 server_mutations; smoke: sh/ps1 §14 | `storage-budget.md`, `sync.md` |
+| FR-61 | Compaction boundary: hash present in ALL active nodes' known_heads | done | `compaction.rs:shared_head` (filters Active nodes, merge-base across known_heads) | unit: `cleanup_removes_temp_files`; e2e: multi_device compaction tests | `sync.md` |
+| FR-63 | Annual growth within NFR-02 targets with compaction | done | `benches/growth.rs` (5K, 365 days, 10 edits/day) | bench: `repo_size_after_1yr_with_compaction` (1.2 MB/yr) | `storage-budget.md` |
+| FR-64 | git gc after pruning (not --aggressive) | done | `compaction.rs:run_gc` (just `["gc"]`, no --aggressive) | unit: `gc_runs_on_test_repo`, `full_compact_pipeline` | `sync.md` |
+| FR-64a | Export git bundle backup before compaction | not started | Bundle export exists (`zdb bundle export --full`) but not wired into compact pipeline | — | — |
+| FR-64b | Dry-run mode: report what would be compacted | done | `main.rs` Compact `--dry-run` flag | smoke: sh/ps1 §16 | walkthrough |
+| FR-65 | Frontmatter CRDT separate compaction when all nodes sync past commit | done | `compaction.rs:compact_crdt_docs` groups by `(zettel_id, is_frontmatter)` | unit: `compact_crdt_docs_separates_fm_and_body`, `parse_crdt_temp_name_formats`, `cleanup_handles_fm_naming_format` | walkthrough |
 
 ### Performance Targets (NFR-01–NFR-03)
 
 | Req | Metric | 5K target | 50K target | Status | Evidence |
 |-----|--------|-----------|------------|--------|----------|
-| NFR-01 | Query latency (indexed) | < 10 ms | < 50 ms | | |
-| NFR-02 | Repository growth | < 50 MB/year | < 200 MB/year | | |
-| NFR-03 | Sync time (batch) | < 2 s | < 10 s | | |
+| NFR-01 | Query latency (indexed) | < 10 ms | < 50 ms | done (5K), not measured (50K) | 5K: FTS ~3.0ms, SQL ~6.1µs. Benches: `search.rs` (5K), `large_scale.rs` (50K). Thresholds: `query_thresholds.rs` (50K ignored). Docs: `performance.md`, `benchmarks.md` |
+| NFR-02 | Repository growth | < 50 MB/year | < 200 MB/year | done (5K), no test (50K) | 5K: 43.7 MB/yr without compaction, 1.2 MB/yr with. Bench: `growth.rs`. Threshold: `growth_thresholds.rs`. Docs: `storage-budget.md` |
+| NFR-03 | Sync time (batch) | < 2 s | < 10 s | **fail** (5K: ~12.6s vs 2s target) | Bench: `sync.rs`. Threshold: `sync_thresholds.rs` (ignored). Docs: `performance.md` |
 
 ### Additional Phase 2 Roadmap Items
 
 | Item | Description | Status | Evidence |
 |------|-------------|--------|----------|
-| Bundled type: literature-note | Type definition via `zdb type install` | | |
-| Bundled type: meeting-minutes | Type definition via `zdb type install` | | |
-| Bundled type: kanban | Type definition via `zdb type install` | | |
-| Sparse index | Audit libgit2/gitoxide coverage for sparse checkout | | |
-| fsmonitor | OS file watchers (FSEvents, inotify) for O(changed) status | | |
-| Background maintenance | Scheduled `git maintenance run --auto` | | |
-| Multi-device simulation | Automated multi-node sync testing | | |
+| Bundled type: literature-note | Type definition via `zdb type install` | done | `bundled_types.rs:LITERATURE_NOTE_TYPEDEF`; unit: `get_literature_note_bundled_type`; e2e: `install_literature_note_type` |
+| Bundled type: meeting-minutes | Type definition via `zdb type install` | partial | `bundled_types.rs:MEETING_MINUTES_TYPEDEF`; unit: `get_meeting_minutes_bundled_type`. No e2e or smoke test |
+| Bundled type: kanban | Type definition via `zdb type install` | done | `bundled_types.rs:KANBAN_TYPEDEF`; unit+e2e: `sql_lifecycle`, `hlc_lww_picks_later_writer` |
+| Sparse index | Audit libgit2/gitoxide coverage for sparse checkout | deferred | `git-scalability-audit.md`: "Not applicable — ZDB indexes all zettels, sparse checkout adds no value" |
+| fsmonitor | OS file watchers (FSEvents, inotify) for O(changed) status | deferred | `git-scalability-audit.md`: not supported in libgit2/gitoxide. Deferred to Phase 3+ |
+| Background maintenance | Scheduled `git maintenance run --auto` | deferred | `git-scalability-audit.md`: Phase 3+ candidate. Existing `compact` covers manual gc |
+| Multi-device simulation | Automated multi-node sync testing | done | PRD 00004 complete. `tests/e2e/multi_device.rs`: 12 tests (3-node convergence, chaos, partition, etc.) |
 
 ## Deviation Log
 
