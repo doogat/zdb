@@ -592,6 +592,112 @@ fn single_git_commit_for_transaction() {
 }
 
 #[test]
+fn multi_table_schema_prd_scenario() {
+    // PRD acceptance scenario: workspace/section/link multi-table schema
+    let repo = ZdbTestRepo::init();
+    repo.zdb()
+        .args(["query", "CREATE TABLE workspace (description TEXT)"])
+        .assert()
+        .success();
+    repo.zdb()
+        .args(["query", "CREATE TABLE section (name TEXT, workspace TEXT REFERENCES workspace(id))"])
+        .assert()
+        .success();
+    repo.zdb()
+        .args(["query", "CREATE TABLE link (url TEXT NOT NULL, title TEXT)"])
+        .assert()
+        .success();
+
+    // Insert workspace
+    let ws_out = repo
+        .zdb()
+        .args(["query", "INSERT INTO workspace (description) VALUES ('My Board')"])
+        .output()
+        .unwrap();
+    let ws_id = String::from_utf8_lossy(&ws_out.stdout).trim().to_string();
+    assert!(!ws_id.is_empty());
+
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    // Insert section referencing workspace
+    let sec_out = repo
+        .zdb()
+        .args([
+            "query",
+            &format!("INSERT INTO section (name, workspace) VALUES ('Dev', '{ws_id}')"),
+        ])
+        .output()
+        .unwrap();
+    let sec_id = String::from_utf8_lossy(&sec_out.stdout).trim().to_string();
+    assert!(!sec_id.is_empty());
+
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    // Insert link
+    let link_out = repo
+        .zdb()
+        .args(["query", "INSERT INTO link (url, title) VALUES ('https://example.com', 'Example')"])
+        .output()
+        .unwrap();
+    let link_id = String::from_utf8_lossy(&link_out.stdout).trim().to_string();
+    assert!(!link_id.is_empty());
+
+    // Typed list query
+    repo.zdb()
+        .args(["query", "SELECT description FROM workspace"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("My Board"));
+
+    // Cross-table join
+    repo.zdb()
+        .args([
+            "query",
+            "SELECT s.name, w.description FROM section s JOIN workspace w ON s.workspace = w.id",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Dev"))
+        .stdout(predicate::str::contains("My Board"));
+
+    // Transaction: update workspace + insert another link atomically
+    repo.zdb()
+        .args([
+            "query",
+            &format!(
+                "BEGIN; UPDATE workspace SET description = 'Updated Board' WHERE id = '{ws_id}'; INSERT INTO link (url, title) VALUES ('https://rust-lang.org', 'Rust'); COMMIT"
+            ),
+        ])
+        .assert()
+        .success();
+
+    // Verify both changes persisted
+    repo.zdb()
+        .args(["query", "SELECT description FROM workspace"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Updated Board"));
+
+    repo.zdb()
+        .args(["query", "SELECT COUNT(*) FROM link"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("2"));
+
+    // Verify on-disk: workspace zettel has the FK backlink
+    let sec_content = repo
+        .zdb()
+        .args(["read", &sec_id])
+        .output()
+        .unwrap();
+    let sec_str = String::from_utf8_lossy(&sec_content.stdout);
+    assert!(
+        sec_str.contains(&ws_id),
+        "section should reference workspace ID on disk"
+    );
+}
+
+#[test]
 fn multi_row_insert() {
     let repo = ZdbTestRepo::init();
     repo.zdb()

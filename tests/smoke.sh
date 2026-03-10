@@ -582,4 +582,23 @@ echo "$MULTI_IDS" | grep -qE "^[0-9]{14},[0-9]{14},[0-9]{14}$"
 $ZDB query "SELECT COUNT(*) FROM multirow" | grep -q "3"
 pass "multi-row insert"
 
+# 35. transaction commit + rollback
+cd "$TMPDIR"
+$ZDB query "CREATE TABLE txntest (val TEXT)" | grep -q "table txntest created"
+$ZDB query "BEGIN; INSERT INTO txntest (val) VALUES ('committed'); COMMIT" | grep -q "COMMIT"
+$ZDB query "SELECT val FROM txntest" | grep -q "committed"
+$ZDB query "BEGIN; INSERT INTO txntest (val) VALUES ('rolled-back'); ROLLBACK" | grep -q "ROLLBACK"
+# rolled-back row should not appear
+TXNCOUNT=$($ZDB query "SELECT COUNT(*) FROM txntest")
+echo "$TXNCOUNT" | grep -q "1"
+pass "transaction commit + rollback"
+
+# 36. hyphenated type SQL via quoted identifiers
+cd "$TMPDIR"
+$ZDB query 'CREATE TABLE "my-type" (label TEXT)' | grep -q "table my-type created"
+MY_ID=$($ZDB query 'INSERT INTO "my-type" (label) VALUES ('\''test'\'')')
+$ZDB query 'SELECT label FROM "my-type"' | grep -q "test"
+$ZDB query "DELETE FROM \"my-type\" WHERE id = '$MY_ID'" | grep -q "1 row(s) affected"
+pass "hyphenated type SQL"
+
 echo "=== all passed ==="

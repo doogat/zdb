@@ -692,6 +692,29 @@ $count = zdb query "SELECT COUNT(*) FROM multirow"
 if ($count -notmatch "3") { throw "expected 3 rows, got: $count" }
 pass "multi-row insert"
 
+# 35. transaction commit + rollback
+Push-Location $TMPDIR
+zdb query "CREATE TABLE txntest (val TEXT)" | Out-Null
+$txnOut = zdb query "BEGIN; INSERT INTO txntest (val) VALUES ('committed'); COMMIT"
+if ($txnOut -notmatch "COMMIT") { throw "transaction commit failed: $txnOut" }
+$txnSel = zdb query "SELECT val FROM txntest"
+if ($txnSel -notmatch "committed") { throw "committed row missing" }
+$rbOut = zdb query "BEGIN; INSERT INTO txntest (val) VALUES ('rolled-back'); ROLLBACK"
+if ($rbOut -notmatch "ROLLBACK") { throw "rollback failed: $rbOut" }
+$txnCount = zdb query "SELECT COUNT(*) FROM txntest"
+if ($txnCount -notmatch "1") { throw "expected 1 row after rollback, got: $txnCount" }
+pass "transaction commit + rollback"
+
+# 36. hyphenated type SQL via quoted identifiers
+Push-Location $TMPDIR
+zdb query 'CREATE TABLE "my-type" (label TEXT)' | Out-Null
+$MY_ID = zdb query "INSERT INTO `"my-type`" (label) VALUES ('test')"
+$hSel = zdb query "SELECT label FROM `"my-type`""
+if ($hSel -notmatch "test") { throw "hyphenated select failed" }
+$hDel = zdb query "DELETE FROM `"my-type`" WHERE id = '$MY_ID'"
+if ($hDel -notmatch "1 row") { throw "hyphenated delete failed: $hDel" }
+pass "hyphenated type SQL"
+
 # Clean up location stack
 while ($true) {
     try { Pop-Location } catch { break }
