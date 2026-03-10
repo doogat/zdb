@@ -2,9 +2,29 @@
 
 ## Exit Summary
 
-> **Status**: _pending audit_
+> **Status**: go (with accepted deferrals)
 
-_To be filled after inventory is complete._
+**Tally**: 16 done, 2 partial, 1 not started, 3 deferred
+
+### Blockers
+
+- **NFR-03 (sync time)**: 12.6s at 5K vs 2s target. 6x over. Needs profiling of `SyncManager::sync` hot path before Phase 3 can claim sync readiness. Accepted as known debt — sync optimization is a Phase 3 concern.
+
+### Accepted deferrals
+
+- **Sparse index**: dropped — ZDB indexes all zettels, sparse checkout adds no value
+- **fsmonitor**: not supported in libgit2/gitoxide, deferred to Phase 3+
+- **Background maintenance**: Phase 3+ candidate, existing `compact` covers manual gc
+
+### Partial items
+
+- **FR-33 (delta export)**: implemented and smoke-tested. Unit tests now cover known_heads logic. FFI delta export deferred until mobile needs it
+- **FR-64a (pre-compaction backup)**: not started. Bundle export exists standalone but is not wired into compact pipeline. Backlog candidate
+- **meeting-minutes type**: implemented with unit + e2e test. Previously had no e2e coverage, now added
+
+### Recommendation
+
+Phase 2 is complete for practical purposes. Core functionality (bundles, REST, NoSQL, compaction, types, multi-device) is implemented and tested. The three deferred items (sparse index, fsmonitor, background maintenance) were formally evaluated and documented as not applicable or Phase 3+ candidates. NFR-03 is the only measurable miss — accept as known debt and track as Phase 3 optimization work.
 
 ## Checklist
 
@@ -79,4 +99,10 @@ _Items that diverge from the initial spec. Each entry: what changed, why, replac
 
 ## Phase 3 Entry Criteria
 
-_To be defined after audit is complete._
+Phase 3 work may begin when all of these hold:
+
+1. This exit checklist is reviewed and accepted
+2. FR-64a (pre-compaction backup) is either implemented or formally deferred with a backlog item
+3. NFR-03 sync regression is tracked as a concrete backlog item with profiling data
+4. All `cargo test` and `cargo clippy --workspace` pass on master
+5. No Phase 2 items remain marked "not started" without an explicit deferral rationale
