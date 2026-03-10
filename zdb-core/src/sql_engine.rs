@@ -449,16 +449,15 @@ impl<'a> SqlEngine<'a> {
         // Extract column names from INSERT
         let col_names: Vec<String> = ins.columns.iter().map(|c| c.value.to_lowercase()).collect();
 
-        // Extract values from first row
-        let values = match ins.source.as_ref() {
+        // Extract all row value sets
+        let rows = match ins.source.as_ref() {
             Some(query) => match query.body.as_ref() {
                 SetExpr::Values(v) => {
-                    if v.rows.len() != 1 {
-                        return Err(ZettelError::SqlEngine(
-                            "only single-row INSERT supported".into(),
-                        ));
+                    let mut rows = Vec::with_capacity(v.rows.len());
+                    for row in &v.rows {
+                        rows.push(extract_values(row)?);
                     }
-                    extract_values(&v.rows[0])?
+                    rows
                 }
                 _ => {
                     return Err(ZettelError::SqlEngine(
@@ -469,95 +468,112 @@ impl<'a> SqlEngine<'a> {
             None => return Err(ZettelError::SqlEngine("missing VALUES clause".into())),
         };
 
-        if col_names.len() != values.len() {
-            return Err(ZettelError::SqlEngine(
-                "column count doesn't match value count".into(),
-            ));
-        }
+        // Generate all IDs upfront
+        let ids = self.unique_ids(rows.len())?;
 
-        // Build column->value map
-        let mut col_values: BTreeMap<String, String> = BTreeMap::new();
-        for (name, val) in col_names.iter().zip(values.iter()) {
-            col_values.insert(name.clone(), val.clone());
-        }
+        let mut created_ids = Vec::with_capacity(rows.len());
+        let mut files: Vec<(String, String)> = Vec::with_capacity(rows.len());
 
-        // Fill default values for omitted columns
-        for col_def in &schema.columns {
-            if !col_values.contains_key(&col_def.name) {
-                if let Some(ref default) = col_def.default_value {
-                    col_values.insert(col_def.name.clone(), default.clone());
-                }
+        for (row_values, id) in rows.iter().zip(ids.into_iter()) {
+            if col_names.len() != row_values.len() {
+                return Err(ZettelError::SqlEngine(
+                    "column count doesn't match value count".into(),
+                ));
             }
-        }
 
-        // Validate allowed_values constraints
-        for col_def in &schema.columns {
-            if let Some(ref allowed) = col_def.allowed_values {
-                if let Some(val) = col_values.get(&col_def.name) {
-                    if !val.is_empty() && !allowed.contains(val) {
-                        return Err(ZettelError::Validation(format!(
-                            "column '{}': value '{}' not in allowed values {:?}",
-                            col_def.name, val, allowed
-                        )));
+            // Build column->value map
+            let mut col_values: BTreeMap<String, String> = BTreeMap::new();
+            for (name, val) in col_names.iter().zip(row_values.iter()) {
+                col_values.insert(name.clone(), val.clone());
+            }
+
+            // Fill default values for omitted columns
+            for col_def in &schema.columns {
+                if !col_values.contains_key(&col_def.name) {
+                    if let Some(ref default) = col_def.default_value {
+                        col_values.insert(col_def.name.clone(), default.clone());
                     }
                 }
             }
-        }
 
-        // Validate FK references
-        for col_def in &schema.columns {
-            if let Some(ref _ref_table) = col_def.references {
-                if let Some(ref_id) = col_values.get(&col_def.name) {
-                    if !ref_id.is_empty() {
-                        let exists: bool = self
-                            .index
-                            .conn
-                            .query_row(
-                                "SELECT COUNT(*) > 0 FROM zettels WHERE id = ?1",
-                                params![ref_id],
-                                |row| row.get(0),
-                            )
-                            .unwrap_or(false);
-                        if !exists {
-                            return Err(ZettelError::SqlEngine(format!(
-                                "referenced zettel not found: {}",
-                                ref_id
+            // Validate allowed_values constraints
+            for col_def in &schema.columns {
+                if let Some(ref allowed) = col_def.allowed_values {
+                    if let Some(val) = col_values.get(&col_def.name) {
+                        if !val.is_empty() && !allowed.contains(val) {
+                            return Err(ZettelError::Validation(format!(
+                                "column '{}': value '{}' not in allowed values {:?}",
+                                col_def.name, val, allowed
                             )));
                         }
                     }
                 }
             }
+
+            // Validate FK references
+            for col_def in &schema.columns {
+                if let Some(ref _ref_table) = col_def.references {
+                    if let Some(ref_id) = col_values.get(&col_def.name) {
+                        if !ref_id.is_empty() {
+                            let exists: bool = self
+                                .index
+                                .conn
+                                .query_row(
+                                    "SELECT COUNT(*) > 0 FROM zettels WHERE id = ?1",
+                                    params![ref_id],
+                                    |row| row.get(0),
+                                )
+                                .unwrap_or(false);
+                            if !exists {
+                                return Err(ZettelError::SqlEngine(format!(
+                                    "referenced zettel not found: {}",
+                                    ref_id
+                                )));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Build zettel
+            let zettel = build_data_zettel(&id, &schema, &col_values);
+            let content = parser::serialize(&zettel);
+            let path = if table_name == "zettels" {
+                format!("zettelkasten/{}.md", id.0)
+            } else {
+                format!("zettelkasten/{}/{}.md", table_name, id.0)
+            };
+
+            // Index the zettel
+            let parsed = parser::parse(&content, &path)?;
+            self.index.index_zettel(&parsed)?;
+
+            // Insert into materialized table
+            self.insert_materialized_row(&schema, &id.0, &col_values)?;
+
+            if let Some(ref mut buf) = self.txn {
+                buf.writes.push(PendingWrite {
+                    path,
+                    content,
+                });
+            } else {
+                files.push((path, content));
+            }
+
+            created_ids.push(id.0.clone());
         }
 
-        // Generate ID and build zettel
-        let id = self.unique_id()?;
-        let zettel = build_data_zettel(&id, &schema, &col_values);
-        let content = parser::serialize(&zettel);
-        let path = if table_name == "zettels" {
-            format!("zettelkasten/{}.md", id.0)
-        } else {
-            format!("zettelkasten/{}/{}.md", table_name, id.0)
-        };
-
-        // Commit to Git (or buffer if in transaction)
-        if let Some(ref mut buf) = self.txn {
-            buf.writes.push(PendingWrite {
-                path: path.clone(),
-                content: content.clone(),
-            });
-        } else {
-            self.repo
-                .commit_file(&path, &content, &format!("insert into {table_name}"))?;
+        // Commit all files in a single git commit (when not in transaction)
+        if self.txn.is_none() && !files.is_empty() {
+            let file_refs: Vec<(&str, &str)> =
+                files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+            self.repo.commit_files(
+                &file_refs,
+                &format!("insert {} row(s) into {table_name}", created_ids.len()),
+            )?;
         }
 
-        // Index the zettel
-        let parsed = parser::parse(&content, &path)?;
-        self.index.index_zettel(&parsed)?;
-
-        // Insert into materialized table
-        self.insert_materialized_row(&schema, &id.0, &col_values)?;
-
-        Ok(SqlResult::Ok(id.0.clone()))
+        Ok(SqlResult::Ok(created_ids.join(",")))
     }
 
     fn handle_update(
