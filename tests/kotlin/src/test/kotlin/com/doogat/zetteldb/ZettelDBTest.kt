@@ -101,6 +101,61 @@ class ZettelDBTest {
     }
 
     @Test
+    fun testExecuteSqlReturnsStructuredResult() {
+        driver.reindex()
+
+        // DDL returns message
+        val ddl = driver.executeSql("CREATE TABLE widget (name TEXT, score INTEGER)")
+        assertTrue(ddl.message.isNotEmpty(), "DDL should return a message")
+
+        // INSERT returns created ID in message
+        val ins = driver.executeSql("INSERT INTO widget (name, score) VALUES ('alpha', 42)")
+        assertTrue(ins.message.isNotEmpty(), "INSERT should return created ID")
+
+        // SELECT returns columns and rows
+        val sel = driver.executeSql("SELECT name, score FROM widget")
+        assertTrue(sel.columns.contains("name"))
+        assertTrue(sel.columns.contains("score"))
+        assertEquals(1, sel.rows.size)
+        assertEquals("alpha", sel.rows[0][0])
+        assertEquals("42", sel.rows[0][1])
+    }
+
+    @Test
+    fun testTransactionCommitAndRollback() {
+        driver.reindex()
+        driver.executeSql("CREATE TABLE txtest (val TEXT)")
+
+        // Commit path
+        driver.beginTransaction()
+        driver.executeSql("INSERT INTO txtest (val) VALUES ('committed')")
+        driver.commitTransaction()
+        val afterCommit = driver.executeSql("SELECT val FROM txtest")
+        assertEquals(1, afterCommit.rows.size)
+        assertEquals("committed", afterCommit.rows[0][0])
+
+        // Rollback path
+        driver.beginTransaction()
+        driver.executeSql("INSERT INTO txtest (val) VALUES ('rolled-back')")
+        driver.rollbackTransaction()
+        val afterRollback = driver.executeSql("SELECT COUNT(*) FROM txtest")
+        assertEquals("1", afterRollback.rows[0][0], "rolled back insert should not appear")
+    }
+
+    @Test
+    fun testListTypeSchemas() {
+        driver.reindex()
+        driver.executeSql("CREATE TABLE contact (name TEXT, email TEXT)")
+
+        val schemas = driver.listTypeSchemas()
+        assertEquals(1, schemas.size)
+        assertEquals("contact", schemas[0].tableName)
+        val colNames = schemas[0].columns.map { it.name }
+        assertTrue(colNames.contains("name"))
+        assertTrue(colNames.contains("email"))
+    }
+
+    @Test
     fun testBundleExportImport() {
         // Register a sync node via FFI
         driver.registerNode("test-source")
