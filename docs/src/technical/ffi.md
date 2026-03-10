@@ -47,7 +47,7 @@ ZettelDriver::create_repo(repo_path: String) -> Result<Self, ZdbError>
 | `search(query)` | `search_paginated(query, MAX, 0)`, returns hits only |
 | `search_paginated(query, limit, offset)` | `index.search_paginated` (FTS5 with LIMIT/OFFSET) |
 | `list_zettels()` | `repo.list_zettels` |
-| `execute_sql(sql)` | `index.execute_sql` (returns affected rows as string) |
+| `execute_sql(sql)` | See [SQL (SqlEngine-backed)](#sql-sqlengine-backed) |
 
 ### Attachments
 
@@ -58,6 +58,33 @@ ZettelDriver::create_repo(repo_path: String) -> Result<Self, ZdbError>
 | `list_attachments(zettel_id)` | `attachments::list_attachments` |
 
 `attach_file` reads the file from disk, detects MIME type from the filename extension, stores the blob under `reference/{id}/`, updates frontmatter, and returns `AttachmentInfo`. Both repo and index locks are held for the duration.
+
+### SQL (SqlEngine-backed)
+
+| Method | Behavior |
+|--------|----------|
+| `execute_sql(sql)` | Delegates to `SqlEngine::execute` — same path as `zdb serve`. DDL creates typedef zettels via Git; DML reads/writes Git-backed zettels; SELECT returns rows. |
+| `begin_transaction()` | Opens a SAVEPOINT; subsequent `execute_sql` calls buffer writes |
+| `commit_transaction()` | Flushes buffered writes/deletes as a single Git commit, releases SAVEPOINT |
+| `rollback_transaction()` | Discards buffered writes, rolls back SAVEPOINT |
+
+Returns `SqlResultRecord`:
+- **Queries** (SELECT): `columns` and `rows` populated, `affected_rows` = row count
+- **Mutations** (UPDATE/DELETE): `affected_rows` populated
+- **DDL** (CREATE/DROP TABLE): `message` populated (e.g. "table foo created")
+- **INSERT**: `message` contains comma-separated created zettel IDs
+
+### Type Discovery
+
+| Method | Returns |
+|--------|---------|
+| `list_type_schemas()` | `Vec<TypeSchemaRecord>` — all typedef zettels with columns, CRDT strategy, template sections |
+
+`TypeSchemaRecord` contains:
+- `table_name` — the type name
+- `columns: Vec<ColumnDefRecord>` — each with `name`, `data_type`, optional `references`, `required` flag
+- `crdt_strategy` — optional CRDT merge strategy
+- `template_sections` — section names from the typedef template
 
 ### Maintenance
 
@@ -86,6 +113,9 @@ ZettelDriver::create_repo(repo_path: String) -> Result<Self, ZdbError>
 - `PaginatedSearchResult` — `{ hits: Vec<SearchResult>, total_count: u64 }`
 - `RebuildReport` — `{ indexed, tables_materialized, types_inferred }` (subset of `types::RebuildReport`, omits warnings)
 - `AttachmentInfo` — `{ name, mime, size }` (mirrors `types::AttachmentInfo`)
+- `SqlResultRecord` — `{ columns, rows, affected_rows, message }` (flat conversion from `SqlResult` enum)
+- `TypeSchemaRecord` — `{ table_name, columns, crdt_strategy, template_sections }`
+- `ColumnDefRecord` — `{ name, data_type, references, required }`
 
 ## Binding Generation
 
@@ -117,8 +147,11 @@ Output files:
 `ZettelDriver` fields are wrapped in `Mutex`:
 - `repo: Mutex<GitRepo>` — serializes all git operations
 - `index: Mutex<Index>` — serializes all SQLite operations
+- `txn: Mutex<Option<TransactionBuffer>>` — holds buffered writes/deletes during an active transaction
 
-Methods that need both locks acquire them sequentially and drop the first before acquiring the second where possible (e.g. `read_zettel` resolves path via index, drops index lock, then reads via repo).
+When multiple locks are needed, the canonical acquisition order is **index → repo → txn**. Methods that only need one lock at a time (e.g. `read_zettel`) may drop and reacquire in any order.
+
+During a transaction, `execute_sql` injects the stored `TransactionBuffer` into a fresh `SqlEngine`, executes, then extracts the buffer back. The SAVEPOINT lives on `Index.conn` and persists across calls. This avoids self-referential lifetime issues while maintaining SqlEngine's transaction semantics.
 
 ## On-Device Verification
 
