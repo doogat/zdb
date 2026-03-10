@@ -67,7 +67,15 @@ _Items that diverge from the initial spec. Each entry: what changed, why, replac
 
 | Req/Item | Deviation | Rationale | Replacement |
 |----------|-----------|-----------|-------------|
-| | | | |
+| FR-33 | Delta export implemented but test coverage is smoke-only; FFI exposes full export only | Delta path works but known_heads logic has no unit test. Mobile use case only needs full export for now | Add unit test for delta logic. FFI delta export deferred until mobile clients need node-targeted sync |
+| FR-64a | Pre-compaction bundle backup not wired into compact pipeline | Bundle export exists standalone (`zdb bundle export --full`) but spec requires automatic backup before compaction | Wire `export_full_bundle` into `compact()` or add `--backup` flag to CLI. Backlog candidate |
+| NFR-03 | Sync time 12.6s at 5K vs 2s target (6x over) | Git fetch+merge dominates. Optimization not yet attempted | Profile `SyncManager::sync` hot path. Likely needs shallow fetch or incremental approach. Tracked as blocker |
+| NFR-01 (50K) | Benchmarks exist but results not measured/recorded | 50K threshold tests are `#[ignore]`. Need dedicated run on representative hardware | Run `large_scale.rs` benchmarks, record in `performance.md` |
+| NFR-02 (50K) | No 50K growth benchmark | Only 5K measured. Linear extrapolation suggests ~8.7 MB/yr with compaction | Add `growth_50k` benchmark or document extrapolation as sufficient |
+| Sparse index | Dropped entirely | ZDB indexes all zettels — sparse checkout adds no value when full index is required | No replacement needed; architecture eliminates the use case |
+| fsmonitor | Deferred to Phase 3+ | Not supported in libgit2 or gitoxide; requires external watchman daemon | Phase 3 candidate when gitoxide adds support or ZDB migrates git backend |
+| Background maintenance | Deferred to Phase 3+ | Requires shelling out to `git maintenance start`; existing `compact` command covers manual gc | Phase 3 candidate. Low effort, high value for repos >10K zettels |
+| meeting-minutes | Implemented but weak test coverage | Unit test only; no e2e or smoke test exercises install+use | Add e2e test for meeting-minutes type install |
 
 ## Phase 3 Entry Criteria
 
