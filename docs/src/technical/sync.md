@@ -102,27 +102,33 @@ pub struct Hlc {
 
 ## Compaction
 
-**Source**: `zdb-core/src/compaction.rs` (123 lines)
+**Source**: `zdb-core/src/compaction.rs`
 
-Cleans up temporary CRDT files and runs Git garbage collection.
+Cleans up temporary CRDT files, merges per-zettel CRDT docs, and runs Git garbage collection. Reports before/after storage measurements.
 
 ### Shared Head Calculation
 
 `shared_head(repo, nodes) -> Result<Option<Oid>>`
 
-Finds the greatest common ancestor (GCA) commit across all nodes' `known_heads`:
+Finds the greatest common ancestor (GCA) commit across all **active** nodes' `known_heads`. Stale and retired nodes are excluded — this allows compaction to proceed even when some devices are offline.
 
-1. Collect the first `known_head` from each node
+1. Collect the first `known_head` from each active node
 2. If only one node, return its head directly
 3. Iteratively compute `merge_base()` across all heads
 
-The shared head represents the latest commit that all devices have synced. Anything before it is safe to compact.
+The shared head represents the latest commit that all active devices have synced. Anything before it is safe to compact.
 
 ### CRDT Temp Cleanup
 
-`cleanup_crdt_temp(repo_path, shared_head) -> Result<usize>`
+`cleanup_crdt_temp(repo, shared_head) -> Result<usize>`
 
-Removes all files in `.crdt/temp/` (except `.gitkeep`). In the MVP, this is a simple cleanup — history-aware compaction is deferred.
+Removes files in `.crdt/temp/` whose commit OID is an ancestor of the shared head (i.e., all devices have already applied those changes). Preserves `.gitkeep` and files newer than the shared head.
+
+### CRDT Doc Compaction
+
+`compact_crdt_docs(repo) -> Result<usize>`
+
+Groups remaining CRDT temp files by `(zettel_id, is_frontmatter)` and merges multiple Automerge documents per group into a single compacted doc. Body and frontmatter are compacted independently.
 
 ### Git GC
 
@@ -132,13 +138,33 @@ Runs `git gc` (not `--aggressive`) for pack consolidation and object deduplicati
 
 ### Full Pipeline
 
-`compact(repo, sync_mgr) -> Result<CompactionReport>`
+`compact(repo, sync_mgr, force) -> Result<CompactionReport>`
 
-1. List all registered nodes
-2. Compute shared head
-3. Clean up CRDT temp files
-4. Run `git gc`
-5. Return `CompactionReport { files_removed, gc_success }`
+1. **Threshold check**: skip if `.crdt/temp/` < `threshold_mb` (unless `force`)
+2. Measure `.crdt/temp/` size and file count (before)
+3. Measure `.git/` directory size (before)
+4. Compute shared head from active nodes
+5. Clean up CRDT temp files older than shared head
+6. Compact CRDT docs per zettel
+7. Measure `.crdt/temp/` size and file count (after)
+8. Run `git gc`
+9. Measure `.git/` directory size (after)
+
+### CompactionReport
+
+```rust
+pub struct CompactionReport {
+    pub files_removed: usize,        // temp files deleted in step 5
+    pub crdt_docs_compacted: usize,  // zettels merged in step 6
+    pub gc_success: bool,            // git gc exit status
+    pub crdt_temp_bytes_before: u64, // .crdt/temp/ bytes before cleanup
+    pub crdt_temp_bytes_after: u64,  // .crdt/temp/ bytes after compaction
+    pub crdt_temp_files_before: usize,
+    pub crdt_temp_files_after: usize,
+    pub repo_bytes_before: u64,      // .git/ bytes before gc
+    pub repo_bytes_after: u64,       // .git/ bytes after gc
+}
+```
 
 ## Test Coverage
 

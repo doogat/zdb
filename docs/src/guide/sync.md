@@ -129,11 +129,26 @@ This:
 2. Removes temporary CRDT files
 3. Runs `git gc` for pack consolidation
 
-Output:
+Use `--force` to bypass the size threshold, or `--dry-run` to preview without changes.
+
+### Reading the compaction report
 
 ```text
-files removed: 0 | gc: ok
+files removed: 12 | crdt compacted: 3 | gc: ok
+crdt temp: 1.2 MB → 0.3 MB (47 files → 12)
+repo (.git): 8.4 MB → 6.1 MB
 ```
+
+| Field | Meaning |
+|-------|---------|
+| files removed | CRDT temp files older than the shared head, safely deleted |
+| crdt compacted | Zettels whose multiple CRDT docs were merged into one |
+| gc | Whether `git gc` succeeded |
+| crdt temp | Total size and file count of `.crdt/temp/` before and after cleanup |
+| repo (.git) | Git directory size before and after `git gc` |
+
+If **crdt temp** shows no reduction, all devices are already caught up — nothing to clean.
+If **repo (.git)** shows little change, Git's pack files are already efficient.
 
 ## Checking Status
 
