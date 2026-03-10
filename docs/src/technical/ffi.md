@@ -22,13 +22,14 @@ ZettelDriver (ffi.rs)       ← UniFFI proc-macro boundary
 
 ## Interface
 
-### Constructor
+### Constructors
 
 ```rust
 ZettelDriver::new(repo_path: String) -> Result<Self, ZdbError>
+ZettelDriver::init(repo_path: String) -> Result<Self, ZdbError>
 ```
 
-Opens an existing ZettelDB repo at `repo_path`. Opens the Git repo and SQLite index at `.zdb/index.db`.
+`new` opens an existing ZettelDB repo. `init` creates a new repo (directories, `.gitignore`, initial commit) then opens it. Both set up the SQLite index at `.zdb/index.db`.
 
 ### CRUD
 
@@ -63,6 +64,7 @@ Opens an existing ZettelDB repo at `repo_path`. Opens the Git repo and SQLite in
 | Method | Delegates to |
 |--------|-------------|
 | `reindex()` | `index.rebuild` |
+| `register_node(name)` | `sync_manager::register_node`, returns UUID |
 | `compact()` | `SyncManager::open` → `compaction::compact` |
 
 ## Error Mapping
