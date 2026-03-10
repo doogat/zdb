@@ -37,6 +37,7 @@ Column types: `TEXT`, `INTEGER`, `REAL`, `BOOLEAN`. Foreign keys via `REFERENCES
 | Statement | Effect |
 |-----------|--------|
 | `INSERT INTO foo (name, count) VALUES ('Widget', 42)` | Creates a data zettel with `type: foo` |
+| `INSERT INTO foo (name) VALUES ('A'), ('B'), ('C')` | Creates N zettels in a single git commit; returns comma-separated IDs |
 | `SELECT name, count FROM foo` | Queries the materialized table |
 | `SELECT ... WHERE id = '...'` | Filters by zettel ID |
 | `UPDATE foo SET count = 43 WHERE id = '...'` | Modifies the zettel and materialized row |
@@ -45,6 +46,15 @@ Column types: `TEXT`, `INTEGER`, `REAL`, `BOOLEAN`. Foreign keys via `REFERENCES
 | `DELETE FROM foo WHERE id = '...'` | Removes the zettel and materialized row |
 | `DELETE FROM foo WHERE status = 'done'` | Bulk delete — resolves matching IDs via SQLite |
 | `DELETE FROM foo` | Deletes all rows |
+
+## Multi-Row INSERT
+
+`INSERT INTO t (cols) VALUES (...), (...), (...)` creates N zettels in a single git commit.
+
+- **ID generation**: `unique_ids(count)` generates a base timestamp via `generate_unique_id`, then increments by 1 second per subsequent row — no sleeping between rows
+- **Single commit**: all N files staged and committed together via `commit_files`
+- **Return value**: comma-separated list of ZettelIds (e.g. `20260310120000,20260310120001,20260310120002`)
+- **Transaction-aware**: within a `BEGIN`/`COMMIT` block, writes are buffered as usual
 
 ## Zone Mapping
 
@@ -177,4 +187,4 @@ These SQL features are explicitly rejected with descriptive error messages. They
 
 ## Test Coverage
 
-46+ unit tests covering CREATE TABLE, INSERT, SELECT, UPDATE, DELETE, FK validation, zone mapping, duplicate rejection, reserved name rejection, ALTER TABLE (ADD/DROP/RENAME COLUMN), DROP TABLE (CASCADE, IF EXISTS), bulk UPDATE, bulk DELETE, 8 transaction tests, and 9 rejection tests for unsupported SQL features. 8 E2E tests in `tests/e2e/sql_lifecycle.rs`.
+48+ unit tests covering CREATE TABLE, INSERT (single and multi-row), SELECT, UPDATE, DELETE, FK validation, zone mapping, duplicate rejection, reserved name rejection, ALTER TABLE (ADD/DROP/RENAME COLUMN), DROP TABLE (CASCADE, IF EXISTS), bulk UPDATE, bulk DELETE, 8 transaction tests, and 9 rejection tests for unsupported SQL features. 9 E2E tests in `tests/e2e/sql_lifecycle.rs`.
