@@ -4,38 +4,23 @@ import Foundation
 
 final class ZettelDBTests: XCTestCase {
     private var tmpDir: URL!
-
-    /// Path to the zdb binary built from this workspace.
-    private static let zdbBinary: String = {
-        // #filePath = .../tests/swift/Tests/ZettelDBTests/ZettelDBTests.swift
-        let root = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // ZettelDBTests/
-            .deletingLastPathComponent()  // Tests/
-            .deletingLastPathComponent()  // swift/
-            .deletingLastPathComponent()  // tests/
-            .deletingLastPathComponent()  // (workspace root)
-        return root.appendingPathComponent("target/debug/zdb").path
-    }()
+    private var driver: ZettelDriver!
 
     override func setUp() {
         super.setUp()
         tmpDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("zdb-test-\(UUID().uuidString)")
         try! FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-
-        // Use zdb CLI to init the repo (creates dirs, version file, initial commit)
-        zdb(["init", tmpDir.path], in: tmpDir)
+        driver = try! ZettelDriver.init(repoPath: tmpDir.path)
     }
 
     override func tearDown() {
+        driver = nil
         try? FileManager.default.removeItem(at: tmpDir)
         super.tearDown()
     }
 
     func testCreateAndReadZettel() throws {
-        let driver = try ZettelDriver(repoPath: tmpDir.path)
-
-        // Create, then reindex to ensure the index is populated from git
         let content = """
         ---
         title: Test Note
@@ -53,8 +38,6 @@ final class ZettelDBTests: XCTestCase {
     }
 
     func testSearch() throws {
-        let driver = try ZettelDriver(repoPath: tmpDir.path)
-
         let content = """
         ---
         title: Searchable Note
@@ -70,8 +53,6 @@ final class ZettelDBTests: XCTestCase {
     }
 
     func testListZettels() throws {
-        let driver = try ZettelDriver(repoPath: tmpDir.path)
-
         let content = """
         ---
         title: Listed Note
@@ -85,24 +66,15 @@ final class ZettelDBTests: XCTestCase {
                        "listZettels should include created zettel")
     }
 
-    /// Run a zdb CLI command in a given directory.
-    private func zdb(_ args: [String], in dir: URL) {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: Self.zdbBinary)
-        process.arguments = args
-        process.currentDirectoryURL = dir
-        process.standardOutput = FileHandle.nullDevice
-        process.standardError = FileHandle.nullDevice
-        try! process.run()
-        process.waitUntilExit()
-        XCTAssertEqual(process.terminationStatus, 0,
-                       "zdb \(args.joined(separator: " ")) failed")
-    }
-
     func testPerformanceMetrics() throws {
-        // Cold start: measure ZettelDriver init time
+        // Cold start: measure ZettelDriver init on a fresh repo
+        let freshDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zdb-perf-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: freshDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: freshDir) }
+
         let initStart = ContinuousClock.now
-        let driver = try ZettelDriver(repoPath: tmpDir.path)
+        let perfDriver = try ZettelDriver.init(repoPath: freshDir.path)
         let initDuration = ContinuousClock.now - initStart
         let initMs = Double(initDuration.components.attoseconds) / 1e15 +
                      Double(initDuration.components.seconds) * 1000
@@ -110,7 +82,7 @@ final class ZettelDBTests: XCTestCase {
 
         // Single zettel create latency
         let createStart = ContinuousClock.now
-        let _ = try driver.createZettel(
+        let _ = try perfDriver.createZettel(
             content: "---\ntitle: Perf Test\n---\nBody.",
             message: "perf create"
         )
@@ -121,16 +93,16 @@ final class ZettelDBTests: XCTestCase {
 
         // Populate ~100 zettels for search benchmark
         for i in 1...99 {
-            let _ = try driver.createZettel(
+            let _ = try perfDriver.createZettel(
                 content: "---\ntitle: Bulk Note \(i)\n---\nContent number \(i).",
                 message: "bulk \(i)"
             )
         }
-        try _ = driver.reindex()
+        try _ = perfDriver.reindex()
 
         // Search latency with ~100 zettels
         let searchStart = ContinuousClock.now
-        let results = try driver.search(query: "Bulk Note")
+        let results = try perfDriver.search(query: "Bulk Note")
         let searchDuration = ContinuousClock.now - searchStart
         let searchMs = Double(searchDuration.components.attoseconds) / 1e15 +
                        Double(searchDuration.components.seconds) * 1000
@@ -139,7 +111,7 @@ final class ZettelDBTests: XCTestCase {
 
         // Reindex latency with ~100 zettels
         let reindexStart = ContinuousClock.now
-        try _ = driver.reindex()
+        try _ = perfDriver.reindex()
         let reindexDuration = ContinuousClock.now - reindexStart
         let reindexMs = Double(reindexDuration.components.attoseconds) / 1e15 +
                         Double(reindexDuration.components.seconds) * 1000
@@ -147,10 +119,8 @@ final class ZettelDBTests: XCTestCase {
     }
 
     func testBundleExportImport() throws {
-        // Register a sync node (required for bundle export)
-        zdb(["register-node", "test-source"], in: tmpDir)
-
-        let driver = try ZettelDriver(repoPath: tmpDir.path)
+        // Register a sync node via FFI
+        let _ = try driver.registerNode(name: "test-source")
 
         // Create some zettels in source repo
         let content1 = "---\ntitle: Bundle Note 1\n---\nFirst note."
@@ -164,16 +134,14 @@ final class ZettelDBTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: resultPath),
                        "bundle file should exist")
 
-        // Create a fresh repo and import
+        // Create a fresh repo and import via FFI
         let importDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("zdb-import-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: importDir, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: importDir) }
 
-        zdb(["init", importDir.path], in: importDir)
-        zdb(["register-node", "test-target"], in: importDir)
-
-        let importDriver = try ZettelDriver(repoPath: importDir.path)
+        let importDriver = try ZettelDriver.init(repoPath: importDir.path)
+        let _ = try importDriver.registerNode(name: "test-target")
         try importDriver.importBundle(bundlePath: resultPath)
         try _ = importDriver.reindex()
 

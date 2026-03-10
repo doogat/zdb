@@ -24,14 +24,10 @@ dev/bin/build-xcframework
 cp out/swift/zdb_core.swift tests/swift/Sources/ZettelDB/
 ```
 
-3. Build the `zdb` CLI (needed by test setUp):
-
-```bash
-cargo build -p zdb-cli
-```
-
 ## Run
 
 ```bash
 cd tests/swift && swift test
 ```
+
+Tests use `ZettelDriver.init()` and `registerNode()` directly (no CLI binary needed), making them compatible with iOS simulator targets.

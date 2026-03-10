@@ -202,7 +202,7 @@ Both scripts use the `vendored` feature to compile OpenSSL and libgit2 from sour
   - `testListZettels` — create zettel, verify it appears in listing
   - `testPerformanceMetrics` — cold start, create, search, reindex latency at 100 zettels
   - `testBundleExportImport` — export full bundle, import into fresh repo, verify round-trip
-- **Note**: Tests run on macOS (not iOS simulator) because `setUp` uses `Process()` for `zdb init`, which is unavailable on iOS. The static library and FFI bindings are verified on the macOS slice of the XCFramework.
+- **Note**: Tests use `ZettelDriver.init()` and `registerNode()` directly (no CLI binary needed), making them compatible with iOS simulator targets. Verified on macOS slice of the XCFramework.
 
 #### Kotlin on JVM (2026-03-09)
 
