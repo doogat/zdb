@@ -188,6 +188,160 @@ fn stale_node_resync_after_compaction() {
     );
 }
 
+// ── Test: stale node returns with edits to deleted zettel after compaction ──
+
+#[test]
+fn stale_node_edits_deleted_zettel_after_compaction() {
+    let setup = MultiNodeSetup::new(3);
+
+    // All nodes share a zettel
+    let id = MultiNodeSetup::create(&setup.nodes[0], "Will be deleted", "original body");
+    MultiNodeSetup::push(&setup.nodes[0]);
+    MultiNodeSetup::sync(&setup.nodes[1]);
+    MultiNodeSetup::sync(&setup.nodes[2]);
+
+    // Node2 goes offline. Node1 deletes the zettel.
+    MultiNodeSetup::delete(&setup.nodes[1], &id);
+    MultiNodeSetup::sync(&setup.nodes[1]);
+
+    // Compact on node0 to remove CRDT state
+    MultiNodeSetup::sync(&setup.nodes[0]);
+    ZdbTestRepo::zdb_at(&setup.nodes[0])
+        .args(["compact", "--force"])
+        .assert()
+        .success();
+    MultiNodeSetup::push(&setup.nodes[0]);
+
+    // Node2 comes back online with an edit to the deleted zettel
+    MultiNodeSetup::update(&setup.nodes[2], &id, "Edited while offline", "stale edit");
+    MultiNodeSetup::sync(&setup.nodes[2]);
+
+    // Full sync
+    for _ in 0..3 {
+        sync_round_robin(&setup);
+    }
+
+    // Edit should win over delete (resurrected)
+    for (i, node) in setup.nodes.iter().enumerate() {
+        let out = MultiNodeSetup::read(node, &id);
+        assert!(
+            out.contains("Edited while offline") || out.contains("stale edit"),
+            "node {i}: edit should win over delete after compaction, got: {out}"
+        );
+    }
+}
+
+// ── Test: stale node creates new zettels after compaction ────────
+
+#[test]
+fn stale_node_new_zettels_after_compaction() {
+    let setup = MultiNodeSetup::new(2);
+
+    // Initial sync
+    let id0 = MultiNodeSetup::create(&setup.nodes[0], "Before offline", "body0");
+    MultiNodeSetup::push(&setup.nodes[0]);
+    MultiNodeSetup::sync(&setup.nodes[1]);
+
+    // Node1 goes offline and creates new zettels
+    let offline_id = MultiNodeSetup::create(&setup.nodes[1], "Created offline", "offline body");
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    // Node0 makes many edits and compacts
+    for i in 0..5 {
+        MultiNodeSetup::update(
+            &setup.nodes[0],
+            &id0,
+            &format!("Edit {i}"),
+            &format!("body edit {i}"),
+        );
+    }
+    ZdbTestRepo::zdb_at(&setup.nodes[0])
+        .args(["compact", "--force"])
+        .assert()
+        .success();
+    MultiNodeSetup::push(&setup.nodes[0]);
+
+    // Node1 comes back and syncs
+    MultiNodeSetup::sync(&setup.nodes[1]);
+    MultiNodeSetup::push(&setup.nodes[1]);
+    MultiNodeSetup::sync(&setup.nodes[0]);
+
+    // Both nodes should see the offline-created zettel
+    let out0 = MultiNodeSetup::read(&setup.nodes[0], &offline_id);
+    assert!(
+        out0.contains("Created offline"),
+        "node0 missing stale node's zettel: {out0}"
+    );
+    let out1 = MultiNodeSetup::read(&setup.nodes[1], &offline_id);
+    assert!(
+        out1.contains("Created offline"),
+        "node1 should still have its own zettel: {out1}"
+    );
+}
+
+// ── Test: multiple stale nodes return sequentially after compaction ──
+
+#[test]
+fn multiple_stale_nodes_return_sequentially() {
+    let setup = MultiNodeSetup::new(3);
+
+    // All start synced
+    let id = MultiNodeSetup::create(&setup.nodes[0], "Shared", "original");
+    MultiNodeSetup::push(&setup.nodes[0]);
+    MultiNodeSetup::sync(&setup.nodes[1]);
+    MultiNodeSetup::sync(&setup.nodes[2]);
+
+    // Node1 and Node2 go offline. Node0 edits and compacts.
+    MultiNodeSetup::update(&setup.nodes[0], &id, "Node0 edit", "body from node0");
+    ZdbTestRepo::zdb_at(&setup.nodes[0])
+        .args(["compact", "--force"])
+        .assert()
+        .success();
+    MultiNodeSetup::push(&setup.nodes[0]);
+
+    // Node1 returns first with its own edit
+    MultiNodeSetup::update(&setup.nodes[1], &id, "Node1 edit", "body from node1");
+    MultiNodeSetup::sync(&setup.nodes[1]);
+    MultiNodeSetup::push(&setup.nodes[1]);
+
+    // Compact again after node1's return
+    MultiNodeSetup::sync(&setup.nodes[0]);
+    ZdbTestRepo::zdb_at(&setup.nodes[0])
+        .args(["compact", "--force"])
+        .assert()
+        .success();
+    MultiNodeSetup::push(&setup.nodes[0]);
+
+    // Node2 returns last with its own edit
+    MultiNodeSetup::update(&setup.nodes[2], &id, "Node2 edit", "body from node2");
+    MultiNodeSetup::sync(&setup.nodes[2]);
+
+    // Final convergence
+    for _ in 0..3 {
+        sync_round_robin(&setup);
+    }
+
+    // All nodes must converge to identical content
+    let content0 = MultiNodeSetup::read(&setup.nodes[0], &id);
+    let content1 = MultiNodeSetup::read(&setup.nodes[1], &id);
+    let content2 = MultiNodeSetup::read(&setup.nodes[2], &id);
+
+    assert_eq!(
+        content0, content1,
+        "node0 and node1 diverged after sequential stale returns"
+    );
+    assert_eq!(
+        content1, content2,
+        "node1 and node2 diverged after sequential stale returns"
+    );
+
+    // Should contain some edit content (not empty or corrupt)
+    assert!(
+        content0.contains("edit"),
+        "resolved content should contain an edit: {content0}"
+    );
+}
+
 // ── Test: HLC LWW picks later writer ─────────────────────────────
 
 #[test]
