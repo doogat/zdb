@@ -5,6 +5,7 @@ use crate::error::ZettelError;
 use crate::git_ops::GitRepo;
 use crate::indexer::Index;
 use crate::parser;
+use crate::sql_engine::TransactionBuffer;
 use crate::sync_manager::SyncManager;
 
 /// FFI error enum exposed to Swift/Kotlin via UniFFI.
@@ -123,11 +124,95 @@ impl From<crate::types::AttachmentInfo> for AttachmentInfo {
     }
 }
 
+/// FFI-safe column definition for type schema discovery.
+#[derive(uniffi::Record)]
+pub struct ColumnDefRecord {
+    pub name: String,
+    pub data_type: String,
+    pub references: Option<String>,
+    pub required: bool,
+}
+
+impl From<&crate::types::ColumnDef> for ColumnDefRecord {
+    fn from(c: &crate::types::ColumnDef) -> Self {
+        Self {
+            name: c.name.clone(),
+            data_type: c.data_type.clone(),
+            references: c.references.clone(),
+            required: c.required,
+        }
+    }
+}
+
+/// FFI-safe type schema for typedef discovery.
+#[derive(uniffi::Record)]
+pub struct TypeSchemaRecord {
+    pub table_name: String,
+    pub columns: Vec<ColumnDefRecord>,
+    pub crdt_strategy: Option<String>,
+    pub template_sections: Vec<String>,
+}
+
+impl From<crate::types::TableSchema> for TypeSchemaRecord {
+    fn from(s: crate::types::TableSchema) -> Self {
+        Self {
+            table_name: s.table_name,
+            columns: s.columns.iter().map(ColumnDefRecord::from).collect(),
+            crdt_strategy: s.crdt_strategy,
+            template_sections: s.template_sections,
+        }
+    }
+}
+
+/// FFI-safe SQL execution result.
+///
+/// Flat record suitable for UniFFI export. Queries populate `columns`/`rows`;
+/// mutations populate `affected_rows`; DDL sets `message`.
+#[derive(uniffi::Record)]
+pub struct SqlResultRecord {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    pub affected_rows: i64,
+    pub message: String,
+}
+
+impl From<crate::sql_engine::SqlResult> for SqlResultRecord {
+    fn from(r: crate::sql_engine::SqlResult) -> Self {
+        use crate::sql_engine::SqlResult;
+        match r {
+            SqlResult::Rows { columns, rows } => {
+                let affected_rows = rows.len() as i64;
+                Self {
+                    columns,
+                    rows,
+                    affected_rows,
+                    message: String::new(),
+                }
+            }
+            SqlResult::Affected(n) => Self {
+                columns: Vec::new(),
+                rows: Vec::new(),
+                affected_rows: n as i64,
+                message: String::new(),
+            },
+            SqlResult::Ok(msg) => Self {
+                columns: Vec::new(),
+                rows: Vec::new(),
+                affected_rows: 0,
+                message: msg,
+            },
+        }
+    }
+}
+
 /// High-level facade composing GitRepo + Index for mobile/desktop FFI consumers.
+///
+/// Lock ordering (must be consistent across all methods): index → repo → txn.
 #[derive(uniffi::Object)]
 pub struct ZettelDriver {
     repo: Mutex<GitRepo>,
     index: Mutex<Index>,
+    txn: Mutex<Option<TransactionBuffer>>,
     #[allow(dead_code)]
     repo_path: PathBuf,
 }
@@ -147,6 +232,7 @@ impl ZettelDriver {
         Ok(Self {
             repo: Mutex::new(repo),
             index: Mutex::new(index),
+            txn: Mutex::new(None),
             repo_path: path.to_path_buf(),
         })
     }
@@ -169,11 +255,10 @@ impl ZettelDriver {
             .unwrap_or_else(|| parser::generate_id().0);
         let rel_path = format!("zettelkasten/{id}.md");
 
+        let index = self.index.lock().unwrap();
         let repo = self.repo.lock().unwrap();
         repo.commit_file(&rel_path, &content, &message)
             .map_err(ZdbError::from)?;
-
-        let index = self.index.lock().unwrap();
         index.index_zettel(&parsed).map_err(ZdbError::from)?;
 
         Ok(id)
@@ -240,8 +325,8 @@ impl ZettelDriver {
     }
 
     pub fn reindex(&self) -> Result<RebuildReport, ZdbError> {
-        let repo = self.repo.lock().unwrap();
         let index = self.index.lock().unwrap();
+        let repo = self.repo.lock().unwrap();
         let report = index.rebuild(&*repo).map_err(ZdbError::from)?;
         Ok(RebuildReport {
             indexed: report.indexed as u64,
@@ -268,10 +353,97 @@ impl ZettelDriver {
         repo.list_zettels().map_err(ZdbError::from)
     }
 
-    pub fn execute_sql(&self, sql: String) -> Result<String, ZdbError> {
+    pub fn execute_sql(&self, sql: String) -> Result<SqlResultRecord, ZdbError> {
         let index = self.index.lock().unwrap();
-        let affected = index.execute_sql(&sql, &[]).map_err(ZdbError::from)?;
-        Ok(affected.to_string())
+        let repo = self.repo.lock().unwrap();
+        let mut engine = crate::sql_engine::SqlEngine::new(&index, &*repo);
+
+        // If a transaction is active, inject the buffered state.
+        let mut txn_guard = self.txn.lock().unwrap();
+        if let Some(buf) = txn_guard.take() {
+            engine.resume_transaction(buf);
+        }
+
+        let result = engine.execute(&sql).map_err(|e| {
+            // On error, preserve transaction state if still active.
+            *txn_guard = engine.suspend_transaction();
+            ZdbError::from(e)
+        })?;
+
+        // Preserve transaction state for subsequent calls.
+        *txn_guard = engine.suspend_transaction();
+
+        Ok(result.into())
+    }
+
+    /// Lock order: index → repo → txn (must match all other methods).
+    pub fn begin_transaction(&self) -> Result<(), ZdbError> {
+        let index = self.index.lock().unwrap();
+        let repo = self.repo.lock().unwrap();
+
+        let mut txn_guard = self.txn.lock().unwrap();
+        if txn_guard.is_some() {
+            return Err(ZdbError::SqlEngine {
+                msg: "transaction already active".into(),
+            });
+        }
+
+        let mut engine = crate::sql_engine::SqlEngine::new(&index, &*repo);
+        engine.execute("BEGIN").map_err(ZdbError::from)?;
+        *txn_guard = engine.suspend_transaction();
+        Ok(())
+    }
+
+    pub fn commit_transaction(&self) -> Result<(), ZdbError> {
+        let index = self.index.lock().unwrap();
+        let repo = self.repo.lock().unwrap();
+        let mut engine = crate::sql_engine::SqlEngine::new(&index, &*repo);
+
+        let mut txn_guard = self.txn.lock().unwrap();
+        let buf = txn_guard.take().ok_or_else(|| ZdbError::SqlEngine {
+            msg: "no active transaction".into(),
+        })?;
+        engine.resume_transaction(buf);
+        engine.execute("COMMIT").map_err(|e| {
+            // On commit failure, preserve transaction state for retry or rollback.
+            *txn_guard = engine.suspend_transaction();
+            ZdbError::from(e)
+        })?;
+        Ok(())
+    }
+
+    pub fn rollback_transaction(&self) -> Result<(), ZdbError> {
+        let index = self.index.lock().unwrap();
+        let repo = self.repo.lock().unwrap();
+        let mut engine = crate::sql_engine::SqlEngine::new(&index, &*repo);
+
+        let mut txn_guard = self.txn.lock().unwrap();
+        let buf = txn_guard.take().ok_or_else(|| ZdbError::SqlEngine {
+            msg: "no active transaction".into(),
+        })?;
+        engine.resume_transaction(buf);
+        engine.execute("ROLLBACK").map_err(ZdbError::from)?;
+        Ok(())
+    }
+
+    /// List all defined types (typedef zettels) with their schemas.
+    pub fn list_type_schemas(&self) -> Result<Vec<TypeSchemaRecord>, ZdbError> {
+        let index = self.index.lock().unwrap();
+        let repo = self.repo.lock().unwrap();
+        let rows = index
+            .query_raw("SELECT path FROM zettels WHERE type = '_typedef'")
+            .map_err(ZdbError::from)?;
+        let mut schemas = Vec::new();
+        for row in rows {
+            if let Some(path) = row.first() {
+                let content = repo.read_file(path).map_err(ZdbError::from)?;
+                let parsed = parser::parse(&content, path).map_err(ZdbError::from)?;
+                let schema = crate::sql_engine::schema_from_parsed(&parsed)
+                    .map_err(ZdbError::from)?;
+                schemas.push(schema.into());
+            }
+        }
+        Ok(schemas)
     }
 
     pub fn attach_file(
@@ -289,8 +461,8 @@ impl ZettelDriver {
             .to_owned();
         let mime = crate::types::AttachmentInfo::mime_from_filename(&filename).to_owned();
         let id = crate::types::ZettelId(zettel_id);
-        let repo = self.repo.lock().unwrap();
         let index = self.index.lock().unwrap();
+        let repo = self.repo.lock().unwrap();
         let info = crate::attachments::attach_file(&repo, &index, &id, &filename, &bytes, &mime)
             .map_err(ZdbError::from)?;
         Ok(info.into())
@@ -298,8 +470,8 @@ impl ZettelDriver {
 
     pub fn detach_file(&self, zettel_id: String, filename: String) -> Result<(), ZdbError> {
         let id = crate::types::ZettelId(zettel_id);
-        let repo = self.repo.lock().unwrap();
         let index = self.index.lock().unwrap();
+        let repo = self.repo.lock().unwrap();
         crate::attachments::detach_file(&repo, &index, &id, &filename).map_err(ZdbError::from)
     }
 
@@ -319,9 +491,9 @@ impl ZettelDriver {
     }
 
     pub fn import_bundle(&self, bundle_path: String) -> Result<(), ZdbError> {
+        let index = self.index.lock().unwrap();
         let repo = self.repo.lock().unwrap();
         let mut sync_mgr = SyncManager::open(&repo).map_err(ZdbError::from)?;
-        let index = self.index.lock().unwrap();
         crate::bundle::import_bundle(&repo, &mut sync_mgr, &index, Path::new(&bundle_path))
             .map_err(ZdbError::from)?;
         Ok(())
@@ -333,21 +505,343 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    fn fresh_driver() -> (TempDir, ZettelDriver) {
+        let tmp = TempDir::new().unwrap();
+        let driver =
+            ZettelDriver::create_repo(tmp.path().to_str().unwrap().to_string()).unwrap();
+        (tmp, driver)
+    }
+
     #[test]
     fn init_creates_repo_and_opens_driver() {
-        let tmp = TempDir::new().unwrap();
-        let driver = ZettelDriver::create_repo(tmp.path().to_str().unwrap().to_string())
-            .expect("init should succeed");
+        let (_tmp, driver) = fresh_driver();
         let list = driver.list_zettels().unwrap();
         assert!(list.is_empty(), "fresh repo should have no zettels");
     }
 
     #[test]
     fn register_node_returns_uuid() {
-        let tmp = TempDir::new().unwrap();
-        let driver = ZettelDriver::create_repo(tmp.path().to_str().unwrap().to_string()).unwrap();
+        let (_tmp, driver) = fresh_driver();
         let uuid = driver.register_node("TestNode".to_string()).unwrap();
         assert!(!uuid.is_empty(), "uuid should not be empty");
         assert_eq!(uuid.len(), 36, "uuid should be 36 chars");
+    }
+
+    // --- SqlEngine-backed execute_sql tests ---
+
+    #[test]
+    fn execute_sql_create_table_creates_typedef_zettel() {
+        let (_tmp, driver) = fresh_driver();
+        driver.reindex().unwrap();
+        let result = driver
+            .execute_sql("CREATE TABLE project (name TEXT, status TEXT)".into())
+            .unwrap();
+        assert!(!result.message.is_empty(), "DDL should return a message");
+
+        // Verify typedef zettel was created on disk (not just in SQLite cache)
+        let zettels = driver.list_zettels().unwrap();
+        let has_typedef = zettels
+            .iter()
+            .any(|p| p.contains("_typedef/") && p.contains(".md"));
+        assert!(has_typedef, "typedef zettel should exist on disk");
+    }
+
+    #[test]
+    fn execute_sql_insert_returns_id_and_queryable() {
+        let (_tmp, driver) = fresh_driver();
+        driver.reindex().unwrap();
+        driver
+            .execute_sql("CREATE TABLE task (priority TEXT, done TEXT)".into())
+            .unwrap();
+
+        let result = driver
+            .execute_sql("INSERT INTO task (priority, done) VALUES ('high', 'no')".into())
+            .unwrap();
+        // INSERT returns SqlResult::Ok(created_ids) — message contains the new zettel ID
+        assert!(!result.message.is_empty(), "INSERT should return created ID");
+
+        // Verify the inserted row is queryable via SqlEngine
+        let rows = driver
+            .execute_sql("SELECT priority, done FROM task".into())
+            .unwrap();
+        assert_eq!(rows.rows.len(), 1);
+        assert_eq!(rows.rows[0][0], "high");
+        assert_eq!(rows.rows[0][1], "no");
+    }
+
+    #[test]
+    fn execute_sql_select_returns_rows() {
+        let (_tmp, driver) = fresh_driver();
+        driver.reindex().unwrap();
+        driver
+            .execute_sql("CREATE TABLE item (name TEXT)".into())
+            .unwrap();
+        driver
+            .execute_sql("INSERT INTO item (name) VALUES ('alpha')".into())
+            .unwrap();
+        driver
+            .execute_sql("INSERT INTO item (name) VALUES ('beta')".into())
+            .unwrap();
+
+        let result = driver
+            .execute_sql("SELECT name FROM item ORDER BY name".into())
+            .unwrap();
+        assert_eq!(result.rows.len(), 2);
+        assert!(result.columns.contains(&"name".to_string()));
+        assert_eq!(result.rows[0][0], "alpha");
+        assert_eq!(result.rows[1][0], "beta");
+    }
+
+    #[test]
+    fn execute_sql_update_modifies_zettel() {
+        let (_tmp, driver) = fresh_driver();
+        driver.reindex().unwrap();
+        driver
+            .execute_sql("CREATE TABLE note (body TEXT)".into())
+            .unwrap();
+        driver
+            .execute_sql("INSERT INTO note (body) VALUES ('original')".into())
+            .unwrap();
+
+        let result = driver
+            .execute_sql("UPDATE note SET body = 'modified'".into())
+            .unwrap();
+        assert_eq!(result.affected_rows, 1);
+
+        let select = driver
+            .execute_sql("SELECT body FROM note".into())
+            .unwrap();
+        assert_eq!(select.rows[0][0], "modified");
+    }
+
+    #[test]
+    fn execute_sql_delete_removes_zettel() {
+        let (_tmp, driver) = fresh_driver();
+        driver.reindex().unwrap();
+        driver
+            .execute_sql("CREATE TABLE widget (label TEXT)".into())
+            .unwrap();
+        driver
+            .execute_sql("INSERT INTO widget (label) VALUES ('remove-me')".into())
+            .unwrap();
+
+        // Get the ID to delete by querying
+        let before = driver
+            .execute_sql("SELECT id FROM widget".into())
+            .unwrap();
+        assert_eq!(before.rows.len(), 1);
+        let id = &before.rows[0][0];
+
+        let result = driver
+            .execute_sql(format!("DELETE FROM widget WHERE id = '{id}'"))
+            .unwrap();
+        assert_eq!(result.affected_rows, 1);
+
+        let after = driver
+            .execute_sql("SELECT id FROM widget".into())
+            .unwrap();
+        assert_eq!(after.rows.len(), 0);
+    }
+
+    #[test]
+    fn execute_sql_invalid_syntax_returns_error() {
+        let (_tmp, driver) = fresh_driver();
+        driver.reindex().unwrap();
+        let result = driver.execute_sql("NOT VALID SQL AT ALL".into());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn execute_sql_dml_on_nonexistent_type_returns_error() {
+        let (_tmp, driver) = fresh_driver();
+        driver.reindex().unwrap();
+        let result = driver
+            .execute_sql("INSERT INTO nonexistent (x) VALUES ('y')".into());
+        assert!(result.is_err());
+    }
+
+    // --- Transaction tests ---
+
+    #[test]
+    fn transaction_commit_persists_writes() {
+        let (_tmp, driver) = fresh_driver();
+        driver.reindex().unwrap();
+        driver
+            .execute_sql("CREATE TABLE txtest (val TEXT)".into())
+            .unwrap();
+
+        driver.begin_transaction().unwrap();
+        driver
+            .execute_sql("INSERT INTO txtest (val) VALUES ('in-txn')".into())
+            .unwrap();
+        driver.commit_transaction().unwrap();
+
+        let result = driver
+            .execute_sql("SELECT val FROM txtest".into())
+            .unwrap();
+        assert_eq!(result.rows.len(), 1);
+        assert_eq!(result.rows[0][0], "in-txn");
+    }
+
+    #[test]
+    fn transaction_rollback_discards_writes() {
+        let (_tmp, driver) = fresh_driver();
+        driver.reindex().unwrap();
+        driver
+            .execute_sql("CREATE TABLE rbtest (val TEXT)".into())
+            .unwrap();
+
+        driver.begin_transaction().unwrap();
+        driver
+            .execute_sql("INSERT INTO rbtest (val) VALUES ('should-vanish')".into())
+            .unwrap();
+        driver.rollback_transaction().unwrap();
+
+        let result = driver
+            .execute_sql("SELECT val FROM rbtest".into())
+            .unwrap();
+        assert_eq!(result.rows.len(), 0, "rolled back insert should not appear");
+    }
+
+    #[test]
+    fn transaction_multiple_ops_commit_atomically() {
+        let (_tmp, driver) = fresh_driver();
+        driver.reindex().unwrap();
+        driver
+            .execute_sql("CREATE TABLE multi (name TEXT)".into())
+            .unwrap();
+
+        driver.begin_transaction().unwrap();
+        driver
+            .execute_sql("INSERT INTO multi (name) VALUES ('one')".into())
+            .unwrap();
+        driver
+            .execute_sql("INSERT INTO multi (name) VALUES ('two')".into())
+            .unwrap();
+        driver.commit_transaction().unwrap();
+
+        let result = driver
+            .execute_sql("SELECT name FROM multi ORDER BY name".into())
+            .unwrap();
+        assert_eq!(result.rows.len(), 2);
+    }
+
+    #[test]
+    fn begin_without_commit_or_rollback_errors_on_double_begin() {
+        let (_tmp, driver) = fresh_driver();
+        driver.reindex().unwrap();
+        driver.begin_transaction().unwrap();
+        let result = driver.begin_transaction();
+        assert!(result.is_err(), "double BEGIN should fail");
+        // Clean up: rollback the first transaction
+        driver.rollback_transaction().unwrap();
+    }
+
+    #[test]
+    fn commit_without_begin_errors() {
+        let (_tmp, driver) = fresh_driver();
+        let result = driver.commit_transaction();
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rollback_without_begin_errors() {
+        let (_tmp, driver) = fresh_driver();
+        let result = driver.rollback_transaction();
+        assert!(result.is_err());
+    }
+
+    // --- Type discovery tests ---
+
+    #[test]
+    fn list_type_schemas_empty_on_fresh_repo() {
+        let (_tmp, driver) = fresh_driver();
+        driver.reindex().unwrap();
+        let schemas = driver.list_type_schemas().unwrap();
+        assert!(schemas.is_empty());
+    }
+
+    #[test]
+    fn list_type_schemas_returns_created_type() {
+        let (_tmp, driver) = fresh_driver();
+        driver.reindex().unwrap();
+        driver
+            .execute_sql("CREATE TABLE contact (name TEXT, email TEXT)".into())
+            .unwrap();
+
+        let schemas = driver.list_type_schemas().unwrap();
+        assert_eq!(schemas.len(), 1);
+        assert_eq!(schemas[0].table_name, "contact");
+
+        let col_names: Vec<_> = schemas[0].columns.iter().map(|c| c.name.as_str()).collect();
+        assert!(col_names.contains(&"name"));
+        assert!(col_names.contains(&"email"));
+    }
+
+    // --- Parity test: FFI path produces same results as direct SqlEngine ---
+
+    #[test]
+    fn parity_ffi_and_direct_sqlengine_produce_equivalent_results() {
+        // Set up two identical repos: one exercised via ZettelDriver (FFI), one via SqlEngine directly
+        let tmp_ffi = TempDir::new().unwrap();
+        let driver =
+            ZettelDriver::create_repo(tmp_ffi.path().to_str().unwrap().to_string()).unwrap();
+        driver.reindex().unwrap();
+
+        let tmp_direct = TempDir::new().unwrap();
+        let direct_repo =
+            crate::git_ops::GitRepo::init(tmp_direct.path()).unwrap();
+        let db_path = tmp_direct.path().join(".zdb/index.db");
+        std::fs::create_dir_all(tmp_direct.path().join(".zdb")).unwrap();
+        let direct_index = crate::indexer::Index::open(&db_path).unwrap();
+        direct_index.rebuild(&direct_repo).unwrap();
+
+        // Same DDL on both paths
+        let ffi_ddl = driver
+            .execute_sql("CREATE TABLE workspace (description TEXT)".into())
+            .unwrap();
+        let mut engine = crate::sql_engine::SqlEngine::new(&direct_index, &direct_repo);
+        let direct_ddl = engine.execute("CREATE TABLE workspace (description TEXT)").unwrap();
+        let direct_ddl: SqlResultRecord = direct_ddl.into();
+        assert_eq!(ffi_ddl.message.is_empty(), direct_ddl.message.is_empty());
+
+        // Same INSERT on both paths
+        let ffi_ins = driver
+            .execute_sql(
+                "INSERT INTO workspace (description) VALUES ('shared model')".into(),
+            )
+            .unwrap();
+        let mut engine = crate::sql_engine::SqlEngine::new(&direct_index, &direct_repo);
+        let direct_ins = engine
+            .execute("INSERT INTO workspace (description) VALUES ('shared model')")
+            .unwrap();
+        let direct_ins: SqlResultRecord = direct_ins.into();
+        // Both return created IDs in message
+        assert!(!ffi_ins.message.is_empty());
+        assert!(!direct_ins.message.is_empty());
+
+        // Same SELECT on both paths — row count and column names must match
+        let ffi_sel = driver
+            .execute_sql("SELECT description FROM workspace".into())
+            .unwrap();
+        let mut engine = crate::sql_engine::SqlEngine::new(&direct_index, &direct_repo);
+        let direct_sel = engine
+            .execute("SELECT description FROM workspace")
+            .unwrap();
+        let direct_sel: SqlResultRecord = direct_sel.into();
+        assert_eq!(ffi_sel.columns, direct_sel.columns);
+        assert_eq!(ffi_sel.rows.len(), direct_sel.rows.len());
+        assert_eq!(ffi_sel.rows[0][0], direct_sel.rows[0][0]);
+
+        // Same UPDATE on both paths
+        let ffi_upd = driver
+            .execute_sql("UPDATE workspace SET description = 'updated'".into())
+            .unwrap();
+        let mut engine = crate::sql_engine::SqlEngine::new(&direct_index, &direct_repo);
+        let direct_upd = engine
+            .execute("UPDATE workspace SET description = 'updated'")
+            .unwrap();
+        let direct_upd: SqlResultRecord = direct_upd.into();
+        assert_eq!(ffi_upd.affected_rows, direct_upd.affected_rows);
     }
 }
