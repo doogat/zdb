@@ -28,11 +28,13 @@ Frontend (React, Swift, Kotlin, etc.)
     │                       └── SqlEngine (DDL/DML)
     │
     └─ FFI ─────── ZettelDriver (UniFFI, embedded)
-                       └── same stack, no server
+                       ├── GitRepo (storage)
+                       ├── Index (SQLite FTS5)
+                       └── SqlEngine (DDL/DML) ← same engine
 ```
 
 **Web/desktop apps**: talk to `zdb serve` over GraphQL.
-**Mobile apps**: embed `ZettelDriver` via UniFFI (Swift/Kotlin bindings) — no server needed.
+**Mobile apps**: embed `ZettelDriver` via UniFFI (Swift/Kotlin bindings) — same SQL engine, typed CRUD, transactions, and schema discovery as the server, no server process needed.
 **CLI scripts**: use `zdb query` and `zdb create` directly.
 
 ## Data modeling
@@ -247,17 +249,39 @@ zdb search "rust programming"
 
 ### UniFFI (mobile)
 
-Embed ZettelDB directly in Swift or Kotlin:
+Embed ZettelDB directly in Swift or Kotlin. The embedded API delegates to the same `SqlEngine` as `zdb serve` — DDL creates typedef zettels via Git, DML reads/writes Git-backed zettels, and SELECT returns typed rows.
 
 ```swift
-let driver = try ZettelDriver(path: "/path/to/zettelkasten")
-let result = try driver.executeSql(
+let driver = try ZettelDriver.createRepo(repoPath: "/path/to/zettelkasten")
+
+// Schema — same DDL as server
+try driver.executeSql("CREATE TABLE contact (name TEXT, email TEXT)")
+
+// Insert — returns created zettel IDs
+let ins = try driver.executeSql(
     "INSERT INTO contact (name, email) VALUES ('Alice', 'alice@example.com')"
 )
-let contacts = try driver.executeSql("SELECT * FROM contact")
+
+// Query — returns SqlResultRecord with columns + rows
+let contacts = try driver.executeSql("SELECT name, email FROM contact")
+for row in contacts.rows {
+    print("\(row[0]): \(row[1])")
+}
+
+// Transactions — buffer writes, commit as single Git commit
+try driver.beginTransaction()
+try driver.executeSql("INSERT INTO contact (name, email) VALUES ('Bob', 'bob@example.com')")
+try driver.executeSql("UPDATE contact SET email = 'alice@new.com' WHERE name = 'Alice'")
+try driver.commitTransaction()
+
+// Type discovery — bootstrap app screens from schema metadata
+let schemas = try driver.listTypeSchemas()
+for schema in schemas {
+    print("\(schema.tableName): \(schema.columns.map { $0.name })")
+}
 ```
 
-No server process needed. The app owns the git repo directly.
+No server process needed. The app owns the git repo directly. See [FFI docs](../technical/ffi.md) for the full API surface.
 
 ## Worked example: link dashboard
 
