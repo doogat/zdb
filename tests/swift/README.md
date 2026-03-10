@@ -4,19 +4,15 @@ Minimal Swift package to verify UniFFI bindings on Apple platforms.
 
 ## Prerequisites
 
-- macOS 13+
-- Xcode 15+ (full install, not just Command Line Tools) for iOS simulator
-- Rust targets: `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `x86_64-apple-ios`, `aarch64-apple-darwin`
+See [FFI docs](../../docs/src/technical/ffi.md#prerequisites) for full setup instructions.
 
-Install targets:
-
-```bash
-rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin
-```
+Quick summary:
+- Xcode (full install, not just CLT)
+- Rust targets: `rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin`
 
 ## Setup
 
-1. Build the XCFramework:
+1. Build the XCFramework from the repo root:
 
 ```bash
 dev/bin/build-xcframework
@@ -28,17 +24,14 @@ dev/bin/build-xcframework
 cp out/swift/zdb_core.swift tests/swift/Sources/ZettelDB/
 ```
 
-## Run
+3. Build the `zdb` CLI (needed by test setUp):
 
-macOS:
+```bash
+cargo build -p zdb-cli
+```
+
+## Run
 
 ```bash
 cd tests/swift && swift test
-```
-
-iOS simulator (requires full Xcode):
-
-```bash
-cd tests/swift
-xcodebuild test -scheme ZettelDBTests -destination 'platform=iOS Simulator,name=iPhone 16'
 ```

@@ -124,27 +124,57 @@ Methods that need both locks acquire them sequentially and drop the first before
 
 #### Swift / iOS / macOS
 
-- **Xcode** (full install, not just Command Line Tools)
-  - Switch active toolchain: `sudo xcode-select -s /Applications/Xcode.app/Contents/Developer`
-  - Accept license: `sudo xcodebuild -license accept`
-  - First launch: `xcodebuild -runFirstLaunch`
-- **Rust targets**:
-  ```bash
-  rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin
-  ```
+1. **Xcode** — full install from App Store (Command Line Tools alone are not enough):
+   ```bash
+   sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+   sudo xcodebuild -license accept
+   xcodebuild -runFirstLaunch
+   ```
+2. **Rust cross-compile targets**:
+   ```bash
+   rustup target add aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios aarch64-apple-darwin
+   ```
 
 #### Kotlin / Android
 
-- **cargo-ndk**: `cargo install cargo-ndk`
-- **Android NDK** (via Android Studio SDK Manager or standalone download)
-  ```bash
-  export ANDROID_NDK_HOME=$HOME/Library/Android/sdk/ndk/<version>
-  ```
-- **kotlinc**: `brew install kotlin`
-- **Rust targets**:
-  ```bash
-  rustup target add aarch64-linux-android x86_64-linux-android
-  ```
+1. **JDK** (required by `kotlinc` and `jar`):
+   ```bash
+   brew install openjdk
+   ```
+2. **Kotlin compiler**:
+   ```bash
+   brew install kotlin
+   ```
+3. **cargo-ndk** (Cargo wrapper for Android NDK builds):
+   ```bash
+   cargo install cargo-ndk
+   ```
+4. **Android NDK**:
+   ```bash
+   brew install --cask android-ndk
+   export ANDROID_NDK_HOME=/opt/homebrew/share/android-ndk
+   ```
+   Add the export to your shell profile (`~/.zshrc` or `~/.bashrc`).
+   Alternatively, install via Android Studio SDK Manager and set `ANDROID_NDK_HOME=$HOME/Library/Android/sdk/ndk/<version>`.
+5. **Rust cross-compile targets**:
+   ```bash
+   rustup target add aarch64-linux-android x86_64-linux-android
+   ```
+
+#### Verify setup
+
+```bash
+# Swift side
+xcodebuild -version          # should show Xcode version
+rustup target list --installed | grep ios  # should list 3 iOS targets
+
+# Android side
+java -version                 # should show JDK version
+kotlinc -version              # should show Kotlin version
+cargo ndk --version           # should show cargo-ndk version
+echo $ANDROID_NDK_HOME        # should be set
+rustup target list --installed | grep android  # should list 2 targets
+```
 
 ### Build
 

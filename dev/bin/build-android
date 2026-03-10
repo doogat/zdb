@@ -39,7 +39,7 @@ done
 
 echo "==> Building for ${#TARGETS[@]} Android targets..."
 for t in "${TARGETS[@]}"; do
-    cargo ndk --target "$t" --platform 21 -- build -p zdb-core --release
+    cargo ndk --target "$t" --platform 21 -- build -p zdb-core --release --features vendored
 done
 
 echo "==> Generating Kotlin bindings..."

@@ -4,19 +4,14 @@ Minimal Gradle project to verify UniFFI bindings for Android/JVM.
 
 ## Prerequisites
 
-- JDK 17+
-- For JVM-only testing: just the host-platform `libzdb_core` shared library
-- For Android emulator testing:
-  - Android NDK (`ANDROID_NDK_HOME`)
-  - `cargo-ndk`: `cargo install cargo-ndk`
-  - `kotlinc`
-  - Rust targets: `aarch64-linux-android`, `x86_64-linux-android`
+See [FFI docs](../../docs/src/technical/ffi.md#prerequisites) for full setup instructions.
 
-Install targets:
-
-```bash
-rustup target add aarch64-linux-android x86_64-linux-android
-```
+Quick summary:
+- JDK (`brew install openjdk`)
+- Kotlin (`brew install kotlin`)
+- cargo-ndk (`cargo install cargo-ndk`)
+- Android NDK (`brew install --cask android-ndk`, set `ANDROID_NDK_HOME`)
+- Rust targets: `rustup target add aarch64-linux-android x86_64-linux-android`
 
 ## Setup
 
