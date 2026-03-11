@@ -365,7 +365,7 @@ BookmarksModule.bootstrap(driver)  // CREATE TABLE bookmark (...)
 ContactsModule.bootstrap(driver)   // CREATE TABLE contact (...)
 ```
 
-`CREATE TABLE` is idempotent in ZettelDB — if the table already exists, it's a no-op.
+Modules should check whether their tables exist before creating them (e.g. via `list_type_schemas()`) since `CREATE TABLE` errors on duplicates. A future `CREATE TABLE IF NOT EXISTS` will make this simpler.
 
 ### Relationship to embedded parity
 
