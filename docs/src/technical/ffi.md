@@ -20,6 +20,12 @@ ZettelDriver (ffi.rs)       ← UniFFI proc-macro boundary
 
 `ZettelDriver` wraps `GitRepo` and `Index` behind `Mutex` for thread safety. All methods take `&self` (shared reference via `Arc` on the foreign side).
 
+## Mobile Integration Model
+
+`ZettelDriver` is the embedded runtime boundary for native apps — not a mobile IPC mechanism. On mobile, the recommended model is one host app embedding a single `ZettelDriver` instance, not multiple separately installed apps communicating over `localhost`. Mobile OS sandboxing and background execution limits make inter-app backends non-portable.
+
+Widgets and extensions (iOS WidgetKit, Android AppWidgetProvider) access the same shared repository via App Group storage (iOS) or app-private storage (Android). Whether extensions get their own read-only `ZettelDriver` instance or consume snapshots exported by the host app depends on the coordination strategy — see the [Building Apps guide](../guide/building-apps.md#mobile-mini-apps) for architecture details.
+
 ## Interface
 
 ### Constructors

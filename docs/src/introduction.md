@@ -11,6 +11,20 @@ ZettelDB stores Markdown notes in a Git repository, syncs across personal device
 - **Offline-first** — all functionality works without network; sync is explicit
 - **Automatic conflict resolution** — Git handles non-overlapping edits (>99% of cases); Automerge CRDT resolves the rest at character/field/line level
 
+## Deployment Modes
+
+ZettelDB is cross-platform in the sense that matters: same storage model, same typed data model, same sync semantics, same application contract. The process topology varies by platform.
+
+| Mode | Target | Transport | Runtime |
+|------|--------|-----------|---------|
+| **Server** | Web apps, remote desktops, admin tools | GraphQL, REST, pgwire | `zdb serve` |
+| **Embedded native** | Native apps that own the repo locally | UniFFI (Swift/Kotlin) | Rust core in-process |
+| **Mobile host-shell** | Multiple mini-app experiences on one device | In-process calls to embedded core | One host app with feature modules |
+
+On mobile, the recommended shape is one installed app containing the embedded ZettelDB core, one shared repository, and multiple feature modules that feel like mini-apps. Separately installed mobile apps sharing one phone-local backend server are not supported — mobile OS sandboxing and background execution limits make that topology non-portable.
+
+See the [Building Apps guide](guide/building-apps.md) for details on each mode.
+
 ## Current Status
 
 MVP implementation. The core library (`zdb-core`) and CLI (`zdb`) are functional with 10 modules, 12 CLI commands (+ 2 subcommands), and full two-node sync with conflict resolution. Includes a SQL engine for typed zettel tables, implicit type inference, and bundled type definitions.

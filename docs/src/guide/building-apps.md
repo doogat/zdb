@@ -20,21 +20,28 @@ Examples: link managers, personal CRMs, reading logs, project trackers, habit tr
 ```
 Frontend (React, Swift, Kotlin, etc.)
     │
-    ├─ GraphQL ─── zdb serve (HTTP, port 2891)
+    ├─ GraphQL ─── zdb serve (HTTP, port 2891)        ← Mode 1: Server
     │                  │
     │                  └── Actor thread
     │                       ├── GitRepo (storage)
     │                       ├── Index (SQLite FTS5)
     │                       └── SqlEngine (DDL/DML)
     │
-    └─ FFI ─────── ZettelDriver (UniFFI, embedded)
-                       ├── GitRepo (storage)
-                       ├── Index (SQLite FTS5)
-                       └── SqlEngine (DDL/DML) ← same engine
+    ├─ FFI ─────── ZettelDriver (UniFFI, embedded)     ← Mode 2: Embedded native
+    │                  ├── GitRepo (storage)
+    │                  ├── Index (SQLite FTS5)
+    │                  └── SqlEngine (DDL/DML)
+    │
+    └─ Host Shell ─ One app, multiple feature modules  ← Mode 3: Mobile host-shell
+                       └── shared ZettelDriver
+                            ├── GitRepo (one repo)
+                            ├── Index (one index)
+                            └── SqlEngine
 ```
 
 **Web/desktop apps**: talk to `zdb serve` over GraphQL.
-**Mobile apps**: embed `ZettelDriver` via UniFFI (Swift/Kotlin bindings) — same SQL engine, typed CRUD, transactions, and schema discovery as the server, no server process needed.
+**Single native apps**: embed `ZettelDriver` via UniFFI (Swift/Kotlin bindings) — same SQL engine, typed CRUD, transactions, and schema discovery as the server, no server process needed.
+**Mobile mini-apps**: one host app embedding ZettelDriver with multiple feature modules — see [Mobile mini-apps](#mobile-mini-apps) below.
 **CLI scripts**: use `zdb query` and `zdb create` directly.
 
 ## Data modeling
@@ -282,6 +289,87 @@ for schema in schemas {
 ```
 
 No server process needed. The app owns the git repo directly. See [FFI docs](../technical/ffi.md) for the full API surface.
+
+## Mobile mini-apps
+
+### Why not separate apps?
+
+Mobile platforms do not support multiple independently installed apps sharing one local backend:
+
+- **iOS**: apps are sandboxed; no shared filesystem, no `localhost` IPC between apps, background processes are killed aggressively
+- **Android**: apps have private storage; `localhost` servers are killed by Doze mode and app standby; cross-app IPC requires explicit permissions and trust
+
+Running `zdb serve` on a phone and connecting multiple installed apps to it is not portable and not supported.
+
+### The host-shell model
+
+The recommended mobile architecture is one installed app containing:
+
+- One embedded ZettelDB core (`ZettelDriver` via UniFFI)
+- One shared repository and index
+- Multiple feature modules that feel like mini-apps
+- Optional widgets and extensions bound to the same shared data
+
+Users get the UX of several mini-apps. The OS sees one well-behaved app.
+
+### iOS shape
+
+- One main app target with SwiftUI
+- Feature modules as Swift packages or local frameworks
+- Optional widgets and extensions (WidgetKit, Share Extension)
+- App Group storage for shared repo/index when extensions need access
+- UniFFI-generated Swift bindings imported by the app and extensions
+
+### Android shape
+
+- One main application package with Jetpack Compose
+- Feature modules as Gradle modules (`:feature-bookmarks`, `:feature-contacts`, etc.)
+- Optional widgets (AppWidgetProvider) and services
+- App-private storage, shared across modules within the same process
+- UniFFI-generated Kotlin bindings inside the app
+
+### Mini-app contract
+
+Each feature module contributes:
+
+- **Schema**: table definitions via `CREATE TABLE` (applied at app startup)
+- **Queries/mutations**: SQL or typed CRUD calls through the shared `ZettelDriver`
+- **UI**: screens, navigation destinations, local view state
+- **Optional surfaces**: dashboard widgets, share extensions, shortcuts
+
+Each module does **not** own:
+
+- Its own storage engine or repo copy
+- Its own local backend daemon
+- Its own incompatible backend semantics
+
+### Shared schema bootstrap
+
+On app launch, the host shell initializes `ZettelDriver` once, then each module registers its tables:
+
+```swift
+// iOS example
+let driver = try ZettelDriver.createRepo(repoPath: appGroupRepoPath)
+
+// Each module bootstraps its schema
+BookmarksModule.bootstrap(driver)  // CREATE TABLE bookmark (...)
+ContactsModule.bootstrap(driver)   // CREATE TABLE contact (...)
+```
+
+```kotlin
+// Android example
+val driver = ZettelDriver.createRepo(repoPath = appPrivateRepoPath)
+
+// Each module bootstraps its schema
+BookmarksModule.bootstrap(driver)  // CREATE TABLE bookmark (...)
+ContactsModule.bootstrap(driver)   // CREATE TABLE contact (...)
+```
+
+`CREATE TABLE` is idempotent in ZettelDB — if the table already exists, it's a no-op.
+
+### Relationship to embedded parity
+
+The host-shell model depends on full embedded API parity between `ZettelDriver` and `zdb serve`. See [PRD 00016](../../.local/prds/done/00016-embedded-app-api-parity-v1.md) for the parity backlog.
 
 ## Worked example: link dashboard
 

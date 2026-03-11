@@ -55,6 +55,59 @@ Git handles >99% of merges (non-overlapping edits). When Git detects a conflict,
 - **Node registry**: TOML files in `.nodes/` (tracked by Git)
 - **Local state**: `.git/zdb-node` (node UUID, not tracked)
 
+## Deployment Modes
+
+ZettelDB supports three deployment modes. The backend contract (storage, types, sync, queries) is identical across all three — only the process topology and transport differ.
+
+### Mode 1: Server
+
+```text
+Web / Desktop app
+      │
+      ▼
+zdb serve (HTTP :2891)
+      │
+      ├── GitRepo (storage)
+      ├── Index (SQLite FTS5)
+      └── SqlEngine (DDL/DML)
+```
+
+Target: web apps, remote desktop apps, shared local desktops, admin tools. Transport: GraphQL, REST, pgwire.
+
+### Mode 2: Embedded native
+
+```text
+Native app (Swift / Kotlin)
+      │
+      ▼
+ZettelDriver (UniFFI, in-process)
+      │
+      ├── GitRepo (storage)
+      ├── Index (SQLite FTS5)
+      └── SqlEngine (DDL/DML)
+```
+
+Target: native apps that own the repo locally. Transport: UniFFI function calls.
+
+### Mode 3: Mobile host-shell
+
+```text
+Host App
+├── ZettelDriver (one instance)
+│   ├── GitRepo (shared repo)
+│   ├── Index (shared index)
+│   └── SqlEngine
+├── Module: Bookmarks
+│   └── schema + queries + UI
+├── Module: Contacts
+│   └── schema + queries + UI
+└── Widget / Extension (read-only access)
+```
+
+Target: multiple mini-app experiences on one mobile device. All modules share one embedded ZettelDriver, one repository, and one index.
+
+ZettelDB does not support multiple separately installed mobile apps sharing one phone-local backend server. Mobile OS sandboxing, background execution limits, and IPC restrictions make this topology non-portable.
+
 ## Project Structure
 
 ```text
