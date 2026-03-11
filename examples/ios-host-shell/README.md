@@ -12,7 +12,7 @@ A SwiftUI host-shell app demonstrating two mini-app modules (Bookmarks and Conta
 
 2. Generate Swift bindings:
    ```bash
-   cargo run -p zdb-core --bin uniffi-bindgen -- generate \
+   cargo run -p zdb-uniffi-bindgen --bin uniffi-bindgen -- generate \
      --library target/debug/libzdb_core.dylib \
      --language swift --out-dir examples/ios-host-shell/HostShell/Sources/Shared
    ```
@@ -30,13 +30,11 @@ A SwiftUI host-shell app demonstrating two mini-app modules (Bookmarks and Conta
 HostShellApp
 ├── AppState (owns ZettelDriver)
 ├── BookmarksModule
-│   ├── bootstrap() — CREATE TABLE bookmark, category
-│   ├── BookmarkListView
-│   └── BookmarkDetailView
+│   ├── bootstrap() — CREATE TABLE IF NOT EXISTS bookmark, category
+│   └── BookmarkListView
 ├── ContactsModule
-│   ├── bootstrap() — CREATE TABLE contact
-│   ├── ContactListView
-│   └── ContactDetailView
+│   ├── bootstrap() — CREATE TABLE IF NOT EXISTS contact
+│   └── ContactListView
 └── SearchView (cross-module FTS5 search)
 ```
 
@@ -44,7 +42,7 @@ All modules share one `ZettelDriver` instance via `@EnvironmentObject`.
 
 ## Key patterns
 
-- **Schema bootstrap**: each module checks `listTypeSchemas()` before creating tables
+- **Schema bootstrap**: each module uses `CREATE TABLE IF NOT EXISTS` for idempotent setup
 - **Shared driver**: injected via SwiftUI environment
 - **Cross-module search**: FTS5 search spans all zettel types
 - **Tab navigation**: each module is a tab; search is a shared tab

@@ -24,7 +24,7 @@ cargo build -p zdb-core --release
 2. Generate Kotlin bindings:
 
 ```bash
-cargo run -p zdb-core --bin uniffi-bindgen -- generate \
+cargo run -p zdb-uniffi-bindgen --bin uniffi-bindgen -- generate \
   --library target/release/libzdb_core.dylib \
   --language kotlin --out-dir out/kotlin
 ```

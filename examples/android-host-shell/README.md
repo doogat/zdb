@@ -12,7 +12,7 @@ A Jetpack Compose host-shell app demonstrating two mini-app modules (Bookmarks a
 
 2. Generate Kotlin bindings:
    ```bash
-   cargo run -p zdb-core --bin uniffi-bindgen -- generate \
+   cargo run -p zdb-uniffi-bindgen --bin uniffi-bindgen -- generate \
      --library target/debug/libzdb_core.dylib \
      --language kotlin --out-dir examples/android-host-shell/core-zdb/src/main/java
    ```
@@ -26,12 +26,10 @@ HostShellApp (Application)
 ├── ZettelDriver (one instance, app-scoped)
 ├── :feature-bookmarks
 │   ├── BookmarksModule.bootstrap()
-│   ├── BookmarkListScreen
-│   └── BookmarkDetailScreen
+│   └── BookmarkListScreen
 ├── :feature-contacts
 │   ├── ContactsModule.bootstrap()
-│   ├── ContactListScreen
-│   └── ContactDetailScreen
+│   └── ContactListScreen
 └── :core-zdb
     └── ZDBModule interface + shared ZettelDriver access
 ```
@@ -50,7 +48,7 @@ android-host-shell/
 
 ## Key patterns
 
-- **Schema bootstrap**: each module checks `listTypeSchemas()` before creating tables
+- **Schema bootstrap**: each module uses `CREATE TABLE IF NOT EXISTS` for idempotent setup
 - **Shared driver**: provided by `ZDBApplication`, accessed via `(application as ZDBApplication).driver`
 - **Bottom navigation**: each module is a destination
 - **Cross-module search**: FTS5 search spans all zettel types

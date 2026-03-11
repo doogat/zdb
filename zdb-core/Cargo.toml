@@ -7,10 +7,6 @@ autobenches = false
 [lib]
 crate-type = ["lib", "cdylib", "staticlib"]
 
-[[bin]]
-name = "uniffi-bindgen"
-path = "uniffi-bindgen.rs"
-
 [dependencies]
 automerge = "0.7"
 chrono = { version = "0.4", features = ["serde"] }
@@ -24,7 +20,7 @@ serde_yaml = "0.9"
 similar = "2"
 thiserror = "2"
 toml = "0.8"
-uniffi = { version = "0.29", features = ["cli"] }
+uniffi = "0.29"
 uuid = { version = "1", features = ["v4"] }
 tar = "0.4"
 sha2 = "0.10"

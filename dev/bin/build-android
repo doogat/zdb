@@ -44,7 +44,7 @@ done
 
 echo "==> Generating Kotlin bindings..."
 cargo build -p zdb-core --release
-cargo run -p zdb-core --bin uniffi-bindgen -- generate \
+cargo run -p zdb-uniffi-bindgen --bin uniffi-bindgen -- generate \
     --library "$ROOT/target/release/libzdb_core.dylib" \
     --language kotlin \
     --out-dir "$OUT"

@@ -32,6 +32,7 @@ zdb-core/src/       Library crate
 zdb-core/benches/   Criterion benchmarks
   crud.rs           CRUD operations at 1K zettels
   search.rs         FTS5 search, SQL SELECT, reindex at 1K zettels
+zdb-uniffi-bindgen/ UniFFI bindgen binary (isolated from zdb-core)
 zdb-cli/src/        Binary crate (single main.rs)
 zdb-server/src/     GraphQL server crate
   lib.rs            Server entrypoint (axum router, actor spawn)
@@ -121,10 +122,10 @@ cd docs && mdbook build               Build documentation
 cd docs && mdbook serve               Serve documentation locally
 
 # UniFFI binding generation
-cargo run -p zdb-core --bin uniffi-bindgen -- generate \
+cargo run -p zdb-uniffi-bindgen --bin uniffi-bindgen -- generate \
   --library target/debug/libzdb_core.dylib \
   --language swift --out-dir out/swift
-cargo run -p zdb-core --bin uniffi-bindgen -- generate \
+cargo run -p zdb-uniffi-bindgen --bin uniffi-bindgen -- generate \
   --library target/debug/libzdb_core.dylib \
   --language kotlin --out-dir out/kotlin
 ```
