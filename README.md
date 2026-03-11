@@ -2,6 +2,27 @@
 
 Doogat ZettelDB is a database engine that pairs decentralized Git-backed storage with conflict-free sync and flexible multi-protocol data access.
 
+## Stability
+
+### Stable (v0.1.0 API contract)
+
+- CLI: init, create, read, update, delete, search, query, rename, type, sync
+- Git storage format (zettel Markdown, frontmatter schema)
+- SQLite FTS5 search
+- SQL SELECT, CREATE TABLE, INSERT, UPDATE, DELETE
+- Multi-device sync (push, pull, merge)
+- `zdb-core` public Rust API for the above
+
+### Experimental (may change in v0.2.0)
+
+- GraphQL server (`zdb serve`)
+- REST API, PgWire protocol, WebSocket subscriptions
+- NoSQL API (`get`, `scan`, `backlinks`)
+- UniFFI bindings (Swift/Kotlin)
+- Bundle export/import
+- Attachments
+- Auto-update
+
 ## Development
 
 ### Prerequisites
