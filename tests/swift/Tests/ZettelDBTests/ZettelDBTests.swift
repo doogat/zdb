@@ -170,6 +170,56 @@ final class ZettelDBTests: XCTestCase {
         XCTAssertTrue(colNames.contains("email"))
     }
 
+    func testMultiTableTypedScenario() throws {
+        try _ = driver.reindex()
+
+        // Create all 4 PRD tables
+        try _ = driver.executeSql(sql: "CREATE TABLE workspace (description TEXT)")
+        try _ = driver.executeSql(sql: "CREATE TABLE section (name TEXT, workspace TEXT REFERENCES workspace(id))")
+        try _ = driver.executeSql(sql: "CREATE TABLE link (url TEXT NOT NULL, title TEXT)")
+        try _ = driver.executeSql(sql: "CREATE TABLE \"section-link\" (section TEXT REFERENCES section(id), link TEXT REFERENCES link(id))")
+
+        // Insert data
+        let ws = try driver.executeSql(sql: "INSERT INTO workspace (description) VALUES ('My Board')")
+        let wsId = ws.message
+        XCTAssertFalse(wsId.isEmpty)
+        Thread.sleep(forTimeInterval: 1)
+
+        let sec = try driver.executeSql(sql: "INSERT INTO section (name, workspace) VALUES ('Dev', '\(wsId)')")
+        let secId = sec.message
+        Thread.sleep(forTimeInterval: 1)
+
+        let lnk = try driver.executeSql(sql: "INSERT INTO link (url, title) VALUES ('https://example.com', 'Example')")
+        let lnkId = lnk.message
+        Thread.sleep(forTimeInterval: 1)
+
+        try _ = driver.executeSql(sql: "INSERT INTO \"section-link\" (section, link) VALUES ('\(secId)', '\(lnkId)')")
+
+        // Joined read
+        let joined = try driver.executeSql(sql: "SELECT s.name, w.description FROM section s JOIN workspace w ON s.workspace = w.id")
+        XCTAssertEqual(joined.rows.count, 1)
+        XCTAssertTrue(joined.rows[0].contains("Dev"))
+        XCTAssertTrue(joined.rows[0].contains("My Board"))
+
+        // Transactional update
+        try driver.beginTransaction()
+        try _ = driver.executeSql(sql: "UPDATE workspace SET description = 'Updated Board' WHERE id = '\(wsId)'")
+        try _ = driver.executeSql(sql: "INSERT INTO link (url, title) VALUES ('https://rust-lang.org', 'Rust')")
+        try driver.commitTransaction()
+
+        let updated = try driver.executeSql(sql: "SELECT description FROM workspace")
+        XCTAssertTrue(updated.rows[0].contains("Updated Board"))
+
+        // Type metadata bootstrap
+        let schemas = try driver.listTypeSchemas()
+        XCTAssertEqual(schemas.count, 4, "should have 4 type schemas")
+        let names = schemas.map { $0.tableName }.sorted()
+        XCTAssertTrue(names.contains("link"))
+        XCTAssertTrue(names.contains("section"))
+        XCTAssertTrue(names.contains("section-link"))
+        XCTAssertTrue(names.contains("workspace"))
+    }
+
     func testBundleExportImport() throws {
         // Register a sync node via FFI
         let _ = try driver.registerNode(name: "test-source")

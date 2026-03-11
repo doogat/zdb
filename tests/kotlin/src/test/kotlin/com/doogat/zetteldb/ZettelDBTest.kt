@@ -156,6 +156,57 @@ class ZettelDBTest {
     }
 
     @Test
+    fun testMultiTableTypedScenario() {
+        driver.reindex()
+
+        // Create all 4 PRD tables
+        driver.executeSql("CREATE TABLE workspace (description TEXT)")
+        driver.executeSql("CREATE TABLE section (name TEXT, workspace TEXT REFERENCES workspace(id))")
+        driver.executeSql("CREATE TABLE link (url TEXT NOT NULL, title TEXT)")
+        driver.executeSql("CREATE TABLE \"section-link\" (section TEXT REFERENCES section(id), link TEXT REFERENCES link(id))")
+
+        // Insert data
+        val ws = driver.executeSql("INSERT INTO workspace (description) VALUES ('My Board')")
+        val wsId = ws.message
+        assertTrue(wsId.isNotEmpty())
+        Thread.sleep(1000)
+
+        val sec = driver.executeSql("INSERT INTO section (name, workspace) VALUES ('Dev', '$wsId')")
+        val secId = sec.message
+        Thread.sleep(1000)
+
+        val lnk = driver.executeSql("INSERT INTO link (url, title) VALUES ('https://example.com', 'Example')")
+        val lnkId = lnk.message
+        Thread.sleep(1000)
+
+        driver.executeSql("INSERT INTO \"section-link\" (section, link) VALUES ('$secId', '$lnkId')")
+
+        // Joined read
+        val joined = driver.executeSql("SELECT s.name, w.description FROM section s JOIN workspace w ON s.workspace = w.id")
+        assertEquals(1, joined.rows.size)
+        assertTrue(joined.rows[0].contains("Dev"))
+        assertTrue(joined.rows[0].contains("My Board"))
+
+        // Transactional update
+        driver.beginTransaction()
+        driver.executeSql("UPDATE workspace SET description = 'Updated Board' WHERE id = '$wsId'")
+        driver.executeSql("INSERT INTO link (url, title) VALUES ('https://rust-lang.org', 'Rust')")
+        driver.commitTransaction()
+
+        val updated = driver.executeSql("SELECT description FROM workspace")
+        assertTrue(updated.rows[0].contains("Updated Board"))
+
+        // Type metadata bootstrap
+        val schemas = driver.listTypeSchemas()
+        assertEquals(4, schemas.size, "should have 4 type schemas")
+        val names = schemas.map { it.tableName }.sorted()
+        assertTrue(names.contains("link"))
+        assertTrue(names.contains("section"))
+        assertTrue(names.contains("section-link"))
+        assertTrue(names.contains("workspace"))
+    }
+
+    @Test
     fun testBundleExportImport() {
         // Register a sync node via FFI
         driver.registerNode("test-source")
