@@ -660,6 +660,43 @@ fn multi_table_schema_prd_scenario() {
         .stdout(predicate::str::contains("Dev"))
         .stdout(predicate::str::contains("My Board"));
 
+    // PRD table 4: section-link (hyphenated name, quoted identifier)
+    repo.zdb()
+        .args([
+            "query",
+            "CREATE TABLE \"section-link\" (section TEXT REFERENCES section(id), link TEXT REFERENCES link(id))",
+        ])
+        .assert()
+        .success();
+
+    std::thread::sleep(std::time::Duration::from_secs(1));
+
+    // Insert section-link connecting section and link
+    repo.zdb()
+        .args([
+            "query",
+            &format!(
+                "INSERT INTO \"section-link\" (section, link) VALUES ('{sec_id}', '{link_id}')"
+            ),
+        ])
+        .assert()
+        .success();
+
+    // Verify section-link is queryable
+    repo.zdb()
+        .args(["query", "SELECT section, link FROM \"section-link\""])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(&sec_id))
+        .stdout(predicate::str::contains(&link_id));
+
+    // Search: FTS5 should find the workspace zettel
+    repo.zdb()
+        .args(["search", "Board"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Board"));
+
     // Transaction: update workspace + insert another link atomically
     repo.zdb()
         .args([
@@ -683,6 +720,16 @@ fn multi_table_schema_prd_scenario() {
         .assert()
         .success()
         .stdout(predicate::str::contains("2"));
+
+    // Schema metadata: verify all 4 typedef types exist
+    repo.zdb()
+        .args([
+            "query",
+            "SELECT type, COUNT(*) FROM zettels WHERE type = '_typedef' GROUP BY type",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("4"));
 
     // Verify on-disk: workspace zettel has the FK backlink
     let sec_content = repo
