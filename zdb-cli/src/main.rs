@@ -158,12 +158,12 @@ enum Command {
         #[command(subcommand)]
         action: NodeAction,
     },
-    /// Export/import bundles for air-gapped sync
+    /// [experimental] Export/import bundles for air-gapped sync
     Bundle {
         #[command(subcommand)]
         action: BundleAction,
     },
-    /// Start GraphQL API server
+    /// [experimental] Start GraphQL API server
     Serve {
         #[arg(long, default_value = "2891")]
         port: u16,
@@ -174,31 +174,31 @@ enum Command {
         #[arg(long)]
         playground: bool,
     },
-    /// Attach a file to a zettel
+    /// [experimental] Attach a file to a zettel
     Attach {
         /// Zettel ID
         id: String,
         /// Path to the file to attach
         file: PathBuf,
     },
-    /// Detach a file from a zettel
+    /// [experimental] Detach a file from a zettel
     Detach {
         /// Zettel ID
         id: String,
         /// Filename to detach
         filename: String,
     },
-    /// List attachments on a zettel
+    /// [experimental] List attachments on a zettel
     Attachments {
         /// Zettel ID
         id: String,
     },
-    /// Get zettel by ID via NoSQL index (O(1) lookup)
+    /// [experimental] Get zettel by ID via NoSQL index (O(1) lookup)
     Get {
         /// Zettel ID
         id: String,
     },
-    /// Prefix scan by type or tag via NoSQL index
+    /// [experimental] Prefix scan by type or tag via NoSQL index
     Scan {
         /// Filter by zettel type
         #[arg(long, rename_all = "kebab-case")]
@@ -207,12 +207,12 @@ enum Command {
         #[arg(long)]
         tag: Option<String>,
     },
-    /// List backlinks via NoSQL index
+    /// [experimental] List backlinks via NoSQL index
     Backlinks {
         /// Zettel ID
         id: String,
     },
-    /// Update zdb to the latest release
+    /// [experimental] Update zdb to the latest release
     UpdateBin,
     /// Background update check (internal)
     #[command(name = "__update-check", hide = true)]
