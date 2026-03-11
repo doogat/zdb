@@ -18,6 +18,7 @@ use std::sync::Arc;
 use arc_swap::ArcSwap;
 use async_graphql::dynamic::Schema;
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
+use axum::http::header::HeaderName;
 use axum::{middleware, Extension, Router};
 
 use actor::ActorHandle;
@@ -112,7 +113,14 @@ pub async fn run(
         .layer(middleware::from_fn(auth::require_auth))
         .layer(Extension(AuthToken(token)))
         .layer(Extension(rest_actor))
-        .layer(Extension(shared_schema));
+        .layer(Extension(shared_schema))
+        .layer(axum::middleware::map_response(|mut res: axum::response::Response| async {
+            res.headers_mut().insert(
+                HeaderName::from_static("x-experimental"),
+                "true".parse().unwrap(),
+            );
+            res
+        }));
 
     let addr = format!("{}:{}", cfg.bind, cfg.port);
     eprintln!("listening on {addr}");
