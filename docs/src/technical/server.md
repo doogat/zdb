@@ -1,6 +1,8 @@
 # GraphQL Server
 
-ZettelDB exposes a GraphQL API via `zdb serve`, enabling mobile, desktop, and web clients to interact with the zettelkasten over HTTP.
+> **Experimental**: The server and all its protocols (GraphQL, REST, PgWire, WebSocket, NoSQL) are experimental and may change in future releases.
+
+ZettelDB exposes a GraphQL API via `zdb serve`, enabling mobile, desktop, and web clients to interact with the zettelkasten over HTTP. All responses include an `X-Experimental: true` header.
 
 ## Architecture
 

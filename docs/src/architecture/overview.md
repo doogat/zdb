@@ -38,6 +38,17 @@ ZettelDB is a modular monolith with 12 core library modules, a GraphQL server cr
 └─────────────────────────────────────────────────────────┘
 ```
 
+## Stability Tiers
+
+Features are classified as **stable** or **experimental**:
+
+| Tier | Scope |
+|------|-------|
+| Stable | CLI CRUD, search, query, sync, type management; Git storage format; FTS5; SQL DDL/DML; `zdb-core` public API |
+| Experimental | GraphQL server, REST, PgWire, WebSocket, NoSQL API, UniFFI bindings, bundles, attachments, auto-update |
+
+Stable APIs follow semver. Experimental APIs may change in any release.
+
 ## Hybrid Git-CRDT Strategy
 
 Git handles >99% of merges (non-overlapping edits). When Git detects a conflict, ZettelDB falls back to Automerge CRDT with per-zone merge strategies:
