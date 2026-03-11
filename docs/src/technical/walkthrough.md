@@ -5,7 +5,7 @@
 
 ZettelDB is a hybrid Git-CRDT decentralized Zettelkasten database written in Rust. Git stores the source of truth — plain Markdown files — while a derived SQLite index provides fast full-text search and SQL queries. When two devices edit the same zettel offline, Automerge CRDTs resolve conflicts automatically at the zone level (frontmatter, body, references).
 
-The codebase is a Cargo workspace with three crates:
+The codebase is a Cargo workspace with four crates:
 
 ```bash
 cat Cargo.toml
@@ -13,13 +13,14 @@ cat Cargo.toml
 
 ```rust
 [workspace]
-members = ["zdb-core", "zdb-cli", "zdb-server", "tests"]
+members = ["zdb-core", "zdb-cli", "zdb-server", "zdb-uniffi-bindgen", "tests"]
 resolver = "2"
 ```
 
 - **zdb-core** — the library crate with all domain logic (parser, git, CRDT, index, SQL, sync, compaction)
 - **zdb-cli** — the `zdb` binary (clap CLI)
 - **zdb-server** — async GraphQL + PostgreSQL wire-protocol server (axum, async-graphql, pgwire)
+- **zdb-uniffi-bindgen** — isolated UniFFI binding generator (keeps `uniffi_bindgen` out of normal builds)
 - **tests** — e2e test harness (assert_cmd + reqwest)
 
 All public API surfaces live in zdb-core. The other crates are thin consumers.
@@ -4003,3 +4004,72 @@ sed -n "353,374p" zdb-core/src/ffi.rs
 The FFI layer adds transaction buffer management around the same core `SqlEngine::execute` call. `SqlResultRecord` flattens the `SqlResult` enum into a UniFFI-safe struct. Transaction state (`TransactionBuffer`) is suspended from the ephemeral `SqlEngine` between calls and reinjected on the next call; the SAVEPOINT persists on `Index.conn` independently.
 
 Type discovery (`list_type_schemas`) reads typedef zettels from Git and parses their schemas — the same data source the server uses to build its dynamic GraphQL schema.
+
+## Cross-Process SQLite Safety — `busy_timeout`
+
+The `Index::open` constructor configures WAL mode and a 5-second busy timeout on every SQLite connection. This prevents `SQLITE_BUSY` errors when the host app and widgets/extensions share the same index file across processes.
+
+```bash
+sed -n "23,26p" zdb-core/src/indexer.rs
+```
+
+```rust
+    pub fn open(path: &Path) -> Result<Self> {
+        let conn = Connection::open(path)?;
+        conn.execute_batch("PRAGMA journal_mode=WAL;")?;
+        conn.execute_batch("PRAGMA busy_timeout=5000;")?;
+```
+
+WAL gives snapshot isolation: a reader always sees a consistent state even while another process writes. The busy timeout means if SQLite encounters a lock (e.g., during WAL checkpoint), it retries for up to 5 seconds instead of failing immediately.
+
+## Idempotent Schema Bootstrap — `CREATE TABLE IF NOT EXISTS`
+
+The SQL engine supports `IF NOT EXISTS` on `CREATE TABLE`, enabling idempotent schema bootstrap. This is critical for mobile host-shell apps where multiple feature modules register their tables at startup — each call is a safe no-op if the table already exists.
+
+```bash
+sed -n "331,359p" zdb-core/src/sql_engine.rs
+```
+
+```rust
+    fn handle_create_table(&mut self, ct: &sqlparser::ast::CreateTable) -> Result<SqlResult> {
+        let table_name = unquote_identifier(&ct.name.to_string());
+
+        if is_reserved_table(&table_name) {
+            return Err(ZettelError::SqlEngine(format!(
+                "reserved table name: {table_name}"
+            )));
+        }
+
+        // Check if typedef already exists
+        let existing: Option<String> = self
+            .index
+            .conn
+            .query_row(
+                "SELECT id FROM zettels WHERE type = '_typedef' AND title = ?1",
+                params![table_name],
+                |row| row.get(0),
+            )
+            .ok();
+        if existing.is_some() {
+            if ct.if_not_exists {
+                return Ok(SqlResult::Ok(format!(
+                    "table already exists, skipped: {table_name}"
+                )));
+            }
+            return Err(ZettelError::SqlEngine(format!(
+                "table already exists: {table_name}"
+            )));
+        }
+```
+
+When `if_not_exists` is true (parsed from the SQL AST by sqlparser), the engine returns a success message instead of erroring. Without the flag, a duplicate table still produces an error. The check queries the existing typedef zettels in the index.
+
+## Deployment Modes
+
+ZettelDB supports three deployment modes, each suited to different environments:
+
+1. **Server mode** (`zdb serve`): GraphQL/REST/PgWire over HTTP. Suited for web and desktop apps that talk to a local or networked backend. The server runs as a standalone process.
+
+2. **Embedded native** (UniFFI `ZettelDriver`): The app links ZettelDB directly via FFI bindings (Swift/Kotlin). No server process needed. The app owns the git repo and SQLite index. Suited for single native apps.
+
+3. **Host-shell model**: One installed mobile app with embedded `ZettelDriver`, shared across multiple feature modules. Each module contributes schema (`CREATE TABLE IF NOT EXISTS`), queries, and UI screens. The OS sees one app; users get several mini-apps. Required because mobile platforms sandbox apps and don't support shared local backends across installed apps.
