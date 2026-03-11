@@ -1820,7 +1820,7 @@ When a stale node returns after compaction has removed CRDT history, the conflic
 
 ## 13. CLI — `zdb-cli/src/main.rs`
 
-The `zdb` binary is a thin shell over `zdb-core`. Clap provides the command structure:
+The `zdb` binary is a thin shell over `zdb-core`. Clap provides the command structure. Subcommands are divided into **stable** and **experimental** tiers — experimental commands show an `[experimental]` prefix in `--help` output. See the Stability Tiers section below for the full classification.
 
 ```bash
 sed -n '11,125p' zdb-cli/src/main.rs
@@ -2030,6 +2030,8 @@ The updater provides zero-friction binary updates from pre-built releases at `gi
 The `__update-check` hidden subcommand exists solely as the background auto-update entry point.
 
 ## 14. Server — `zdb-server/`
+
+> **Experimental**: The entire server crate is experimental. All HTTP responses include an `X-Experimental: true` header via an axum `map_response` middleware layer applied after auth.
 
 The server exposes ZettelDB through three protocols: HTTP/GraphQL, WebSocket (for real-time events), and PostgreSQL wire protocol (pgwire).
 
@@ -4073,3 +4075,20 @@ ZettelDB supports three deployment modes, each suited to different environments:
 2. **Embedded native** (UniFFI `ZettelDriver`): The app links ZettelDB directly via FFI bindings (Swift/Kotlin). No server process needed. The app owns the git repo and SQLite index. Suited for single native apps.
 
 3. **Host-shell model**: One installed mobile app with embedded `ZettelDriver`, shared across multiple feature modules. Each module contributes schema (`CREATE TABLE IF NOT EXISTS`), queries, and UI screens. The OS sees one app; users get several mini-apps. Required because mobile platforms sandbox apps and don't support shared local backends across installed apps.
+
+## Stability Tiers
+
+Every public-facing feature is classified as **stable** or **experimental**:
+
+**Stable** (semver-protected from v0.1.0): CLI CRUD, search, query, sync, type management; Git storage format; FTS5; SQL DDL/DML; `zdb-core` public Rust API.
+
+**Experimental** (may break in any release): GraphQL server, REST, PgWire, WebSocket, NoSQL API, UniFFI bindings, bundles, attachments, auto-update.
+
+### How tiers are communicated
+
+| Surface | Mechanism |
+|---------|-----------|
+| CLI `--help` | `[experimental]` prefix on subcommand descriptions |
+| Server HTTP | `X-Experimental: true` response header (axum `map_response` layer) |
+| Docs | Blockquote warnings on experimental feature pages |
+| README | Dedicated stability section listing both tiers |
