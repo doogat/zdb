@@ -4,6 +4,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import com.doogat.hostshell.columnValue
 import uniffi.zdb_core.SqlResultRecord
 
 @Composable
@@ -38,9 +39,4 @@ fun ContactListScreen(
             if (i < rows.size - 1) HorizontalDivider()
         }
     }
-}
-
-private fun columnValue(row: List<String>, columns: List<String>, name: String): String {
-    val idx = columns.indexOf(name)
-    return if (idx in row.indices) row[idx] else ""
 }

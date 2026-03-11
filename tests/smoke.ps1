@@ -157,6 +157,15 @@ $output = zdb query "DELETE FROM foo WHERE id = '$FOO_ID'"
 if ($output -notmatch "1 row\(s\) affected") { throw "delete failed" }
 pass "sql ddl/dml"
 
+# 11b. CREATE TABLE IF NOT EXISTS (idempotent)
+$output = zdb query "CREATE TABLE IF NOT EXISTS foo (bar TEXT, baz INTEGER)"
+if ($output -notmatch "already exists") { throw "IF NOT EXISTS on existing table failed" }
+$output = zdb query "CREATE TABLE IF NOT EXISTS newifne (x TEXT)"
+if ($output -notmatch "table newifne created") { throw "IF NOT EXISTS new table failed" }
+$output = zdb query "CREATE TABLE IF NOT EXISTS newifne (x TEXT)"
+if ($output -notmatch "already exists") { throw "IF NOT EXISTS idempotent failed" }
+pass "create table if not exists (idempotent)"
+
 # 12. install bundled type
 $output = zdb type install contact
 if ($output -notmatch "installed type") { throw "type install failed" }

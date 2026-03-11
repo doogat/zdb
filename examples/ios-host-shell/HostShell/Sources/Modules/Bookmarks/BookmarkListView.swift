@@ -12,9 +12,9 @@ struct BookmarkListView: View {
                 let row = bookmarks[i]
                 NavigationLink(destination: BookmarkDetailView(row: row, columns: columns)) {
                     VStack(alignment: .leading) {
-                        Text(columnValue(row, "title"))
+                        Text(columnValue(row, columns, "title"))
                             .font(.headline)
-                        Text(columnValue(row, "url"))
+                        Text(columnValue(row, columns, "url"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -45,10 +45,6 @@ struct BookmarkListView: View {
         }
     }
 
-    private func columnValue(_ row: [String], _ name: String) -> String {
-        guard let idx = columns.firstIndex(of: name), idx < row.count else { return "" }
-        return row[idx]
-    }
 }
 
 struct AddBookmarkView: View {
@@ -79,8 +75,10 @@ struct AddBookmarkView: View {
 
     private func save() {
         do {
+            let t = title.replacingOccurrences(of: "'", with: "''")
+            let u = url.replacingOccurrences(of: "'", with: "''")
             _ = try appState.driver.executeSql(
-                sql: "INSERT INTO bookmark (title, url) VALUES ('\(title)', '\(url)')"
+                sql: "INSERT INTO bookmark (title, url) VALUES ('\(t)', '\(u)')"
             )
             onSave()
             dismiss()

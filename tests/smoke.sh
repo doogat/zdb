@@ -105,6 +105,12 @@ $ZDB query "SELECT baz FROM foo WHERE id = '$FOO_ID'" | grep -q "99"
 $ZDB query "DELETE FROM foo WHERE id = '$FOO_ID'" | grep -q "1 row(s) affected"
 pass "sql ddl/dml"
 
+# 11b. CREATE TABLE IF NOT EXISTS (idempotent)
+$ZDB query "CREATE TABLE IF NOT EXISTS foo (bar TEXT, baz INTEGER)" | grep -q "already exists"
+$ZDB query "CREATE TABLE IF NOT EXISTS newifne (x TEXT)" | grep -q "table newifne created"
+$ZDB query "CREATE TABLE IF NOT EXISTS newifne (x TEXT)" | grep -q "already exists"
+pass "create table if not exists (idempotent)"
+
 # 12. install bundled type
 $ZDB type install contact | grep -q "installed type"
 pass "type install"

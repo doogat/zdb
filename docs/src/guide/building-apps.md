@@ -371,7 +371,7 @@ driver.executeSql("CREATE TABLE IF NOT EXISTS contact (name TEXT NOT NULL, email
 
 ### Relationship to embedded parity
 
-The host-shell model depends on full embedded API parity between `ZettelDriver` and `zdb serve`. See [PRD 00016](../../.local/prds/done/00016-embedded-app-api-parity-v1.md) for the parity backlog.
+The host-shell model depends on full embedded API parity between `ZettelDriver` and `zdb serve`.
 
 ## Worked example: link dashboard
 

@@ -11,15 +11,15 @@ struct ContactListView: View {
             List(contacts.indices, id: \.self) { i in
                 let row = contacts[i]
                 VStack(alignment: .leading) {
-                    Text(columnValue(row, "name"))
+                    Text(columnValue(row, columns, "name"))
                         .font(.headline)
-                    if !columnValue(row, "email").isEmpty {
-                        Text(columnValue(row, "email"))
+                    if !columnValue(row, columns, "email").isEmpty {
+                        Text(columnValue(row, columns, "email"))
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
-                    if !columnValue(row, "relationship").isEmpty {
-                        Text(columnValue(row, "relationship"))
+                    if !columnValue(row, columns, "relationship").isEmpty {
+                        Text(columnValue(row, columns, "relationship"))
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
                     }
@@ -50,10 +50,6 @@ struct ContactListView: View {
         }
     }
 
-    private func columnValue(_ row: [String], _ name: String) -> String {
-        guard let idx = columns.firstIndex(of: name), idx < row.count else { return "" }
-        return row[idx]
-    }
 }
 
 struct AddContactView: View {
@@ -86,8 +82,11 @@ struct AddContactView: View {
 
     private func save() {
         do {
+            let n = name.replacingOccurrences(of: "'", with: "''")
+            let e = email.replacingOccurrences(of: "'", with: "''")
+            let r = relationship.replacingOccurrences(of: "'", with: "''")
             _ = try appState.driver.executeSql(
-                sql: "INSERT INTO contact (name, email, relationship) VALUES ('\(name)', '\(email)', '\(relationship)')"
+                sql: "INSERT INTO contact (name, email, relationship) VALUES ('\(n)', '\(e)', '\(r)')"
             )
             onSave()
             dismiss()

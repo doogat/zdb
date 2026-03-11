@@ -130,8 +130,10 @@ Share extensions let users send content to your app from other apps (Safari, Pho
 // In ShareViewController
 func didSelectPost() {
     let driver = try ZettelDriver(repoPath: appGroupRepoPath)
+    let t = title.replacingOccurrences(of: "'", with: "''")
+    let u = url.replacingOccurrences(of: "'", with: "''")
     try driver.executeSql("""
-        INSERT INTO bookmark (title, url) VALUES ('\(title)', '\(url)')
+        INSERT INTO bookmark (title, url) VALUES ('\(t)', '\(u)')
     """)
     // Driver dropped, git commit is atomic
     extensionContext?.completeRequest(returningItems: nil)
@@ -151,7 +153,8 @@ Action extensions (e.g., "Open in ZettelDB") are read-only — they display data
 override fun onCreate(savedInstanceState: Bundle?) {
     val url = intent.getStringExtra(Intent.EXTRA_TEXT) ?: return finish()
     val driver = ZettelDriver(repoPath = appGroupRepoPath)
-    driver.executeSql("INSERT INTO bookmark (title, url) VALUES ('Shared', '$url')")
+    val safeUrl = url.replace("'", "''")
+    driver.executeSql("INSERT INTO bookmark (title, url) VALUES ('Shared', '$safeUrl')")
     finish()
 }
 ```
