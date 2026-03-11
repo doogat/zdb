@@ -2,6 +2,37 @@
 
 This page covers platform-specific constraints for mobile host-shell apps. Read [Building Apps](./building-apps.md#mobile-mini-apps) first for the host-shell architecture.
 
+## Cross-Process Safety
+
+When the host app and widgets/extensions run in separate processes, they share the same SQLite index file. ZettelDB uses WAL mode and a 5-second busy timeout to coordinate access safely.
+
+### Rules
+
+1. **Host app is the sole writer.** Only the host app process should create, update, or delete zettels. Widgets and extensions read from the index only.
+2. **Widgets open read-only connections.** Use `SQLITE_OPEN_READONLY` (iOS) or `SQLiteDatabase.OPEN_READONLY` (Android) when opening `index.db` from a widget.
+3. **WAL provides snapshot isolation.** A widget reading during a host app write sees a consistent pre-write snapshot — no torn reads, no locks.
+4. **busy_timeout prevents SQLITE_BUSY.** If the host app is mid-checkpoint while a widget opens a connection, the widget retries for up to 5 seconds instead of failing immediately.
+5. **Don't checkpoint from widgets.** Only the host app should checkpoint the WAL file. Widgets should leave `PRAGMA wal_checkpoint` alone.
+
+### Exception: iOS Share Extension
+
+A Share Extension may create a single zettel via an ephemeral `ZettelDriver`. This is safe because:
+- Git commits are atomic (single file write + index update)
+- The host app reindexes on next launch
+- The extension closes the driver immediately after the operation
+
+Do not hold `ZettelDriver` open in an extension beyond the single operation.
+
+### What can go wrong
+
+| Scenario | Outcome |
+|----------|---------|
+| Widget reads during host app write | Safe — WAL snapshot isolation |
+| Widget reads during host app reindex | Safe — sees pre-reindex snapshot |
+| Host app killed mid-write | Safe — SQLite WAL recovery on next open |
+| Extension creates zettel while host app is running | Git lockfile serializes; one waits for the other |
+| Two extensions write simultaneously | Git lockfile serializes; unlikely in practice |
+
 ## Background Execution
 
 ### iOS
@@ -151,14 +182,24 @@ Conflicts are resolved automatically by the CRDT resolver — no user interventi
 
 ## Performance Considerations
 
-### Cold start
+### Cold start budget
 
 ZettelDriver initialization includes:
 - Opening the git repo (~1-5ms)
 - Opening/creating the SQLite index (~1-5ms)
-- Schema bootstrap per module (~10-50ms per CREATE TABLE check)
+- Schema bootstrap per module (~10-50ms per `listTypeSchemas()` + `CREATE TABLE` check)
 
-At 100 zettels, total cold start is under 100ms. At 1K zettels, under 200ms. These numbers are from the FFI performance tests (see [FFI docs](../technical/ffi.md)).
+Reference numbers from FFI performance tests (macOS, Apple Silicon):
+
+| Repo size | Cold start | Create zettel | Search | Reindex |
+|-----------|-----------|---------------|--------|---------|
+| Empty | <50ms | ~20ms | <5ms | <10ms |
+| 100 zettels | <100ms | ~25ms | <10ms | ~200ms |
+| 1K zettels | <200ms | ~30ms | <15ms | ~2s |
+
+Mobile devices are slower — expect 2-3x these numbers on older phones. A 1K-zettel repo should still initialize in under 500ms on modern devices.
+
+**Recommendation**: initialize `ZettelDriver` on a background thread and show a loading indicator. Don't block the main/UI thread.
 
 ### Index reuse
 
@@ -168,6 +209,30 @@ The SQLite index persists across app launches. A full reindex is only needed whe
 - The user explicitly requests it
 
 For normal app launches with no sync changes, the existing index is used as-is — no reindex cost.
+
+#### Checking index freshness
+
+To avoid unnecessary reindex after sync, compare the git HEAD commit before and after sync:
+
+```swift
+// Swift pseudocode
+let headBefore = lastKnownHead  // stored in UserDefaults
+driver.sync()                    // fetch + merge + push
+let headAfter = currentGitHead() // read from .git/HEAD
+if headBefore != headAfter {
+    driver.reindex()
+    UserDefaults.standard.set(headAfter, forKey: "lastIndexedHead")
+}
+```
+
+### Lazy vs eager reindex
+
+| Strategy | When to use |
+|----------|-------------|
+| **Eager** (reindex at launch) | Small repos (<500 zettels), sync always runs at launch |
+| **Lazy** (reindex after sync only) | Larger repos, sync is user-triggered or background |
+
+For most mobile apps, lazy reindex is better — users open the app far more often than they sync.
 
 ### Memory pressure
 
