@@ -3954,67 +3954,52 @@ sed -n '254,263p' zdb-core/src/ffi.rs
 
 Both test suites now use `ZettelDriver.createRepo()` and `registerNode()` instead of shelling out to the `zdb` CLI binary. This removes the `Process()` dependency and makes tests portable to iOS simulator and Android instrumented test targets.
 
-## App-Building Integration Surfaces
+## Embedded–Server SQL Parity
 
-The app-building guide now documents `zdb serve` as the recommended backend contract for beta applications. That recommendation follows directly from the server code: typed SQL mutations go through the actor, use the SQL engine, and trigger a schema reload when DDL changes the available GraphQL types.
+Both the server actor and `ZettelDriver` (FFI) delegate typed SQL execution to the same `SqlEngine` in `zdb-core`. The server constructs `SqlEngine::new(index, repo)` per command; the FFI path does the same per `execute_sql` call. This ensures identical Git-backed semantics for single-statement DDL and DML across both paths.
 
-The current UniFFI path is intentionally described more narrowly. `ZettelDriver::execute_sql` does not delegate to the SQL engine or the actor; it calls the low-level SQLite index directly and returns only an affected-row count. That is useful for narrow native integration work, but it is not the same typed app-backend surface that the server exposes.
+**Transaction difference**: The embedded path supports multi-statement transactions via `begin_transaction`/`commit_transaction`/`rollback_transaction`, which suspend and resume a `TransactionBuffer` across calls. The server creates a fresh `SqlEngine` per `executeSql` command, so BEGIN/COMMIT/ROLLBACK cannot span multiple GraphQL or pgwire calls — each statement executes atomically in isolation. Multi-statement transactions are an embedded-only capability.
 
 ```bash
-sed -n '1038,1065p' zdb-server/src/schema.rs
+sed -n "655,658p" zdb-server/src/actor.rs
 ```
 
 ```rust
-        );
-    }
-
-    // executeSql
-    {
-        mutation = mutation.field(
-            Field::new("executeSql", TypeRef::named_nn("SqlResult"), |ctx| {
-                FieldFuture::new(async move {
-                    let a = ctx.data::<ActorHandle>()?;
-                    let sql = ctx.args.try_get("sql")?.string()?.to_string();
-                    let result = a.execute_sql(sql.clone()).await.map_err(to_server_error)?;
-
-                    // Await schema reload if this was a typedef-mutating statement
-                    let upper = sql.to_uppercase();
-                    if upper.contains("CREATE TABLE")
-                        || upper.contains("DROP TABLE")
-                        || upper.contains("ALTER TABLE")
-                    {
-                        if let Ok(reloader) = ctx.data::<Arc<SchemaReloader>>() {
-                            reloader.trigger_reload_and_wait().await;
-                        }
-                    }
-
-                    Ok(Some(FieldValue::owned_any(sql_result_to_value(&result))))
-                })
-            })
-            .argument(InputValue::new("sql", TypeRef::named_nn(TypeRef::STRING))),
-        );
+        ActorCommand::ExecuteSql { sql } => {
+            let mut engine = SqlEngine::new(index, repo);
+            ActorReply::SqlResult(engine.execute(&sql))
+        }
 ```
 
 ```bash
-sed -n '264,280p' zdb-core/src/ffi.rs
+sed -n "353,374p" zdb-core/src/ffi.rs
 ```
 
 ```rust
-    }
-
-    pub fn list_zettels(&self) -> Result<Vec<String>, ZdbError> {
-        let repo = self.repo.lock().unwrap();
-        repo.list_zettels().map_err(ZdbError::from)
-    }
-
-    pub fn execute_sql(&self, sql: String) -> Result<String, ZdbError> {
+    pub fn execute_sql(&self, sql: String) -> Result<SqlResultRecord, ZdbError> {
         let index = self.index.lock().unwrap();
-        let affected = index.execute_sql(&sql, &[]).map_err(ZdbError::from)?;
-        Ok(affected.to_string())
-    }
+        let repo = self.repo.lock().unwrap();
+        let mut engine = crate::sql_engine::SqlEngine::new(&index, &*repo);
 
-    pub fn attach_file(
-        &self,
-        zettel_id: String,
-        file_path: String,
+        // If a transaction is active, inject the buffered state.
+        let mut txn_guard = self.txn.lock().unwrap();
+        if let Some(buf) = txn_guard.take() {
+            engine.resume_transaction(buf);
+        }
+
+        let result = engine.execute(&sql).map_err(|e| {
+            // On error, preserve transaction state if still active.
+            *txn_guard = engine.suspend_transaction();
+            ZdbError::from(e)
+        })?;
+
+        // Preserve transaction state for subsequent calls.
+        *txn_guard = engine.suspend_transaction();
+
+        Ok(result.into())
+    }
 ```
+
+The FFI layer adds transaction buffer management around the same core `SqlEngine::execute` call. `SqlResultRecord` flattens the `SqlResult` enum into a UniFFI-safe struct. Transaction state (`TransactionBuffer`) is suspended from the ephemeral `SqlEngine` between calls and reinjected on the next call; the SAVEPOINT persists on `Index.conn` independently.
+
+Type discovery (`list_type_schemas`) reads typedef zettels from Git and parses their schemas — the same data source the server uses to build its dynamic GraphQL schema.

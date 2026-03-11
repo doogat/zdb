@@ -24,6 +24,14 @@ A single actor thread owns all core resources (`GitRepo`, `Index`), satisfying t
 
 The actor bridges sync and async worlds: it runs on `std::thread::spawn` with `blocking_recv()`, while the HTTP layer is fully async (tokio + axum). Communication uses `tokio::sync::mpsc` for commands and `oneshot` channels for replies.
 
+## Shared Application Contract
+
+Both the server and embedded (`ZettelDriver`) paths delegate typed SQL execution to the same `SqlEngine` in `zdb-core`. The server actor constructs `SqlEngine::new(index, repo)` per command; `ZettelDriver` does the same per `execute_sql` call. This ensures identical semantics for single statements: DDL creates typedef zettels via Git, DML reads/writes Git-backed zettels.
+
+**Transaction difference**: The embedded path (`ZettelDriver`) supports multi-statement transactions via `begin_transaction`/`commit_transaction`/`rollback_transaction`, which suspend and resume a `TransactionBuffer` across calls. The server path creates a fresh `SqlEngine` per `executeSql` command, so BEGIN/COMMIT/ROLLBACK cannot span multiple GraphQL or pgwire calls — each statement executes atomically in isolation. Multi-statement transactions are an embedded-only capability.
+
+See [FFI Bindings](./ffi.md) for the embedded side of this contract.
+
 ## Running
 
 ```bash
