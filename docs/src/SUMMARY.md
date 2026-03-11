@@ -41,4 +41,5 @@
 - [Search & Queries](./guide/search.md)
 - [Multi-Device Sync](./guide/sync.md)
 - [Building Apps](./guide/building-apps.md)
+- [Mobile Constraints](./guide/mobile-constraints.md)
 - [Zettel Format Reference](./guide/format-reference.md)
