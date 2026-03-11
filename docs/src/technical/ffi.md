@@ -1,5 +1,7 @@
 # FFI Bindings
 
+> **Experimental**: UniFFI bindings are experimental and may change in future releases. Do not depend on API stability.
+
 **Source**: `zdb-core/src/ffi.rs`
 
 UniFFI-based foreign function interface exposing ZettelDB to Swift and Kotlin via a high-level `ZettelDriver` facade.
