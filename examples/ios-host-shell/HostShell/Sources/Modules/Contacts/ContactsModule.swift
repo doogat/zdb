@@ -4,8 +4,8 @@ struct ContactsModule: ZDBModule {
     static let tables = ["contact"]
 
     static func bootstrap(_ driver: ZettelDriver) throws {
-        try createTableIfNeeded(driver, name: "contact", ddl: """
-            CREATE TABLE contact (
+        _ = try driver.executeSql(sql: """
+            CREATE TABLE IF NOT EXISTS contact (
                 name TEXT NOT NULL,
                 relationship TEXT,
                 email TEXT

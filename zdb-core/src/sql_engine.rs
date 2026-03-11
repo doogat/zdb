@@ -348,6 +348,11 @@ impl<'a> SqlEngine<'a> {
             )
             .ok();
         if existing.is_some() {
+            if ct.if_not_exists {
+                return Ok(SqlResult::Ok(format!(
+                    "table already exists, skipped: {table_name}"
+                )));
+            }
             return Err(ZettelError::SqlEngine(format!(
                 "table already exists: {table_name}"
             )));
@@ -1718,6 +1723,30 @@ mod tests {
         let mut engine = SqlEngine::new(&index, &repo);
 
         engine.execute("CREATE TABLE projects (name TEXT)").unwrap();
+        let err = engine
+            .execute("CREATE TABLE projects (name TEXT)")
+            .unwrap_err();
+        assert!(format!("{err}").contains("already exists"));
+    }
+
+    #[test]
+    fn create_table_if_not_exists_is_idempotent() {
+        let (_dir, repo, index) = setup();
+        let mut engine = SqlEngine::new(&index, &repo);
+
+        engine
+            .execute("CREATE TABLE IF NOT EXISTS projects (name TEXT)")
+            .unwrap();
+        // Second call with IF NOT EXISTS should succeed (no-op)
+        let result = engine
+            .execute("CREATE TABLE IF NOT EXISTS projects (name TEXT)")
+            .unwrap();
+        match &result {
+            SqlResult::Ok(msg) => assert!(msg.contains("skipped")),
+            other => panic!("expected SqlResult::Ok, got {other:?}"),
+        }
+
+        // Without IF NOT EXISTS should still error
         let err = engine
             .execute("CREATE TABLE projects (name TEXT)")
             .unwrap_err();

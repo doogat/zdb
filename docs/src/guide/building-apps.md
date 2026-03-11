@@ -351,21 +351,23 @@ On app launch, the host shell initializes `ZettelDriver` once, then each module 
 // iOS example
 let driver = try ZettelDriver.createRepo(repoPath: appGroupRepoPath)
 
-// Each module bootstraps its schema
-BookmarksModule.bootstrap(driver)  // CREATE TABLE bookmark (...)
-ContactsModule.bootstrap(driver)   // CREATE TABLE contact (...)
+// Each module bootstraps its schema (idempotent)
+try driver.executeSql(sql: "CREATE TABLE IF NOT EXISTS category (name TEXT NOT NULL)")
+try driver.executeSql(sql: "CREATE TABLE IF NOT EXISTS bookmark (title TEXT NOT NULL, url TEXT NOT NULL, category TEXT REFERENCES category(id))")
+try driver.executeSql(sql: "CREATE TABLE IF NOT EXISTS contact (name TEXT NOT NULL, email TEXT)")
 ```
 
 ```kotlin
 // Android example
 val driver = ZettelDriver.createRepo(repoPath = appPrivateRepoPath)
 
-// Each module bootstraps its schema
-BookmarksModule.bootstrap(driver)  // CREATE TABLE bookmark (...)
-ContactsModule.bootstrap(driver)   // CREATE TABLE contact (...)
+// Each module bootstraps its schema (idempotent)
+driver.executeSql("CREATE TABLE IF NOT EXISTS category (name TEXT NOT NULL)")
+driver.executeSql("CREATE TABLE IF NOT EXISTS bookmark (title TEXT NOT NULL, url TEXT NOT NULL, category TEXT REFERENCES category(id))")
+driver.executeSql("CREATE TABLE IF NOT EXISTS contact (name TEXT NOT NULL, email TEXT)")
 ```
 
-Modules should check whether their tables exist before creating them (e.g. via `list_type_schemas()`) since `CREATE TABLE` errors on duplicates. A future `CREATE TABLE IF NOT EXISTS` will make this simpler.
+`CREATE TABLE IF NOT EXISTS` is idempotent — if the table already exists, it's a no-op.
 
 ### Relationship to embedded parity
 
