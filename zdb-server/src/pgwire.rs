@@ -2,8 +2,8 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use futures::sink::Sink;
-use futures::stream;
+use futures_util::sink::Sink;
+use futures_util::stream;
 use tokio::net::TcpListener;
 
 use rand::Rng as _;

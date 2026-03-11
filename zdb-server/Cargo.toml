@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 zdb-core = { path = "../zdb-core", features = ["nosql"] }
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["fs", "macros", "net", "rt-multi-thread", "sync", "time"] }
 arc-swap = "1"
 axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22"
@@ -14,7 +14,6 @@ async-graphql-axum = "7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 chrono = "0.4"
-futures = "0.3"
 futures-util = "0.3"
 async-trait = "0.1"
 pgwire = "0.25"
@@ -27,9 +26,9 @@ toml = "0.8"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports", "async_tokio"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
 tempfile = "3"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["fs", "macros", "net", "rt-multi-thread", "sync", "time"] }
 tokio-postgres = "0.7"
 
 [[bench]]
