@@ -2800,4 +2800,89 @@ Widget
         assert_eq!(broken[0].0, "20260301100001");
         assert_eq!(broken[0].1, "20260301100000");
     }
+
+    #[test]
+    fn concurrent_read_during_write() {
+        // Simulates widget/extension reading index while host app writes.
+        // Two Index instances on the same DB — WAL + busy_timeout must handle this.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("index.db");
+
+        let writer = Index::open(&db_path).unwrap();
+
+        // Index a zettel via the writer
+        let zettel = sample_zettel();
+        writer.index_zettel(&zettel).unwrap();
+
+        // Open a second read-only connection (simulates widget process)
+        let reader = Index::open(&db_path).unwrap();
+
+        // Reader sees the zettel written by writer
+        let results = reader.search("searchable").unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].id, "20260226120000");
+
+        // Writer can still write while reader is open
+        let zettel2 = ParsedZettel {
+            meta: ZettelMeta {
+                id: Some(ZettelId("20260226120001".into())),
+                title: Some("Second Note".into()),
+                date: Some("2026-02-26".into()),
+                zettel_type: Some("permanent".into()),
+                tags: vec![],
+                extra: Default::default(),
+            },
+            body: "Another body".into(),
+            reference_section: String::new(),
+            inline_fields: vec![],
+            wikilinks: vec![],
+            path: "zettelkasten/20260226120001.md".into(),
+        };
+        writer.index_zettel(&zettel2).unwrap();
+
+        // Reader sees both zettels (WAL allows concurrent read + write)
+        let all = reader
+            .conn
+            .prepare("SELECT id FROM zettels ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<std::result::Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn concurrent_readers_no_contention() {
+        // Multiple simultaneous readers should never block each other.
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("index.db");
+
+        let writer = Index::open(&db_path).unwrap();
+        let zettel = sample_zettel();
+        writer.index_zettel(&zettel).unwrap();
+
+        // Open three concurrent readers
+        let r1 = Index::open(&db_path).unwrap();
+        let r2 = Index::open(&db_path).unwrap();
+        let r3 = Index::open(&db_path).unwrap();
+
+        // All three read successfully
+        assert_eq!(r1.search("searchable").unwrap().len(), 1);
+        assert_eq!(r2.search("searchable").unwrap().len(), 1);
+        assert_eq!(r3.search("searchable").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn busy_timeout_is_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("index.db");
+        let index = Index::open(&db_path).unwrap();
+
+        let timeout: i64 = index
+            .conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(timeout, 5000);
+    }
 }
