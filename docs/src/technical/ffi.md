@@ -101,6 +101,9 @@ Returns `SqlResultRecord`:
 | `reindex()` | `index.rebuild` |
 | `register_node(name)` | `sync_manager::register_node`, returns UUID |
 | `compact()` | `SyncManager::open` → `compaction::compact` |
+| `export_full_bundle(output_path)` | `bundle::export_full_bundle`, returns path |
+| `export_delta_bundle(target_node_uuid, output_path)` | `bundle::export_bundle`, returns path |
+| `import_bundle(bundle_path)` | `bundle::import_bundle` |
 
 ## Error Mapping
 

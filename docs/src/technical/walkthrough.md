@@ -3892,9 +3892,21 @@ sed -n '254,263p' zdb-core/src/ffi.rs
 
 `register_node` delegates to `sync_manager::register_node()` which generates a UUID, writes a `.nodes/{uuid}.toml` file, and stores the UUID locally in `.git/zdb-node`.
 
+### Bundle Export via FFI
+
+`ZettelDriver` exposes three bundle methods:
+
+- `export_full_bundle(output_path)` — delegates to `bundle::export_full_bundle`, creates a tar with `target_node = "*"` containing all refs
+- `export_delta_bundle(target_node_uuid, output_path)` — delegates to `bundle::export_bundle`, creates a tar containing only commits the target hasn't seen (based on `known_heads` in `.nodes/{uuid}.toml`)
+- `import_bundle(bundle_path)` — delegates to `bundle::import_bundle`, unbundles, merges, resolves conflicts, and reindexes
+
+All three follow the same lock pattern: acquire `repo` mutex, open `SyncManager`, delegate, map errors to `ZdbError`.
+
 ### Swift/Kotlin Test Compatibility
 
 Both test suites now use `ZettelDriver.createRepo()` and `registerNode()` instead of shelling out to the `zdb` CLI binary. This removes the `Process()` dependency and makes tests portable to iOS simulator and Android instrumented test targets.
+
+The delta bundle binding tests (`testDeltaBundleExportImport`) use shell commands (`git add`/`git commit`) to set up a fake remote node with `known_heads` — the FFI doesn't expose low-level node config writes, so tests write `.nodes/{uuid}.toml` directly and commit via git CLI.
 
 ## Embedded–Server SQL Parity
 
@@ -4031,3 +4043,9 @@ Every public-facing feature is classified as **stable** or **experimental**:
 | Server HTTP | `X-Experimental: true` response header (axum `map_response` layer) |
 | Docs | Blockquote warnings on experimental feature pages |
 | README | Dedicated stability section listing both tiers |
+
+## Local Backlog PRDs
+
+Not every unresolved spec-to-implementation gap belongs in the published docs immediately. The repository also keeps local planning artifacts under `.local/prds/backlog/` for work that has been identified, scoped, but not yet implemented.
+
+At the moment that backlog includes PRDs for the major unresolved deltas discussed elsewhere in the docs: sparse index, fsmonitor-equivalent change tracking, background Git maintenance, pre-compaction backup export, NFR-03 sync performance, a server read fast path, UniFFI delta bundle export, and browser-compatible WebSocket auth. Those files are intentionally lightweight: each one captures the problem, implementation scope, success criteria, and non-goals so follow-up work can start without re-deriving the original context from the spec and deviation logs.

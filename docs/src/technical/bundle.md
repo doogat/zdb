@@ -65,6 +65,14 @@ let manifest = bundle::verify_bundle(&path)?;
 // Returns BundleManifest without importing
 ```
 
+## FFI Access
+
+Both export modes and import are available through `ZettelDriver` (UniFFI bindings):
+
+- `exportFullBundle(outputPath)` — full export
+- `exportDeltaBundle(targetNodeUuid, outputPath)` — delta export targeting a specific node
+- `importBundle(bundlePath)` — import with merge and reindex
+
 ## Security
 
 Bundles include a SHA-256 checksum covering all files except the checksum itself. Import verifies this checksum before processing any git objects.
