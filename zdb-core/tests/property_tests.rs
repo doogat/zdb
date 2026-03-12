@@ -6,7 +6,7 @@
 
 use proptest::prelude::*;
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use zdb_core::crdt_resolver;
 use zdb_core::indexer::Index;
 use zdb_core::parser;
@@ -1588,5 +1588,270 @@ proptest! {
             source.head = commit_y;
             prop_assert!(idx.is_stale(&source).unwrap());
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FTS5 + type-inference generators
+// ---------------------------------------------------------------------------
+
+/// Generate strings with FTS5-special characters and operators.
+fn arb_fts5_query() -> impl Strategy<Value = String> {
+    prop_oneof![
+        Just("*".to_string()),
+        Just("\"".to_string()),
+        Just("NEAR".to_string()),
+        Just("AND".to_string()),
+        Just("OR".to_string()),
+        Just("NOT".to_string()),
+        Just("(".to_string()),
+        Just(")".to_string()),
+        Just("^".to_string()),
+        Just("+".to_string()),
+        Just("-".to_string()),
+        Just("NEAR(a b, 2)".to_string()),
+        Just("\"unterminated".to_string()),
+        Just("a AND OR b".to_string()),
+        Just("((())".to_string()),
+        Just("a* OR b*".to_string()),
+        Just("NOT NOT NOT a".to_string()),
+        // Random mixes of FTS5 operators
+        (safe_word(), safe_word()).prop_map(|(a, b)| format!("{a} AND {b}")),
+        (safe_word(), safe_word()).prop_map(|(a, b)| format!("{a} OR {b}")),
+        (safe_word(), safe_word()).prop_map(|(a, b)| format!("{a} NOT {b}")),
+        (safe_word(), safe_word()).prop_map(|(a, b)| format!("NEAR({a} {b})")),
+        (safe_word(),).prop_map(|(a,)| format!("\"{a}\"*")),
+        (safe_word(),).prop_map(|(a,)| format!("^{a}")),
+    ]
+}
+
+/// Generate long query strings (1K+ characters).
+fn arb_long_query() -> impl Strategy<Value = String> {
+    prop::collection::vec("[a-zA-Z0-9 *\"()]{1,20}", 60..=120)
+        .prop_map(|parts| parts.join(" "))
+}
+
+/// Generate a vec of (key, Value) pairs where the same key maps to different
+/// Value types across items — used to test type widening.
+fn arb_mixed_type_extras() -> impl Strategy<Value = Vec<Vec<(String, Value)>>> {
+    let key = prop_oneof![
+        Just("xMixed".to_string()),
+        Just("xField".to_string()),
+    ];
+    let values = prop::collection::vec(
+        (key.clone(), arb_value_leaf()),
+        3..=6,
+    );
+    // Return a vec of single-entry extra maps, each with the same key but
+    // potentially different Value types.
+    values.prop_map(|pairs| {
+        pairs.into_iter().map(|(k, v)| vec![(k, v)]).collect()
+    })
+}
+
+/// Create a seeded index with 3 hardcoded zettels for FTS5 fuzzing.
+/// Returns (TempDir, Index) — caller must keep TempDir alive.
+fn seed_index_with_sample_data() -> (tempfile::TempDir, Index) {
+    let mut source = MockSource::new();
+    source.files.insert(
+        "zettelkasten/20250101000000.md".into(),
+        "---\nid: \"20250101000000\"\ntitle: Alpha note\ntags: [rust, testing]\n---\nThis is the first zettel about Rust programming.\n".into(),
+    );
+    source.files.insert(
+        "zettelkasten/20250101000001.md".into(),
+        "---\nid: \"20250101000001\"\ntitle: Beta note\ntags: [python, data]\n---\nSecond zettel covers Python data analysis.\n".into(),
+    );
+    source.files.insert(
+        "zettelkasten/20250101000002.md".into(),
+        "---\nid: \"20250101000002\"\ntitle: Gamma note\ntags: [rust, wasm]\n---\nThird zettel about WebAssembly and Rust.\n".into(),
+    );
+
+    let dir = tempfile::TempDir::new().unwrap();
+    let idx = Index::open(&dir.path().join("fts.db")).unwrap();
+    idx.rebuild(&source).unwrap();
+    (dir, idx)
+}
+
+// ---------------------------------------------------------------------------
+// FTS5 query fuzzing (Task #8)
+// ---------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(500))]
+
+    /// Random ASCII strings as search queries never panic.
+    #[test]
+    fn fts5_random_query_no_crash(query in "[\\x20-\\x7E]{0,200}") {
+        let (_dir, idx) = seed_index_with_sample_data();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = idx.search(&query);
+        }));
+        prop_assert!(result.is_ok(), "panicked on query: {:?}", query);
+    }
+
+    /// FTS5 operator strings never panic.
+    #[test]
+    fn fts5_special_operators_no_crash(query in arb_fts5_query()) {
+        let (_dir, idx) = seed_index_with_sample_data();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = idx.search(&query);
+        }));
+        prop_assert!(result.is_ok(), "panicked on FTS5 query: {:?}", query);
+    }
+
+    /// Long queries (1K+ chars) never panic.
+    #[test]
+    fn fts5_long_query_no_crash(query in arb_long_query()) {
+        let (_dir, idx) = seed_index_with_sample_data();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = idx.search(&query);
+        }));
+        prop_assert!(result.is_ok(), "panicked on long query (len={})", query.len());
+    }
+
+    /// Empty and whitespace-only queries never panic.
+    #[test]
+    fn fts5_empty_query_no_crash(
+        query in prop_oneof![
+            Just("".to_string()),
+            Just(" ".to_string()),
+            Just("   ".to_string()),
+            Just("\t".to_string()),
+            Just("\n".to_string()),
+            Just("  \t\n  ".to_string()),
+            prop::collection::vec(Just(" "), 1..=50).prop_map(|v| v.join("")),
+        ],
+    ) {
+        let (_dir, idx) = seed_index_with_sample_data();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = idx.search(&query);
+        }));
+        prop_assert!(result.is_ok(), "panicked on empty/whitespace query: {:?}", query);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Type inference properties (Task #9)
+// ---------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(500))]
+
+    /// Same-type extra fields are preserved after indexing.
+    #[test]
+    fn indexer_type_inference_consistent(
+        value_type in 0u8..3,
+        count in 2usize..=5,
+    ) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let idx = Index::open(&dir.path().join("ti.db")).unwrap();
+
+        let key = "xConsistent";
+        for i in 0..count {
+            let id = format!("2025020100{:04}", i);
+            let val_str = match value_type {
+                0 => format!("word{i}"),
+                1 => format!("{}", 42 + i),
+                _ => if i % 2 == 0 { "true".to_string() } else { "false".to_string() },
+            };
+            let value = match value_type {
+                0 => Value::String(val_str.clone()),
+                1 => Value::Number((42 + i) as f64),
+                _ => Value::Bool(i % 2 == 0),
+            };
+            let mut extra = BTreeMap::new();
+            extra.insert(key.to_string(), value);
+
+            let zettel = zdb_core::types::ParsedZettel {
+                meta: ZettelMeta {
+                    id: Some(ZettelId(id.clone())),
+                    title: Some(format!("Test {i}")),
+                    date: None,
+                    zettel_type: None,
+                    tags: vec![],
+                    extra,
+                },
+                body: format!("Body {i}"),
+                reference_section: String::new(),
+                inline_fields: vec![],
+                wikilinks: vec![],
+                path: format!("zettelkasten/{id}.md"),
+            };
+            idx.index_zettel(&zettel).unwrap();
+
+            // Verify value stored correctly
+            let rows = idx.query_raw(&format!(
+                "SELECT value FROM _zdb_fields WHERE zettel_id = '{}' AND key = '{}'", id, key
+            )).unwrap();
+            prop_assert!(!rows.is_empty(), "no field row for zettel {}", id);
+            prop_assert_eq!(&rows[0][0], &val_str, "value mismatch for zettel {}", id);
+        }
+    }
+
+    /// Indexing the same zettels into two separate DBs produces identical results.
+    #[test]
+    fn indexer_type_inference_deterministic(zettels in arb_zettel_set(2..6)) {
+        let dir_a = tempfile::TempDir::new().unwrap();
+        let dir_b = tempfile::TempDir::new().unwrap();
+        let idx_a = Index::open(&dir_a.path().join("det_a.db")).unwrap();
+        let idx_b = Index::open(&dir_b.path().join("det_b.db")).unwrap();
+
+        for (path, content) in &zettels {
+            let parsed = parser::parse(content, path).unwrap();
+            idx_a.index_zettel(&parsed).unwrap();
+            idx_b.index_zettel(&parsed).unwrap();
+        }
+
+        // Compare all fields
+        let rows_a = idx_a.query_raw(
+            "SELECT zettel_id, key, value, zone FROM _zdb_fields ORDER BY zettel_id, key"
+        ).unwrap();
+        let rows_b = idx_b.query_raw(
+            "SELECT zettel_id, key, value, zone FROM _zdb_fields ORDER BY zettel_id, key"
+        ).unwrap();
+        prop_assert_eq!(&rows_a, &rows_b, "field rows differ between identical indexes");
+
+        // Compare zettels table
+        let z_a = idx_a.query_raw(
+            "SELECT id, title, type, body FROM zettels ORDER BY id"
+        ).unwrap();
+        let z_b = idx_b.query_raw(
+            "SELECT id, title, type, body FROM zettels ORDER BY id"
+        ).unwrap();
+        prop_assert_eq!(&z_a, &z_b, "zettel rows differ between identical indexes");
+    }
+
+    /// Mixed-type extra fields on the same key don't panic.
+    #[test]
+    fn indexer_type_widening_no_panic(extras in arb_mixed_type_extras()) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let idx = Index::open(&dir.path().join("widen.db")).unwrap();
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            for (i, extra_pairs) in extras.iter().enumerate() {
+                let id = format!("2025030100{:04}", i);
+                let mut extra = BTreeMap::new();
+                for (k, v) in extra_pairs {
+                    extra.insert(k.clone(), v.clone());
+                }
+                let zettel = zdb_core::types::ParsedZettel {
+                    meta: ZettelMeta {
+                        id: Some(ZettelId(id.clone())),
+                        title: Some(format!("Widen {i}")),
+                        date: None,
+                        zettel_type: None,
+                        tags: vec![],
+                        extra,
+                    },
+                    body: format!("Body {i}"),
+                    reference_section: String::new(),
+                    inline_fields: vec![],
+                    wikilinks: vec![],
+                    path: format!("zettelkasten/{id}.md"),
+                };
+                let _ = idx.index_zettel(&zettel);
+            }
+        }));
+        prop_assert!(result.is_ok(), "panicked on mixed-type extras");
     }
 }
