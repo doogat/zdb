@@ -109,6 +109,9 @@ cargo doc --no-deps --document-private-items   Generate rustdoc
 cd docs && mdbook build               Build documentation
 cd docs && mdbook serve               Serve documentation locally
 
+# Property tests (thorough run, ~20 min at 5000 cases)
+PROPTEST_CASES=5000 cargo test -p zdb-core --test property_tests
+
 # UniFFI binding generation
 cargo run -p zdb-uniffi-bindgen --bin uniffi-bindgen -- generate \
   --library target/debug/libzdb_core.dylib \

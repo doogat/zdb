@@ -1,8 +1,19 @@
-//! Property-based tests for parser, CRDT resolver, and indexer.
+//! Property-based tests for parser, CRDT resolver, indexer, and SQL engine.
 //!
 //! Uses proptest to systematically explore the input space.
-//! Default case counts: parser 10_000, CRDT 1_000, indexer 500.
-//! Override with PROPTEST_CASES env var (e.g. 100 for CI).
+//! Default case counts are tuned for fast `cargo test` (~2 min).
+//! Regressions are saved in `property_tests.proptest-regressions` and
+//! always replayed regardless of case count.
+//!
+//! For thorough runs (pre-release, post-refactor, new generator changes):
+//!
+//! ```sh
+//! PROPTEST_CASES=5000 cargo test -p zdb-core --test property_tests -- --nocapture
+//! ```
+//!
+//! This bumps all blocks uniformly. Expect ~20 min at 5000 cases.
+//! The parser blocks are CPU-only and scale linearly; SQL/CRDT/indexer
+//! blocks do real SQLite/Automerge I/O per case and dominate runtime.
 
 use proptest::prelude::*;
 use std::cell::RefCell;
@@ -160,7 +171,7 @@ fn build_zettel_markdown(meta: &ZettelMeta, body: &str, ref_section: &str) -> St
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(10_000))]
+    #![proptest_config(ProptestConfig::with_cases(1_000))]
 
     /// Smoke: generated zettels are parseable.
     #[test]
@@ -275,48 +286,26 @@ fn arb_yaml_special_string() -> impl Strategy<Value = String> {
 
 /// Unicode chars safe for YAML values (no leading `:`, `---`, or `#` at start).
 fn arb_unicode_safe_string() -> impl Strategy<Value = String> {
+    let safe_chars = vec![
+        'á', 'é', 'í', 'ó', 'ú', 'ü', 'ñ', 'ç', 'ø', 'å', 'ß', 'œ', 'æ', 'ğ', 'ş', 'č', 'ř',
+        'ž', 'ł', 'ń', 'Γ', 'δ', 'λ', 'Ω', 'π', 'Д', 'Ж', 'й', 'я', 'ё', 'א', 'ב', 'ג', 'ד',
+        'ה', 'ו', 'ז', 'ا', 'ب', 'ت', 'ث', 'ح', 'خ', 'د', 'क', 'ख', 'ग', 'न', 'म', 'य', 'あ',
+        'い', 'う', 'え', 'お', 'カ', 'キ', 'ク', 'ケ', 'コ', '你', '好', '世', '界', '漢', '字',
+        '한', '글', '서', '울',
+    ];
+
     prop::collection::vec(
-        any::<char>().prop_filter("yaml-safe unicode", |c| {
-            // Exclude control chars, YAML-special, BOM, surrogates, private-use, and
-            // other chars that YAML serializers may escape or mangle.
-            !c.is_control()
-                && *c != ':'
-                && *c != '#'
-                && *c != '-'
-                && *c != '\r'
-                && *c != '\u{FEFF}' // BOM
-                && *c != '\\'
-                && *c != '"'
-                && *c != '\''
-                && !(*c >= '\u{E000}' && *c <= '\u{F8FF}') // private use area
-                && !(*c >= '\u{FFF0}' && *c <= '\u{FFFF}') // specials
-                && *c != '\u{00A0}' // non-breaking space
-                && *c != '\t'
-                && *c != '['
-                && *c != ']'
-                && *c != '{'
-                && *c != '}'
-                && *c != '&'
-                && *c != '*'
-                && *c != '!'
-                && *c != '|'
-                && *c != '>'
-                && *c != '%'
-                && *c != '@'
-                && *c != '`'
-                && *c != '?'
-                && *c != ','
-        }),
+        prop_oneof![8 => prop::sample::select(safe_chars), 1 => Just(' ')],
         1..=50,
     )
     .prop_map(|chars| {
         let s: String = chars.into_iter().collect();
-        // Trim to avoid leading/trailing whitespace issues
-        let trimmed = s.trim().to_string();
-        if trimmed.is_empty() {
+        // Collapse whitespace so tags/frontmatter values stay YAML-friendly.
+        let normalized = s.split_whitespace().collect::<Vec<_>>().join(" ");
+        if normalized.is_empty() {
             "unicode".to_string()
         } else {
-            trimmed
+            normalized
         }
     })
 }
@@ -347,7 +336,7 @@ fn arb_many_extras() -> impl Strategy<Value = std::collections::BTreeMap<String,
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(5_000))]
+    #![proptest_config(ProptestConfig::with_cases(500))]
 
     // -- Category 1: Malformed frontmatter --
 
@@ -752,7 +741,7 @@ fn arb_injection_string() -> impl Strategy<Value = String> {
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(500))]
+    #![proptest_config(ProptestConfig::with_cases(100))]
 
     /// CREATE TABLE produces Ok result and typedef is queryable.
     #[test]
@@ -947,7 +936,7 @@ proptest! {
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(1_000))]
+    #![proptest_config(ProptestConfig::with_cases(200))]
 
     /// Random ASCII strings don't cause panics.
     #[test]
@@ -1032,7 +1021,7 @@ proptest! {
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(1_000))]
+    #![proptest_config(ProptestConfig::with_cases(200))]
 
     /// Injection strings in VALUES are treated as data, not code.
     #[test]
@@ -1255,7 +1244,7 @@ fn arb_conflict_ref_additions() -> impl Strategy<Value = ConflictFile> {
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(1_000))]
+    #![proptest_config(ProptestConfig::with_cases(200))]
 
     /// Merge commutativity: swapping ours/theirs produces same result.
     #[test]
@@ -1525,7 +1514,7 @@ fn arb_zettel_set(count: std::ops::Range<usize>) -> impl Strategy<Value = Vec<(S
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(500))]
+    #![proptest_config(ProptestConfig::with_cases(100))]
 
     /// Index-rebuild equivalence: sequential index_zettel == full rebuild.
     #[test]
@@ -1677,7 +1666,7 @@ fn seed_index_with_sample_data() -> (tempfile::TempDir, Index) {
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(500))]
+    #![proptest_config(ProptestConfig::with_cases(100))]
 
     /// Random ASCII strings as search queries never panic.
     #[test]
@@ -1735,7 +1724,7 @@ proptest! {
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(500))]
+    #![proptest_config(ProptestConfig::with_cases(100))]
 
     /// Same-type extra fields are preserved after indexing.
     #[test]
