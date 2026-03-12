@@ -33,6 +33,7 @@ CARGO_FILES=(
   zdb-core/Cargo.toml
   zdb-cli/Cargo.toml
   zdb-server/Cargo.toml
+  zdb-uniffi-bindgen/Cargo.toml
   tests/Cargo.toml
 )
 
