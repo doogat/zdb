@@ -206,6 +206,77 @@ class ZettelDBTest {
         assertTrue(names.contains("workspace"))
     }
 
+    /** Run a git command in the given directory and return trimmed stdout. */
+    private fun git(vararg args: String, dir: File): String {
+        val proc = ProcessBuilder("git", *args)
+            .directory(dir)
+            .also { pb ->
+                pb.environment().putAll(mapOf(
+                    "GIT_AUTHOR_NAME" to "test",
+                    "GIT_AUTHOR_EMAIL" to "test@test",
+                    "GIT_COMMITTER_NAME" to "test",
+                    "GIT_COMMITTER_EMAIL" to "test@test",
+                ))
+            }
+            .redirectErrorStream(false)
+            .start()
+        val stdout = proc.inputStream.bufferedReader().readText().trim()
+        proc.waitFor()
+        return stdout
+    }
+
+    @Test
+    fun testDeltaBundleExportImport() {
+        // Register local node and create initial content
+        driver.registerNode("source-node")
+        driver.createZettel(
+            "---\ntitle: Pre-sync Note\n---\nBefore delta.",
+            "create pre-sync note"
+        )
+
+        // Capture current HEAD as remote's sync point
+        val syncPoint = git("rev-parse", "HEAD", dir = tmpDir)
+        assertTrue(syncPoint.isNotEmpty(), "should have a HEAD commit")
+
+        // Register a fake remote node with known_heads at syncPoint
+        val remoteUuid = "remote-delta-node"
+        val nodesDir = File(tmpDir, ".nodes")
+        nodesDir.mkdirs()
+        File(nodesDir, "$remoteUuid.toml").writeText(
+            "uuid = \"$remoteUuid\"\nname = \"RemoteNode\"\n" +
+            "known_heads = [\"$syncPoint\"]\nstatus = \"Active\"\n"
+        )
+        git("add", ".nodes/", dir = tmpDir)
+        git("commit", "-m", "register remote node", dir = tmpDir)
+
+        // Create new content after remote's sync point
+        driver.createZettel(
+            "---\ntitle: Post-sync Note\n---\nAfter delta.",
+            "create post-sync note"
+        )
+
+        // Export delta bundle targeting the remote node
+        val deltaPath = File(tmpDir, "delta.bundle.tar").absolutePath
+        val resultPath = driver.exportDeltaBundle(remoteUuid, deltaPath)
+        assertTrue(File(resultPath).exists(), "delta bundle file should exist")
+
+        // Import into fresh repo and verify post-sync content is present
+        val importDir = Files.createTempDirectory("zdb-delta-import-").toFile()
+        try {
+            val importDriver = ZettelDriver.createRepo(importDir.absolutePath)
+            importDriver.use { dst ->
+                dst.registerNode("import-target")
+                dst.importBundle(resultPath)
+                dst.reindex()
+
+                val results = dst.search("Post-sync")
+                assertEquals(1, results.size, "delta import should contain post-sync note")
+            }
+        } finally {
+            importDir.deleteRecursively()
+        }
+    }
+
     @Test
     fun testBundleExportImport() {
         // Register a sync node via FFI
