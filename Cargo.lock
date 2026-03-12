@@ -4704,7 +4704,7 @@ dependencies = [
 
 [[package]]
 name = "zdb-cli"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "chrono",
  "clap",
@@ -4725,7 +4725,7 @@ dependencies = [
 
 [[package]]
 name = "zdb-core"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "automerge",
  "chrono",
@@ -4753,7 +4753,7 @@ dependencies = [
 
 [[package]]
 name = "zdb-e2e"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "assert_cmd",
  "predicates",
@@ -4769,7 +4769,7 @@ dependencies = [
 
 [[package]]
 name = "zdb-server"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "arc-swap",
  "async-graphql",
@@ -4798,7 +4798,7 @@ dependencies = [
 
 [[package]]
 name = "zdb-uniffi-bindgen"
-version = "0.2.0"
+version = "0.1.0"
 dependencies = [
  "uniffi",
 ]
