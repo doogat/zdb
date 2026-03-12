@@ -26,21 +26,26 @@ pub fn load_or_create_token(token_file: &Path) -> std::io::Result<String> {
     Ok(token)
 }
 
+/// Check whether `header_value` is `"Bearer <token>"` matching `expected`.
+pub fn validate_bearer(header_value: &str, expected: &str) -> bool {
+    header_value
+        .strip_prefix("Bearer ")
+        .is_some_and(|t| t == expected)
+}
+
 /// Axum middleware: reject requests without valid Bearer token.
 pub async fn require_auth(
     Extension(auth): Extension<AuthToken>,
     request: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
-    let auth_header = request
+    let header_value = request
         .headers()
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
-    let provided = auth_header.strip_prefix("Bearer ").unwrap_or("");
-
-    if provided != auth.0 {
+    if !validate_bearer(header_value, &auth.0) {
         return Err(StatusCode::UNAUTHORIZED);
     }
 
@@ -50,3 +55,33 @@ pub async fn require_auth(
 /// Extension type to carry the expected token in request state.
 #[derive(Clone)]
 pub struct AuthToken(pub String);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_bearer_accepts_matching_token() {
+        assert!(validate_bearer("Bearer secret123", "secret123"));
+    }
+
+    #[test]
+    fn validate_bearer_rejects_wrong_token() {
+        assert!(!validate_bearer("Bearer wrong", "secret123"));
+    }
+
+    #[test]
+    fn validate_bearer_rejects_empty_string() {
+        assert!(!validate_bearer("", "secret123"));
+    }
+
+    #[test]
+    fn validate_bearer_rejects_missing_prefix() {
+        assert!(!validate_bearer("secret123", "secret123"));
+    }
+
+    #[test]
+    fn validate_bearer_rejects_lowercase_prefix() {
+        assert!(!validate_bearer("bearer secret123", "secret123"));
+    }
+}
