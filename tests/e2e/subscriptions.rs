@@ -1,6 +1,7 @@
 use crate::common::{read_next, ServerGuard, ZdbTestRepo};
 use tungstenite::connect;
 use tungstenite::http::Request;
+use tungstenite::Message;
 
 #[test]
 fn subscribe_mutate_receive() {
@@ -55,12 +56,13 @@ fn subscribe_delete_receive() {
 }
 
 #[test]
-fn ws_auth_missing_returns_401() {
+fn ws_auth_invalid_header_returns_401() {
     let repo = ZdbTestRepo::init();
     let server = ServerGuard::start(&repo);
 
     let request = Request::builder()
         .uri(format!("ws://127.0.0.1:{}/ws", server.port))
+        .header("Authorization", "Bearer wrong-token")
         .header("Sec-WebSocket-Protocol", "graphql-transport-ws")
         .header("Host", format!("127.0.0.1:{}", server.port))
         .header("Connection", "Upgrade")
@@ -74,8 +76,91 @@ fn ws_auth_missing_returns_401() {
         .unwrap();
 
     let result = connect(request);
-    // Should fail — server returns 401 before upgrade
-    assert!(result.is_err(), "WS without auth should fail");
+    // Invalid header → 401 at upgrade time
+    assert!(result.is_err(), "WS with bad header should fail");
+}
+
+#[test]
+fn ws_payload_auth_subscribe_receive() {
+    let repo = ZdbTestRepo::init();
+    let server = ServerGuard::start(&repo);
+
+    let mut ws = server.ws_subscribe_with_payload_auth(
+        "subscription { zettelChanged { action zettelId zettel { id title } } }",
+    );
+
+    // Mutate via GraphQL
+    let result = server.graphql_with_vars(
+        r#"mutation($input: CreateZettelInput!) { createZettel(input: $input) { id title } }"#,
+        serde_json::json!({ "input": { "title": "Payload Auth", "content": "body" } }),
+    );
+    assert!(result.get("errors").is_none(), "create failed: {result}");
+    let created_id = result["data"]["createZettel"]["id"].as_str().unwrap();
+
+    let event = read_next(&mut ws);
+    let data = &event["payload"]["data"]["zettelChanged"];
+    assert_eq!(data["action"], "created");
+    assert_eq!(data["zettelId"], created_id);
+    assert_eq!(data["zettel"]["title"], "Payload Auth");
+}
+
+#[test]
+fn ws_payload_auth_invalid_token() {
+    let repo = ZdbTestRepo::init();
+    let server = ServerGuard::start(&repo);
+
+    let mut ws = server.ws_connect_no_header();
+
+    // Send connection_init with wrong token
+    ws.send(Message::Text(
+        serde_json::json!({
+            "type": "connection_init",
+            "payload": { "Authorization": "Bearer wrong-token" }
+        })
+        .to_string()
+        .into(),
+    ))
+    .unwrap();
+
+    // Should get an error or connection close, not connection_ack
+    let msg = ws.read();
+    match msg {
+        Ok(Message::Text(text)) => {
+            let val: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_ne!(val["type"], "connection_ack", "should not ack invalid token");
+        }
+        Ok(Message::Close(_)) => {} // acceptable: server closed connection
+        Err(_) => {}                // acceptable: connection dropped
+        other => panic!("unexpected message: {other:?}"),
+    }
+}
+
+#[test]
+fn ws_no_auth_no_payload_rejected() {
+    let repo = ZdbTestRepo::init();
+    let server = ServerGuard::start(&repo);
+
+    let mut ws = server.ws_connect_no_header();
+
+    // Send connection_init with empty payload
+    ws.send(Message::Text(
+        serde_json::json!({ "type": "connection_init", "payload": {} })
+            .to_string()
+            .into(),
+    ))
+    .unwrap();
+
+    // Should get an error or connection close, not connection_ack
+    let msg = ws.read();
+    match msg {
+        Ok(Message::Text(text)) => {
+            let val: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_ne!(val["type"], "connection_ack", "should not ack empty payload");
+        }
+        Ok(Message::Close(_)) => {} // acceptable: server closed connection
+        Err(_) => {}                // acceptable: connection dropped
+        other => panic!("unexpected message: {other:?}"),
+    }
 }
 
 #[test]
