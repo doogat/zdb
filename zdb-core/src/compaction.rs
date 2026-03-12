@@ -553,6 +553,19 @@ mod tests {
     }
 
     #[test]
+    fn compact_with_backup() {
+        let (_dir, repo) = temp_repo();
+        crate::sync_manager::register_node(&repo, "Test").unwrap();
+        let mgr = SyncManager::open(&repo).unwrap();
+
+        let report = compact(&repo, &mgr, &CompactOptions { force: true, skip_backup: false, ..Default::default() }).unwrap();
+        assert!(report.gc_success);
+        let bp = report.backup_path.expect("backup_path should be Some when skip_backup is false");
+        assert!(bp.exists(), "backup file should exist at {}", bp.display());
+        assert!(bp.to_string_lossy().contains("pre-compact-"));
+    }
+
+    #[test]
     fn compact_reduces_crdt_temp_bytes() {
         let (_dir, repo) = temp_repo();
         let c1 = repo.commit_file("zettelkasten/a.md", "a", "c1").unwrap();
