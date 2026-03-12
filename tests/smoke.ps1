@@ -418,6 +418,11 @@ $result = gql '{"query":"mutation { sync { direction commitsTransferred conflict
 if ($result -notmatch "errors") { throw "sync should have errored without remote" }
 pass "serve: sync mutation (no remote)"
 
+# 37. WebSocket payload auth (browser-style, no Authorization header)
+# Skipped in PowerShell — requires websocat or native WebSocket client.
+# Full coverage provided by e2e tests (ws_payload_auth_subscribe_receive etc.)
+pass "ws: payload auth (skipped in ps1 — see e2e tests)"
+
 Stop-Process -Id $serverProc.Id -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 500
 pass "serve: clean shutdown"

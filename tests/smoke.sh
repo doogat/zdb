@@ -335,6 +335,16 @@ RESULT=$(gql '{"query":"mutation { sync { direction commitsTransferred conflicts
 echo "$RESULT" | grep -q '"errors"'
 pass "serve: sync mutation (no remote → error)"
 
+# 37. WebSocket payload auth (browser-style, no Authorization header)
+if command -v websocat >/dev/null 2>&1; then
+  REPLY=$(echo '{"type":"connection_init","payload":{"Authorization":"Bearer '"$TOKEN"'"}}' | \
+    websocat --protocol graphql-transport-ws -1 "ws://127.0.0.1:$SERVER_PORT/ws" 2>/dev/null || true)
+  echo "$REPLY" | grep -q "connection_ack"
+  pass "ws: payload auth (connection_init)"
+else
+  pass "ws: payload auth (skipped, no websocat — see e2e tests)"
+fi
+
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
 pass "serve: clean shutdown"
