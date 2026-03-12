@@ -131,6 +131,7 @@ pass "type suggest"
 $ZDB register-node "smoke-test-laptop" | grep -q "registered node"
 $ZDB status | grep -q "registered nodes: 1"
 COMPACT_OUT=$($ZDB compact)
+echo "$COMPACT_OUT" | grep -q "backup:"
 echo "$COMPACT_OUT" | grep -q "gc: ok"
 echo "$COMPACT_OUT" | grep -q "crdt temp:"
 echo "$COMPACT_OUT" | grep -q "repo (.git):"
@@ -143,8 +144,28 @@ $ZDB node retire "$NODE_UUID" | grep -q "retired node"
 pass "node list + retire"
 
 # 16. compact --dry-run
-$ZDB compact --dry-run | grep -q "dry run"
+DRYRUN_OUT=$($ZDB compact --dry-run)
+echo "$DRYRUN_OUT" | grep -q "dry run"
+echo "$DRYRUN_OUT" | grep -q "backup would write:"
 pass "compact --dry-run"
+
+# 16a. compact --no-backup
+$ZDB register-node "no-backup-test" >/dev/null
+NOBACKUP_OUT=$($ZDB compact --no-backup --force)
+echo "$NOBACKUP_OUT" | grep -q "gc: ok"
+# Should NOT contain backup path
+if echo "$NOBACKUP_OUT" | grep -q "backup:"; then
+  echo "FAIL: --no-backup should suppress backup" >&2; exit 1
+fi
+pass "compact --no-backup"
+
+# 16b. compact --backup-path
+CUSTOM_BACKUP="$TMPDIR/custom-backup.bundle.tar"
+BKPATH_OUT=$($ZDB compact --force --backup-path "$CUSTOM_BACKUP")
+echo "$BKPATH_OUT" | grep -q "backup:"
+echo "$BKPATH_OUT" | grep -q "$CUSTOM_BACKUP"
+[ -f "$CUSTOM_BACKUP" ]
+pass "compact --backup-path"
 
 # 17. GraphQL server
 SERVER_PORT=$((19200 + (RANDOM % 800)))
@@ -285,14 +306,29 @@ HTTP_CODE=$(curl -so /dev/null -w "%{http_code}" "$NOSQL_URL/$ID1" \
 pass "nosql-api: auth rejects missing token"
 
 # compact mutation
-RESULT=$(gql '{"query":"mutation { compact { filesRemoved crdtDocsCompacted gcSuccess crdtTempBytesBefore crdtTempBytesAfter crdtTempFilesBefore crdtTempFilesAfter repoBytesBefore repoBytesAfter } }"}')
+RESULT=$(gql '{"query":"mutation { compact { filesRemoved crdtDocsCompacted gcSuccess crdtTempBytesBefore crdtTempBytesAfter crdtTempFilesBefore crdtTempFilesAfter repoBytesBefore repoBytesAfter backupPath } }"}')
 echo "$RESULT" | grep -q '"gcSuccess"'
 pass "serve: compact mutation"
 
 # compact(force: true)
-RESULT=$(gql '{"query":"mutation { compact(force: true) { filesRemoved crdtDocsCompacted gcSuccess crdtTempBytesBefore crdtTempBytesAfter repoBytesBefore repoBytesAfter } }"}')
+RESULT=$(gql '{"query":"mutation { compact(force: true) { filesRemoved crdtDocsCompacted gcSuccess crdtTempBytesBefore crdtTempBytesAfter repoBytesBefore repoBytesAfter backupPath } }"}')
 echo "$RESULT" | grep -q '"gcSuccess"'
+echo "$RESULT" | grep -q '"backupPath"'
 pass "serve: compact(force: true) mutation"
+
+# compact(noBackup: true)
+RESULT=$(gql '{"query":"mutation { compact(force: true, noBackup: true) { gcSuccess backupPath } }"}')
+echo "$RESULT" | grep -q '"gcSuccess"'
+echo "$RESULT" | grep -q '"backupPath":null'
+pass "serve: compact(noBackup: true) mutation"
+
+# compact(backupPath: custom)
+GQL_BACKUP="$TMPDIR/gql-backup.bundle.tar"
+RESULT=$(gql "{\"query\":\"mutation { compact(force: true, backupPath: \\\"$GQL_BACKUP\\\") { gcSuccess backupPath } }\"}")
+echo "$RESULT" | grep -q '"gcSuccess"'
+echo "$RESULT" | grep -q '"backupPath"'
+[ -f "$GQL_BACKUP" ]
+pass "serve: compact(backupPath) mutation"
 
 # sync mutation — no remote configured for this repo, expect error not panic
 RESULT=$(gql '{"query":"mutation { sync { direction commitsTransferred conflictsResolved resurrected } }"}')

@@ -1118,6 +1118,10 @@ pub fn build_schema(
         .field(simple_field(
             "repoBytesAfter",
             TypeRef::named_nn(TypeRef::STRING),
+        ))
+        .field(simple_field(
+            "backupPath",
+            TypeRef::named(TypeRef::STRING),
         ));
 
     // sync mutation
@@ -1175,7 +1179,17 @@ pub fn build_schema(
                         .get("force")
                         .and_then(|v| v.boolean().ok())
                         .unwrap_or(false);
-                    let report = a.run_maintenance(force).await.map_err(to_server_error)?;
+                    let no_backup = ctx
+                        .args
+                        .get("noBackup")
+                        .and_then(|v| v.boolean().ok())
+                        .unwrap_or(false);
+                    let backup_path = ctx
+                        .args
+                        .get("backupPath")
+                        .and_then(|v| v.string().ok())
+                        .map(|s| s.to_string());
+                    let report = a.run_maintenance(force, no_backup, backup_path).await.map_err(to_server_error)?;
                     let mut obj = IndexMap::new();
                     obj.insert(
                         Name::new("filesRemoved"),
@@ -1210,10 +1224,18 @@ pub fn build_schema(
                         Name::new("repoBytesAfter"),
                         GqlValue::from(report.repo_bytes_after.to_string()),
                     );
+                    if let Some(bp) = report.backup_path {
+                        obj.insert(
+                            Name::new("backupPath"),
+                            GqlValue::from(bp.display().to_string()),
+                        );
+                    }
                     Ok(Some(FieldValue::owned_any(GqlValue::Object(obj))))
                 })
             })
-            .argument(InputValue::new("force", TypeRef::named(TypeRef::BOOLEAN))),
+            .argument(InputValue::new("force", TypeRef::named(TypeRef::BOOLEAN)))
+            .argument(InputValue::new("noBackup", TypeRef::named(TypeRef::BOOLEAN)))
+            .argument(InputValue::new("backupPath", TypeRef::named(TypeRef::STRING))),
         );
     }
 

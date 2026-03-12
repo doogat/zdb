@@ -89,6 +89,8 @@ pub enum ActorCommand {
     },
     RunMaintenance {
         force: bool,
+        no_backup: bool,
+        backup_path: Option<String>,
     },
     Sync {
         remote: String,
@@ -384,8 +386,8 @@ impl ActorHandle {
         }
     }
 
-    pub async fn run_maintenance(&self, force: bool) -> ActorResult<CompactionReport> {
-        match self.send(ActorCommand::RunMaintenance { force }).await {
+    pub async fn run_maintenance(&self, force: bool, no_backup: bool, backup_path: Option<String>) -> ActorResult<CompactionReport> {
+        match self.send(ActorCommand::RunMaintenance { force, no_backup, backup_path }).await {
             ActorReply::Maintenance(r) => r,
             _ => Err(ZettelError::Validation("unexpected reply".into())),
         }
@@ -711,8 +713,8 @@ fn handle_command_shared(
             let id = zdb_core::types::ZettelId(zettel_id);
             ActorReply::AttachmentList(zdb_core::attachments::list_attachments(repo, &id))
         }
-        ActorCommand::RunMaintenance { force } => {
-            ActorReply::Maintenance(run_maintenance(repo, index, repo_path, force))
+        ActorCommand::RunMaintenance { force, no_backup, backup_path } => {
+            ActorReply::Maintenance(run_maintenance(repo, index, repo_path, force, no_backup, backup_path))
         }
         ActorCommand::Sync { remote, branch } => {
             ActorReply::SyncResult(run_sync(repo, index, &remote, &branch))
@@ -1018,6 +1020,8 @@ fn run_maintenance(
     index: &Index,
     _repo_path: &std::path::Path,
     force: bool,
+    no_backup: bool,
+    backup_path: Option<String>,
 ) -> ActorResult<CompactionReport> {
     let mgr = match zdb_core::sync_manager::SyncManager::open(repo) {
         Ok(m) => m,
@@ -1033,12 +1037,18 @@ fn run_maintenance(
                 crdt_temp_files_after: 0,
                 repo_bytes_before: 0,
                 repo_bytes_after: 0,
+                backup_path: None,
             });
         }
         Err(e) => return Err(e),
     };
 
-    let report = zdb_core::compaction::compact(repo, &mgr, force)?;
+    let opts = zdb_core::types::CompactOptions {
+        force,
+        skip_backup: no_backup,
+        backup_path: backup_path.map(std::path::PathBuf::from),
+    };
+    let report = zdb_core::compaction::compact(repo, &mgr, &opts)?;
     log::info!(
         "maintenance: compacted — files_removed={} crdt_compacted={} gc={}",
         report.files_removed,

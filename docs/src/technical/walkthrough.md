@@ -335,11 +335,20 @@ pub struct ResolvedFile {
     pub content: String,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct CompactOptions {
+    pub force: bool,
+    pub skip_backup: bool,
+    pub backup_path: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone)]
 pub struct CompactionReport {
     pub files_removed: usize,
     pub crdt_docs_compacted: usize,
     pub gc_success: bool,
+    // ... byte/file stats ...
+    pub backup_path: Option<PathBuf>,
 }
 ```
 
@@ -1680,80 +1689,31 @@ sed -n '249,305p' zdb-core/src/compaction.rs
 ```
 
 ```rust
-/// Full compaction pipeline: threshold check → shared head → cleanup → crdt doc compact → gc.
+/// Full compaction pipeline: threshold check → backup → shared head → cleanup → crdt doc compact → gc.
 #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
-pub fn compact(repo: &GitRepo, sync_mgr: &SyncManager, force: bool) -> Result<CompactionReport> {
-    // Threshold check: skip if under threshold (unless forced)
-    if !force {
-        let config = repo.load_config()?;
-        let (size_bytes, _) = crdt_temp_stats(repo);
-        let size_mb = size_bytes as f64 / (1024.0 * 1024.0);
-        if size_mb < config.compaction.threshold_mb as f64 {
-            tracing::debug!(
-                size_mb,
-                threshold_mb = config.compaction.threshold_mb,
-                "below_threshold_skip"
-            );
-            return Ok(CompactionReport {
-                files_removed: 0,
-                crdt_docs_compacted: 0,
-                gc_success: true,
-                crdt_temp_bytes_before: 0,
-                crdt_temp_bytes_after: 0,
-                crdt_temp_files_before: 0,
-                crdt_temp_files_after: 0,
-                repo_bytes_before: 0,
-                repo_bytes_after: 0,
-            });
-        }
-    }
-
-    let (crdt_temp_bytes_before, crdt_temp_files_before) = crdt_temp_stats(repo);
-    let repo_bytes_before = dir_size(&repo.path.join(".git"));
-
-    let nodes = sync_mgr.list_nodes()?;
-    let head = shared_head(repo, &nodes)?;
-    tracing::debug!(shared_head = ?head, node_count = nodes.len(), "shared_head_computed");
-    let files_removed = cleanup_crdt_temp(repo, head)?;
-    if files_removed > 0 {
-        tracing::info!(files_removed, "crdt_temp_cleanup");
-    }
-
-    let crdt_docs_compacted = compact_crdt_docs(repo)?;
-    if crdt_docs_compacted > 0 {
-        tracing::info!(crdt_docs_compacted, "crdt_docs_compacted");
-    }
-
-    let (crdt_temp_bytes_after, crdt_temp_files_after) = crdt_temp_stats(repo);
-
-    let gc_success = run_gc(&repo.path)?;
-    let repo_bytes_after = dir_size(&repo.path.join(".git"));
-
-    tracing::info!(
-        gc_success,
-        crdt_temp_bytes_before,
-        crdt_temp_bytes_after,
-        repo_bytes_before,
-        repo_bytes_after,
-        "compaction_result"
-    );
+pub fn compact(repo: &GitRepo, sync_mgr: &SyncManager, opts: &CompactOptions) -> Result<CompactionReport> {
 ```
+
+`compact()` accepts `CompactOptions` (force, skip_backup, backup_path) instead of a bare `bool`. `backup_before_compact()` delegates to `bundle::export_full_bundle`, writing to `.zdb/backups/pre-compact-{ISO8601}.bundle.tar` by default. Backup runs after the threshold check but before any mutations, so a failed backup aborts compaction without side effects.
 
 Compaction runs in stages, measuring storage before and after each phase:
 
-1. **Threshold check** — skip if `.crdt/temp/` is under the configured MB limit (default 1MB)
-2. **Measure before** — record CRDT temp bytes/files and `.git/` size
-3. **Shared head** — compute the greatest common ancestor commit across all active nodes. CRDT files older than this are safe to delete because all nodes have seen them.
-4. **Cleanup** — delete temp files at or before the shared head (both `.crdt` and `_fm.crdt`)
-5. **Compact** — merge multiple Automerge documents for the same zettel into one. Body (`.crdt`) and frontmatter (`_fm.crdt`) files are grouped and compacted independently.
-6. **Measure after** — record CRDT temp bytes/files post-compaction
-7. **Git GC** — run `git gc` to reclaim space, then measure `.git/` again
+1. **Threshold check** — skip if `.crdt/temp/` is under the configured MB limit (default 1MB). Below-threshold returns `backup_path: None`.
+2. **Pre-compaction backup** — unless `skip_backup` is set, export a full Git bundle to `.zdb/backups/` (or a custom path). Uses `bundle::export_full_bundle` internally — the same mechanism as air-gapped sync. Backup failure aborts compaction.
+3. **Measure before** — record CRDT temp bytes/files and `.git/` size
+4. **Shared head** — compute the greatest common ancestor commit across all active nodes. CRDT files older than this are safe to delete because all nodes have seen them.
+5. **Cleanup** — delete temp files at or before the shared head (both `.crdt` and `_fm.crdt`)
+6. **Compact** — merge multiple Automerge documents for the same zettel into one. Body (`.crdt`) and frontmatter (`_fm.crdt`) files are grouped and compacted independently.
+7. **Measure after** — record CRDT temp bytes/files post-compaction
+8. **Git GC** — run `git gc` to reclaim space, then measure `.git/` again
 
 Stale and retired nodes are excluded from the shared head calculation, so an offline device doesn't block compaction forever.
 
-The `CompactionReport` returned includes `crdt_temp_bytes_before/after`, `crdt_temp_files_before/after`, and `repo_bytes_before/after` — giving operators full visibility into what compaction achieved. See [Storage Budget](storage-budget.md) for measured growth with and without compaction (97% reduction at 10 edits/day).
+The `CompactionReport` returned includes `backup_path`, `crdt_temp_bytes_before/after`, `crdt_temp_files_before/after`, and `repo_bytes_before/after` — giving operators full visibility into what compaction achieved. See [Storage Budget](storage-budget.md) for measured growth with and without compaction (97% reduction at 10 edits/day).
 
 When a stale node returns after compaction has removed CRDT history, the conflict resolution cascade still works: it reconstructs three-way merges from Git content, falling back to LWW if CRDT merge produces invalid output. See [Conflict Resolution Cascade](sync.md#conflict-resolution-cascade) for the full decision tree.
+
+Recovery from a pre-compaction backup: `zdb bundle import <backup.bundle.tar>` on a fresh `zdb init` restores the full repository state as of the backup moment. See [Bundle](bundle.md) for format details.
 
 ## 13. CLI — `zdb-cli/src/main.rs`
 
@@ -1853,6 +1813,12 @@ enum Command {
         /// Show what would be done without doing it
         #[arg(long)]
         dry_run: bool,
+        /// Skip pre-compaction backup bundle
+        #[arg(long)]
+        no_backup: bool,
+        /// Custom path for backup bundle
+        #[arg(long)]
+        backup_path: Option<PathBuf>,
     },
     /// Rebuild the search index
     Reindex,
@@ -2113,7 +2079,7 @@ fn run_sync(repo: &GitRepo, index: &Index, remote: &str, branch: &str) -> ActorR
 }
 ```
 
-`run_maintenance` returns a no-op `CompactionReport` when no node is registered (matching the old behavior of returning `Ok(())`). The GraphQL `compact` mutation exposes these fields as `CompactResult`, and `sync` exposes `SyncReport` fields as `SyncResult`.
+`run_maintenance` returns a no-op `CompactionReport` when no node is registered (matching the old behavior of returning `Ok(())`). It builds `CompactOptions` from the `force`, `no_backup`, and `backup_path` parameters. The GraphQL `compact` mutation exposes all three as input args (`force: Boolean`, `noBackup: Boolean`, `backupPath: String`) and returns `CompactResult` (including nullable `backupPath`). The `sync` mutation exposes `SyncReport` fields as `SyncResult`.
 
 ### Server Startup
 
@@ -2423,15 +2389,19 @@ ID2=$($ZDB create --title "Links to first" --body "See [[$ID1]]")
 
 `zdb-core/tests/property_tests.rs` uses proptest to systematically explore input spaces. 51 property tests across four subsystems:
 
-**Parser (20 tests, 5K–10K cases):** parse-serialize-parse idempotency, zone isolation (body edits don't affect frontmatter/references), no false reference boundary detection from thematic breaks, malformed frontmatter never panics (YAML-special chars, random bytes, truncated delimiters, deeply nested YAML, mixed valid/invalid fields), full Unicode round-trips for titles/tags/body/extra fields, empty/missing zone combinations, boundary cases (10K-char lines, 100+ tags, 500+ references, 50+ extra fields).
+**Parser (20 tests, small local smoke budgets):** parse-serialize-parse idempotency, zone isolation (body edits don't affect frontmatter/references), no false reference boundary detection from thematic breaks, malformed frontmatter never panics (YAML-special chars, random bytes, truncated delimiters, deeply nested YAML, mixed valid/invalid fields), full Unicode round-trips for titles/tags/body/extra fields, empty/missing zone combinations, boundary cases (10K-char lines, 100+ tags, 500+ references, 50+ extra fields).
 
-**SQL Engine (15 tests, 500–1K cases):** valid DDL/DML round-trips (CREATE TABLE, INSERT, SELECT, UPDATE, DELETE, typedef verification), invalid input never panics (random strings, partial fragments, unsupported operations, empty input), injection safety (embedded quotes/semicolons/comments stored as data not executed), edge-case identifiers (reserved words, hyphens, Unicode in double-quoted identifiers), structural edge cases (multiple semicolons, nested parentheses).
+**SQL Engine (15 tests, very small local smoke budgets):** valid DDL/DML round-trips (CREATE TABLE, INSERT, SELECT, UPDATE, DELETE, typedef verification), invalid input never panics (random strings, partial fragments, unsupported operations, empty input), injection safety (embedded quotes/semicolons/comments stored as data not executed), edge-case identifiers (reserved words, hyphens, Unicode in double-quoted identifiers), structural edge cases (multiple semicolons, nested parentheses).
 
-**CRDT Resolver (7 tests, 1K cases):** merge commutativity for non-overlapping frontmatter, body, and reference edits; frontmatter field independence (changing X doesn't affect Y); merge idempotency (identical ours/theirs → original); non-overlapping body edits both survive; concurrent reference additions produce union.
+**CRDT Resolver (7 tests, small local smoke budgets):** merge commutativity for non-overlapping frontmatter, body, and reference edits; frontmatter field independence (changing X doesn't affect Y); merge idempotency (identical ours/theirs → original); non-overlapping body edits both survive; concurrent reference additions produce union.
 
-**Indexer (9 tests, 500 cases):** sequential `index_zettel` calls produce same query results as full `rebuild`, staleness detection correct after commit change, FTS5 query fuzzing (random strings, FTS5 operators, long queries, empty queries never crash), type inference consistency (same-type fields preserved), deterministic indexing (two DBs with same input match), mixed-type widening never panics.
+**Indexer (9 tests, small local smoke budgets):** sequential `index_zettel` calls produce same query results as full `rebuild`, staleness detection correct after commit change, FTS5 query fuzzing (random strings, FTS5 operators, long queries, empty queries never crash), type inference consistency (same-type fields preserved), deterministic indexing (two DBs with same input match), mixed-type widening never panics.
 
-Run with `cargo test -p zdb-core --test property_tests`. Override case count via `PROPTEST_CASES` env var (e.g. 100 for CI).
+Run with `cargo test -p zdb-core --test property_tests`. Override case count via `PROPTEST_CASES` env var (e.g. 50 for CI).
+
+One subtle failure mode showed up only at high case counts on shared CI runners: the Unicode round-trip properties originally built strings from `any::<char>()` and then filtered out YAML-hostile characters with a long deny-list. That worked functionally, but at 5K cases proptest could burn through its local reject budget before it found enough acceptable strings, aborting with `Too many local rejects` after spending hours in the test job. The generator now samples directly from a curated set of YAML-safe Unicode characters across multiple scripts and normalizes whitespace, so the Unicode properties still exercise non-ASCII serialization paths without reject storms.
+
+The local default case counts are intentionally tiny smoke budgets now. That keeps `cargo test` usable during development while still replaying any saved regressions. Two implementation details matter for runtime: the SQL/indexer property tests use `Index::open_in_memory()` instead of creating a fresh on-disk SQLite database for every case, and the default case counts are much lower for SQL/CRDT/indexer blocks than for parser-only blocks. CI then applies an explicit `PROPTEST_CASES=50` cap for a broader but still bounded cross-platform pass, while `PROPTEST_CASES=5000 cargo test -p zdb-core --test property_tests -- --nocapture` remains the manual soak command.
 
 ## Data Flow Summary
 
@@ -2487,8 +2457,9 @@ rebuild_if_stale → stored_head_oid (from _zdb_meta) → diff_paths(old_head, n
 **Compaction:**
 
 ```
-CLI → compaction::compact:
-  shared_head(all active nodes) → cleanup_crdt_temp(before head)
+CLI → compaction::compact(CompactOptions):
+  threshold_check → backup_before_compact(bundle::export_full_bundle)
+  → shared_head(all active nodes) → cleanup_crdt_temp(before head)
   → compact_crdt_docs(merge per-zettel) → git gc
 ```
 
@@ -3065,6 +3036,8 @@ REMOTE_DIR="$(mktemp -d)"
 ```
 
 The important detail is the absolute `ZDB_BIN`. `tests/smoke.sh` changes into a temporary directory before invoking the CLI, so a relative path like `target/debug/zdb` would work only from the repository root and then break as soon as the smoke script moves into its sandbox. Passing the workspace-absolute path preserves the single-build optimization and keeps the smoke scripts portable across Linux, macOS, and Windows.
+
+The workflow now adds two more guardrails around that build/test pipeline. First, `cargo clippy --workspace --all-targets` only runs on Linux, which drops several redundant minutes from the Windows and macOS legs without reducing lint coverage because the lint set is platform-agnostic for this workspace. Second, the `Test` step exports `PROPTEST_CASES=50`, which prevents the cross-platform matrix from accidentally running the full exhaustive property budgets that are meant for manual soak testing. The result is that CI still exercises the same parser/SQL/CRDT/indexer properties everywhere, but with a bounded workload and without the Unicode generator reject failure that previously consumed the whole job.
 
 ```bash
 sed -n '892,909p' zdb-core/src/git_ops.rs
@@ -3884,7 +3857,12 @@ sed -n '254,263p' zdb-core/src/ffi.rs
     pub fn compact(&self) -> Result<(), ZdbError> {
         let repo = self.repo.lock().unwrap();
         let sync_mgr = SyncManager::open(&repo).map_err(ZdbError::from)?;
-        crate::compaction::compact(&repo, &sync_mgr, true).map_err(ZdbError::from)?;
+        let opts = crate::types::CompactOptions {
+            force: true,
+            skip_backup: true, // mobile has no recovery workflow
+            ..Default::default()
+        };
+        crate::compaction::compact(&repo, &sync_mgr, &opts).map_err(ZdbError::from)?;
         Ok(())
 ```
 

@@ -193,6 +193,7 @@ if ($output -notmatch "registered node") { throw "register-node failed" }
 $output = zdb status
 if ($output -notmatch "registered nodes: 1") { throw "status missing node" }
 $output = zdb compact
+if ($output -notmatch "backup:") { throw "compact missing backup path" }
 if ($output -notmatch "gc: ok") { throw "compact failed" }
 if ($output -notmatch "crdt temp:") { throw "compact missing crdt temp stats" }
 if ($output -notmatch "repo \(\.git\):") { throw "compact missing repo stats" }
@@ -209,7 +210,23 @@ pass "node list + retire"
 # 16. compact --dry-run
 $output = zdb compact --dry-run
 if ($output -notmatch "dry run") { throw "compact dry-run failed" }
+if ($output -notmatch "backup would write:") { throw "dry-run missing backup info" }
 pass "compact --dry-run"
+
+# 16a. compact --no-backup
+zdb register-node "no-backup-test" | Out-Null
+$output = zdb compact --no-backup --force
+if ($output -notmatch "gc: ok") { throw "compact --no-backup failed" }
+if ($output -match "backup:") { throw "--no-backup should suppress backup" }
+pass "compact --no-backup"
+
+# 16b. compact --backup-path
+$customBackup = Join-Path $env:TEMP "custom-backup.bundle.tar"
+$output = zdb compact --force --backup-path $customBackup
+if ($output -notmatch "backup:") { throw "compact --backup-path missing backup line" }
+if ($output -notmatch [regex]::Escape($customBackup)) { throw "compact --backup-path wrong path" }
+if (-not (Test-Path $customBackup)) { throw "custom backup file not created" }
+pass "compact --backup-path"
 
 # 17. GraphQL server
 $SERVER_PORT = 19200 + (Get-Random -Maximum 800)
@@ -372,14 +389,29 @@ try {
 pass "nosql-api: auth rejects missing token"
 
 # compact mutation
-$result = gql '{"query":"mutation { compact { filesRemoved crdtDocsCompacted gcSuccess crdtTempBytesBefore crdtTempBytesAfter crdtTempFilesBefore crdtTempFilesAfter repoBytesBefore repoBytesAfter } }"}'
+$result = gql '{"query":"mutation { compact { filesRemoved crdtDocsCompacted gcSuccess crdtTempBytesBefore crdtTempBytesAfter crdtTempFilesBefore crdtTempFilesAfter repoBytesBefore repoBytesAfter backupPath } }"}'
 if ($result -notmatch "gcSuccess") { throw "compact mutation failed" }
 pass "serve: compact mutation"
 
 # compact(force: true)
-$result = gql '{"query":"mutation { compact(force: true) { filesRemoved crdtDocsCompacted gcSuccess crdtTempBytesBefore crdtTempBytesAfter repoBytesBefore repoBytesAfter } }"}'
+$result = gql '{"query":"mutation { compact(force: true) { filesRemoved crdtDocsCompacted gcSuccess crdtTempBytesBefore crdtTempBytesAfter repoBytesBefore repoBytesAfter backupPath } }"}'
 if ($result -notmatch "gcSuccess") { throw "compact(force:true) mutation failed" }
+if ($result -notmatch "backupPath") { throw "compact(force:true) missing backupPath" }
 pass "serve: compact(force: true) mutation"
+
+# compact(noBackup: true)
+$result = gql '{"query":"mutation { compact(force: true, noBackup: true) { gcSuccess backupPath } }"}'
+if ($result -notmatch "gcSuccess") { throw "compact(noBackup:true) failed" }
+if ($result -notmatch '"backupPath":null') { throw "compact(noBackup:true) should have null backupPath" }
+pass "serve: compact(noBackup: true) mutation"
+
+# compact(backupPath: custom)
+$gqlBackup = Join-Path $env:TEMP "gql-backup.bundle.tar"
+$result = gql "{`"query`":`"mutation { compact(force: true, backupPath: \`"$gqlBackup\`") { gcSuccess backupPath } }`"}"
+if ($result -notmatch "gcSuccess") { throw "compact(backupPath) failed" }
+if ($result -notmatch "backupPath") { throw "compact(backupPath) missing backupPath" }
+if (-not (Test-Path $gqlBackup)) { throw "compact(backupPath) file not created" }
+pass "serve: compact(backupPath) mutation"
 
 # sync mutation — no remote configured, expect error not panic
 $result = gql '{"query":"mutation { sync { direction commitsTransferred conflictsResolved resurrected } }"}'
