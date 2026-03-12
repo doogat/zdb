@@ -2,7 +2,7 @@
 
 **Source**: `zdb-core/src/indexer.rs` (~1,366 lines)
 
-SQLite-based search index with FTS5 full-text search, type inference, schema merging, and table materialization. The index is a derived cache — always rebuildable from the Git repository.
+SQLite-based search index with FTS5 full-text search, type inference, schema merging, and table materialization. The index is a derived cache — always rebuildable from the Git repository. No schema migration framework is needed: on full rebuild, all tables are dropped and recreated from the current schema definitions.
 
 ## Index
 
@@ -54,12 +54,22 @@ Uses a named `SAVEPOINT`/`RELEASE` pair (via `with_savepoint`) for atomic writes
 
 `rebuild(repo: &GitRepo) -> Result<RebuildReport>`
 
-Full index rebuild in three phases:
+Full index rebuild. Drops all tables (internal and materialized) and recreates the schema from scratch before re-indexing. This ensures schema changes take effect without migrations — the index is a disposable cache.
 
-1. **Index** — walk all `zettelkasten/*.md` paths in Git HEAD, parse and index each zettel
-2. **Warn** — collect consistency warnings (malformed YAML, missing required fields, cross-zone duplicates)
-3. **Materialize** — for each distinct type, merge typedef + inferred schema and create SQLite tables with data
-4. Store current HEAD OID in `_zdb_meta` table
+Phases:
+
+1. **Drop & recreate** — drop every table, recreate internal schema from `SCHEMA_DDL`
+2. **Index** — walk all `zettelkasten/*.md` paths in Git HEAD, parse and index each zettel
+3. **Warn** — collect consistency warnings (malformed YAML, missing required fields, cross-zone duplicates)
+4. **Materialize** — for each distinct type, merge typedef + inferred schema and create SQLite tables with data
+5. Store current HEAD OID in `_zdb_meta` table
+
+Full rebuild is only triggered by:
+- Explicit `zdb reindex`
+- Index corruption (detected by `check_integrity`)
+- Unreachable HEAD OID (e.g. after `git gc`)
+
+Normal operations (after `git pull`, direct file edits) use `incremental_reindex` instead, which only processes changed files without dropping tables.
 
 Returns a `RebuildReport`:
 
@@ -71,6 +81,14 @@ pub struct RebuildReport {
     pub warnings: Vec<ConsistencyWarning>,
 }
 ```
+
+### incremental_reindex
+
+`incremental_reindex(repo: &GitRepo, old_head: &str) -> Result<RebuildReport>`
+
+Diffs `old_head` against the current HEAD and processes only changed files. Added or modified zettels are re-indexed; deleted zettels are removed. Falls back to full `rebuild` if the diff fails (e.g. old HEAD unreachable after gc).
+
+This is the common path for keeping the index current after `git pull` or direct file edits — fast and non-destructive (no table drops).
 
 ### Integrity Check
 

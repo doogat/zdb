@@ -19,72 +19,98 @@ pub struct Index {
 }
 
 impl Index {
+    /// Schema DDL for all internal tables. Kept in one place so `open` and
+    /// `rebuild` (which drops everything first) use the same definitions.
+    const SCHEMA_DDL: &str = "
+        CREATE TABLE IF NOT EXISTS zettels (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            date TEXT,
+            type TEXT,
+            path TEXT UNIQUE NOT NULL,
+            body TEXT,
+            updated_at TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS _zdb_tags (
+            zettel_id TEXT NOT NULL REFERENCES zettels(id),
+            tag TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_zdb_tags_tag ON _zdb_tags(tag);
+
+        CREATE TABLE IF NOT EXISTS _zdb_fields (
+            zettel_id TEXT NOT NULL REFERENCES zettels(id),
+            key TEXT NOT NULL,
+            value TEXT,
+            zone TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_zdb_fields_key ON _zdb_fields(key);
+
+        CREATE TABLE IF NOT EXISTS _zdb_links (
+            source_id TEXT NOT NULL REFERENCES zettels(id),
+            target_path TEXT NOT NULL,
+            display TEXT,
+            zone TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_zdb_links_target ON _zdb_links(target_path);
+
+        CREATE TABLE IF NOT EXISTS _zdb_aliases (
+            zettel_id TEXT NOT NULL REFERENCES zettels(id),
+            alias TEXT COLLATE NOCASE NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_zdb_aliases_alias ON _zdb_aliases(alias);
+
+        CREATE TABLE IF NOT EXISTS _zdb_meta (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS _zdb_attachments (
+            zettel_id TEXT NOT NULL REFERENCES zettels(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            mime TEXT,
+            size INTEGER,
+            path TEXT,
+            PRIMARY KEY (zettel_id, name)
+        );
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS _zdb_fts USING fts5(
+            title, body, tags,
+            tokenize = 'porter unicode61'
+        );
+    ";
+
     /// Open (or create) the SQLite index database.
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
         conn.execute_batch("PRAGMA busy_timeout=5000;")?;
-
-        conn.execute_batch(
-            "CREATE TABLE IF NOT EXISTS zettels (
-                id TEXT PRIMARY KEY,
-                title TEXT,
-                date TEXT,
-                type TEXT,
-                path TEXT UNIQUE NOT NULL,
-                body TEXT,
-                updated_at TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS _zdb_tags (
-                zettel_id TEXT NOT NULL REFERENCES zettels(id),
-                tag TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_zdb_tags_tag ON _zdb_tags(tag);
-
-            CREATE TABLE IF NOT EXISTS _zdb_fields (
-                zettel_id TEXT NOT NULL REFERENCES zettels(id),
-                key TEXT NOT NULL,
-                value TEXT,
-                zone TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_zdb_fields_key ON _zdb_fields(key);
-
-            CREATE TABLE IF NOT EXISTS _zdb_links (
-                source_id TEXT NOT NULL REFERENCES zettels(id),
-                target_path TEXT NOT NULL,
-                display TEXT,
-                zone TEXT
-            );
-            CREATE INDEX IF NOT EXISTS idx_zdb_links_target ON _zdb_links(target_path);
-
-            CREATE TABLE IF NOT EXISTS _zdb_aliases (
-                zettel_id TEXT NOT NULL REFERENCES zettels(id),
-                alias TEXT COLLATE NOCASE NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_zdb_aliases_alias ON _zdb_aliases(alias);
-
-            CREATE TABLE IF NOT EXISTS _zdb_meta (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            );
-
-            CREATE TABLE IF NOT EXISTS _zdb_attachments (
-                zettel_id TEXT NOT NULL REFERENCES zettels(id) ON DELETE CASCADE,
-                name TEXT NOT NULL,
-                mime TEXT,
-                size INTEGER,
-                path TEXT,
-                PRIMARY KEY (zettel_id, name)
-            );
-
-            CREATE VIRTUAL TABLE IF NOT EXISTS _zdb_fts USING fts5(
-                title, body, tags,
-                tokenize = 'porter unicode61'
-            );",
-        )?;
+        conn.execute_batch(Self::SCHEMA_DDL)?;
 
         Ok(Self { conn })
+    }
+
+    /// Drop every table (internal + materialized) so the schema can be
+    /// recreated from scratch. The index is a derived cache — no migrations,
+    /// just rebuild.
+    fn drop_all_tables(&self) -> Result<()> {
+        let mut stmt = self.conn.prepare(
+            "SELECT name FROM sqlite_master \
+             WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%'",
+        )?;
+        let tables: Vec<String> = stmt
+            .query_map([], |row| row.get(0))?
+            .filter_map(|r| r.ok())
+            .collect();
+        drop(stmt);
+        // Disable FK checks so drop order doesn't matter.
+        self.conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+        for table in &tables {
+            self.conn
+                .execute_batch(&format!("DROP TABLE IF EXISTS \"{table}\""))?;
+        }
+        self.conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+        Ok(())
     }
 
     /// Run `f` inside a named SAVEPOINT, rolling back on error.
@@ -437,6 +463,12 @@ impl Index {
     #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
     pub fn rebuild(&self, repo: &impl ZettelSource) -> Result<crate::types::RebuildReport> {
         tracing::info!("rebuild_triggered");
+
+        // Drop and recreate all tables so schema changes take effect
+        // without needing migrations — the index is a rebuildable cache.
+        self.drop_all_tables()?;
+        self.conn.execute_batch(Self::SCHEMA_DDL)?;
+
         let paths = repo.list_zettels()?;
         let mut report = crate::types::RebuildReport::default();
 
