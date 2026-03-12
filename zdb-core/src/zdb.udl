@@ -92,4 +92,13 @@ interface ZettelDriver {
 
     [Throws=ZdbError]
     sequence<TypeSchemaRecord> list_type_schemas();
+
+    [Throws=ZdbError]
+    string export_full_bundle(string output_path);
+
+    [Throws=ZdbError]
+    string export_delta_bundle(string target_node_uuid, string output_path);
+
+    [Throws=ZdbError]
+    void import_bundle(string bundle_path);
 };
