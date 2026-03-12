@@ -221,7 +221,9 @@ class ZettelDBTest {
             .redirectErrorStream(false)
             .start()
         val stdout = proc.inputStream.bufferedReader().readText().trim()
-        proc.waitFor()
+        val stderr = proc.errorStream.bufferedReader().readText().trim()
+        val exitCode = proc.waitFor()
+        check(exitCode == 0) { "git ${args.joinToString(" ")} failed (exit $exitCode): $stderr" }
         return stdout
     }
 

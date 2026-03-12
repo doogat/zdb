@@ -227,17 +227,23 @@ final class ZettelDBTests: XCTestCase {
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/git")
         proc.arguments = args
         proc.currentDirectoryURL = dir
-        proc.environment = [
-            "GIT_AUTHOR_NAME": "test",
-            "GIT_AUTHOR_EMAIL": "test@test",
-            "GIT_COMMITTER_NAME": "test",
-            "GIT_COMMITTER_EMAIL": "test@test",
-        ]
+        var env = ProcessInfo.processInfo.environment
+        env["GIT_AUTHOR_NAME"] = "test"
+        env["GIT_AUTHOR_EMAIL"] = "test@test"
+        env["GIT_COMMITTER_NAME"] = "test"
+        env["GIT_COMMITTER_EMAIL"] = "test@test"
+        proc.environment = env
         let pipe = Pipe()
         proc.standardOutput = pipe
-        proc.standardError = Pipe()
+        let errPipe = Pipe()
+        proc.standardError = errPipe
         try proc.run()
         proc.waitUntilExit()
+        guard proc.terminationStatus == 0 else {
+            let stderr = String(data: errPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            throw NSError(domain: "git", code: Int(proc.terminationStatus),
+                          userInfo: [NSLocalizedDescriptionKey: "git \(args.joined(separator: " ")) failed: \(stderr)"])
+        }
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
         return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
     }
