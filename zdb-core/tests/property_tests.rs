@@ -5,12 +5,14 @@
 //! Override with PROPTEST_CASES env var (e.g. 100 for CI).
 
 use proptest::prelude::*;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use zdb_core::crdt_resolver;
 use zdb_core::indexer::Index;
 use zdb_core::parser;
-use zdb_core::traits::ZettelSource;
-use zdb_core::types::{CommitHash, ConflictFile, Value, ZettelId, ZettelMeta};
+use zdb_core::sql_engine::SqlEngine;
+use zdb_core::traits::{ZettelSource, ZettelStore};
+use zdb_core::types::{CommitHash, ConflictFile, DiffKind, Value, ZettelId, ZettelMeta};
 
 // ---------------------------------------------------------------------------
 // Generators
@@ -570,6 +572,584 @@ proptest! {
         let serialized = parser::serialize(&parsed);
         let reparsed = parser::parse(&serialized, "test.md").unwrap();
         prop_assert_eq!(&parsed.meta.extra, &reparsed.meta.extra);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SQL engine mock store + generators
+// ---------------------------------------------------------------------------
+
+/// In-memory mock implementing ZettelStore for SQL engine tests.
+struct MockStore {
+    files: RefCell<HashMap<String, String>>,
+    head: String,
+}
+
+impl MockStore {
+    fn new() -> Self {
+        Self {
+            files: RefCell::new(HashMap::new()),
+            head: "abc123".to_string(),
+        }
+    }
+
+}
+
+impl ZettelSource for MockStore {
+    fn list_zettels(&self) -> zdb_core::error::Result<Vec<String>> {
+        let mut paths: Vec<String> = self
+            .files
+            .borrow()
+            .keys()
+            .filter(|p| p.starts_with("zettelkasten/") && p.ends_with(".md"))
+            .cloned()
+            .collect();
+        paths.sort();
+        Ok(paths)
+    }
+
+    fn read_file(&self, path: &str) -> zdb_core::error::Result<String> {
+        self.files
+            .borrow()
+            .get(path)
+            .cloned()
+            .ok_or_else(|| zdb_core::error::ZettelError::NotFound(path.to_string()))
+    }
+
+    fn head_oid(&self) -> zdb_core::error::Result<CommitHash> {
+        Ok(CommitHash(self.head.clone()))
+    }
+
+    fn diff_paths(
+        &self,
+        _old_oid: &str,
+        _new_oid: &str,
+    ) -> zdb_core::error::Result<Vec<(DiffKind, String)>> {
+        Ok(Vec::new())
+    }
+}
+
+impl ZettelStore for MockStore {
+    fn commit_file(&self, path: &str, content: &str, _msg: &str) -> zdb_core::error::Result<CommitHash> {
+        self.files.borrow_mut().insert(path.to_string(), content.to_string());
+        Ok(CommitHash("mock".into()))
+    }
+
+    fn commit_files(&self, files: &[(&str, &str)], _msg: &str) -> zdb_core::error::Result<CommitHash> {
+        let mut map = self.files.borrow_mut();
+        for (path, content) in files {
+            map.insert(path.to_string(), content.to_string());
+        }
+        Ok(CommitHash("mock".into()))
+    }
+
+    fn delete_file(&self, path: &str, _msg: &str) -> zdb_core::error::Result<CommitHash> {
+        self.files.borrow_mut().remove(path);
+        Ok(CommitHash("mock".into()))
+    }
+
+    fn delete_files(&self, paths: &[&str], _msg: &str) -> zdb_core::error::Result<CommitHash> {
+        let mut map = self.files.borrow_mut();
+        for path in paths {
+            map.remove(*path);
+        }
+        Ok(CommitHash("mock".into()))
+    }
+
+    fn commit_batch(
+        &self,
+        writes: &[(&str, &str)],
+        deletes: &[&str],
+        _msg: &str,
+    ) -> zdb_core::error::Result<CommitHash> {
+        let mut map = self.files.borrow_mut();
+        for (path, content) in writes {
+            map.insert(path.to_string(), content.to_string());
+        }
+        for path in deletes {
+            map.remove(*path);
+        }
+        Ok(CommitHash("mock".into()))
+    }
+}
+
+/// Safe SQL column name (prefixed to avoid reserved words).
+fn arb_column_name() -> impl Strategy<Value = String> {
+    safe_word().prop_map(|w| format!("col_{w}"))
+}
+
+/// Safe SQL table name (prefixed, not "zettels" or "_zdb_*").
+fn arb_table_name() -> impl Strategy<Value = String> {
+    safe_word().prop_map(|w| format!("tbl_{w}"))
+}
+
+/// Random SQL column type.
+fn arb_column_type() -> impl Strategy<Value = String> {
+    prop_oneof![
+        Just("TEXT".to_string()),
+        Just("INTEGER".to_string()),
+        Just("REAL".to_string()),
+        Just("BOOLEAN".to_string()),
+    ]
+}
+
+/// Generate a valid CREATE TABLE statement with 1-5 columns.
+fn arb_create_table_sql() -> impl Strategy<Value = (String, String, Vec<(String, String)>)> {
+    (
+        arb_table_name(),
+        prop::collection::vec((arb_column_name(), arb_column_type()), 1..=5),
+    )
+        .prop_map(|(tbl, cols)| {
+            // Deduplicate column names
+            let mut seen = std::collections::HashSet::new();
+            let cols: Vec<(String, String)> = cols
+                .into_iter()
+                .filter(|(name, _)| seen.insert(name.clone()))
+                .collect();
+            let col_defs: Vec<String> = cols
+                .iter()
+                .map(|(name, typ)| format!("{name} {typ}"))
+                .collect();
+            let sql = format!("CREATE TABLE {tbl} ({})", col_defs.join(", "));
+            (sql, tbl, cols)
+        })
+}
+
+/// Safe string value for SQL INSERT/UPDATE (alphanumeric, no quotes).
+fn arb_sql_string_value() -> impl Strategy<Value = String> {
+    "[a-zA-Z0-9]{1,20}"
+}
+
+/// Injection strings with SQL-special characters.
+fn arb_injection_string() -> impl Strategy<Value = String> {
+    prop_oneof![
+        Just("'; DROP TABLE zettels; --".to_string()),
+        Just("\" OR 1=1 --".to_string()),
+        Just("/**/".to_string()),
+        Just("\\".to_string()),
+        Just("\0".to_string()),
+        Just("'; DELETE FROM zettels WHERE '1'='1".to_string()),
+        Just("value'); INSERT INTO zettels VALUES('hack".to_string()),
+        prop::collection::vec(
+            prop_oneof![
+                Just("'".to_string()),
+                Just("\"".to_string()),
+                Just(";".to_string()),
+                Just("--".to_string()),
+                Just("/*".to_string()),
+                Just("*/".to_string()),
+                Just("\\".to_string()),
+                "[a-zA-Z0-9]{1,5}".prop_map(|s| s),
+            ],
+            2..=10,
+        )
+        .prop_map(|parts| parts.join("")),
+    ]
+}
+
+// ---------------------------------------------------------------------------
+// SQL engine: valid DDL/DML properties (Task #5)
+// ---------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(500))]
+
+    /// CREATE TABLE produces Ok result and typedef is queryable.
+    #[test]
+    fn sql_create_table_succeeds((sql, tbl, _cols) in arb_create_table_sql()) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let store = MockStore::new();
+        let mut engine = SqlEngine::new(&idx, &store);
+
+        let result = engine.execute(&sql);
+        prop_assert!(result.is_ok(), "CREATE TABLE failed: {:?}\nsql: {}", result.err(), sql);
+
+        // Verify typedef was created by querying _typedef table
+        let check_sql = format!(
+            "SELECT id FROM zettels WHERE type = '_typedef' AND title = '{}'",
+            tbl.to_lowercase()
+        );
+        let check = idx.query_raw(&check_sql);
+        prop_assert!(check.is_ok(), "typedef query failed: {:?}", check.err());
+    }
+
+    /// INSERT after CREATE TABLE returns Affected(1).
+    #[test]
+    fn sql_insert_succeeds(
+        (create_sql, tbl, cols) in arb_create_table_sql(),
+        values in prop::collection::vec(arb_sql_string_value(), 5),
+    ) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let store = MockStore::new();
+        let mut engine = SqlEngine::new(&idx, &store);
+
+        engine.execute(&create_sql).unwrap();
+
+        let col_names: Vec<&str> = cols.iter().map(|(n, _)| n.as_str()).collect();
+        let val_strs: Vec<String> = cols.iter().enumerate().map(|(i, _)| {
+            format!("'{}'", values.get(i).map(|s| s.as_str()).unwrap_or("val"))
+        }).collect();
+        let insert_sql = format!(
+            "INSERT INTO {} ({}) VALUES ({})",
+            tbl,
+            col_names.join(", "),
+            val_strs.join(", ")
+        );
+
+        let result = engine.execute(&insert_sql);
+        prop_assert!(result.is_ok(), "INSERT failed: {:?}\nsql: {}", result.err(), insert_sql);
+        if let Ok(zdb_core::sql_engine::SqlResult::Affected(n)) = &result {
+            prop_assert_eq!(*n, 1);
+        }
+    }
+
+    /// SELECT after INSERT returns the inserted row.
+    #[test]
+    fn sql_select_after_insert(
+        (create_sql, tbl, cols) in arb_create_table_sql(),
+        values in prop::collection::vec(arb_sql_string_value(), 5),
+    ) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let store = MockStore::new();
+        let mut engine = SqlEngine::new(&idx, &store);
+
+        engine.execute(&create_sql).unwrap();
+
+        let col_names: Vec<&str> = cols.iter().map(|(n, _)| n.as_str()).collect();
+        let val_strs: Vec<String> = cols.iter().enumerate().map(|(i, _)| {
+            format!("'{}'", values.get(i).map(|s| s.as_str()).unwrap_or("val"))
+        }).collect();
+        let insert_sql = format!(
+            "INSERT INTO {} ({}) VALUES ({})",
+            tbl, col_names.join(", "), val_strs.join(", ")
+        );
+        engine.execute(&insert_sql).unwrap();
+
+        let select_sql = format!("SELECT {} FROM {}", col_names.join(", "), tbl);
+        let result = engine.execute(&select_sql);
+        prop_assert!(result.is_ok(), "SELECT failed: {:?}", result.err());
+        if let Ok(zdb_core::sql_engine::SqlResult::Rows { rows, .. }) = &result {
+            prop_assert!(!rows.is_empty(), "SELECT returned no rows after INSERT");
+        }
+    }
+
+    /// UPDATE modifies the inserted value.
+    #[test]
+    fn sql_update_modifies(
+        (create_sql, tbl, cols) in arb_create_table_sql(),
+        values in prop::collection::vec(arb_sql_string_value(), 5),
+        new_val in arb_sql_string_value(),
+    ) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let store = MockStore::new();
+        let mut engine = SqlEngine::new(&idx, &store);
+
+        engine.execute(&create_sql).unwrap();
+
+        let col_names: Vec<&str> = cols.iter().map(|(n, _)| n.as_str()).collect();
+        let val_strs: Vec<String> = cols.iter().enumerate().map(|(i, _)| {
+            format!("'{}'", values.get(i).map(|s| s.as_str()).unwrap_or("val"))
+        }).collect();
+        let insert_sql = format!(
+            "INSERT INTO {} ({}) VALUES ({})",
+            tbl, col_names.join(", "), val_strs.join(", ")
+        );
+        engine.execute(&insert_sql).unwrap();
+
+        let first_col = &cols[0].0;
+        let update_sql = format!("UPDATE {} SET {} = '{}'", tbl, first_col, new_val);
+        let result = engine.execute(&update_sql);
+        prop_assert!(result.is_ok(), "UPDATE failed: {:?}\nsql: {}", result.err(), update_sql);
+
+        let select_sql = format!("SELECT {} FROM {}", first_col, tbl);
+        let sel = engine.execute(&select_sql);
+        prop_assert!(sel.is_ok());
+        if let Ok(zdb_core::sql_engine::SqlResult::Rows { rows, .. }) = &sel {
+            prop_assert!(!rows.is_empty());
+            prop_assert!(
+                rows[0][0].contains(&new_val),
+                "expected updated value '{}' in row, got '{}'",
+                new_val, rows[0][0]
+            );
+        }
+    }
+
+    /// DELETE removes inserted rows.
+    #[test]
+    fn sql_delete_removes(
+        (create_sql, tbl, cols) in arb_create_table_sql(),
+        values in prop::collection::vec(arb_sql_string_value(), 5),
+    ) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let store = MockStore::new();
+        let mut engine = SqlEngine::new(&idx, &store);
+
+        engine.execute(&create_sql).unwrap();
+
+        let col_names: Vec<&str> = cols.iter().map(|(n, _)| n.as_str()).collect();
+        let val_strs: Vec<String> = cols.iter().enumerate().map(|(i, _)| {
+            format!("'{}'", values.get(i).map(|s| s.as_str()).unwrap_or("val"))
+        }).collect();
+        let insert_sql = format!(
+            "INSERT INTO {} ({}) VALUES ({})",
+            tbl, col_names.join(", "), val_strs.join(", ")
+        );
+        engine.execute(&insert_sql).unwrap();
+
+        let delete_sql = format!("DELETE FROM {}", tbl);
+        let result = engine.execute(&delete_sql);
+        prop_assert!(result.is_ok(), "DELETE failed: {:?}", result.err());
+
+        let select_sql = format!("SELECT * FROM {}", tbl);
+        let sel = engine.execute(&select_sql);
+        prop_assert!(sel.is_ok());
+        if let Ok(zdb_core::sql_engine::SqlResult::Rows { rows, .. }) = &sel {
+            prop_assert!(rows.is_empty(), "rows remain after DELETE: {:?}", rows);
+        }
+    }
+
+    /// DDL roundtrip: CREATE TABLE columns match typedef query.
+    #[test]
+    fn sql_ddl_roundtrip((create_sql, _, cols) in arb_create_table_sql()) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let store = MockStore::new();
+        let mut engine = SqlEngine::new(&idx, &store);
+
+        let result = engine.execute(&create_sql);
+        prop_assert!(result.is_ok(), "CREATE TABLE failed: {:?}", result.err());
+
+        // The typedef zettel should be stored in MockStore
+        let files = store.files.borrow();
+        let typedef_file = files.iter().find(|(path, _)| {
+            path.starts_with("zettelkasten/_typedef/") && path.ends_with(".md")
+        });
+        prop_assert!(typedef_file.is_some(), "no typedef file found in store");
+
+        let (_, content) = typedef_file.unwrap();
+        // Verify each column name appears in the typedef content
+        for (col_name, _col_type) in &cols {
+            prop_assert!(
+                content.to_lowercase().contains(&col_name.to_lowercase()),
+                "column '{}' not found in typedef:\n{}", col_name, content
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SQL engine: invalid input properties (Task #6)
+// ---------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1_000))]
+
+    /// Random ASCII strings don't cause panics.
+    #[test]
+    fn sql_random_strings_no_panic(input in "[\\x20-\\x7E]{0,200}") {
+        let dir = tempfile::TempDir::new().unwrap();
+        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let store = MockStore::new();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut engine = SqlEngine::new(&idx, &store);
+            let _ = engine.execute_batch(&input);
+        }));
+        prop_assert!(result.is_ok(), "panicked on input: {:?}", input);
+    }
+
+    /// Truncated SQL keywords return Err, not panic.
+    #[test]
+    fn sql_partial_fragments_no_panic(
+        fragment in prop_oneof![
+            Just("SELE".to_string()),
+            Just("CREA".to_string()),
+            Just("INS".to_string()),
+            Just("UPDA".to_string()),
+            Just("DELE".to_string()),
+            Just("DROP".to_string()),
+            Just("ALTER".to_string()),
+            Just("CREATE TABLE".to_string()),
+            Just("INSERT INTO".to_string()),
+            Just("SELECT FROM".to_string()),
+            Just("DELETE WHERE".to_string()),
+        ],
+    ) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let store = MockStore::new();
+        let mut engine = SqlEngine::new(&idx, &store);
+        let result = engine.execute_batch(&fragment);
+        prop_assert!(result.is_err(), "expected Err for fragment '{}', got: {:?}", fragment, result);
+    }
+
+    /// Unsupported SQL operations return Err.
+    #[test]
+    fn sql_unsupported_ops_return_err(
+        stmt in prop_oneof![
+            Just("CREATE INDEX idx ON tbl_test (col_a)".to_string()),
+            Just("CREATE VIEW v AS SELECT 1".to_string()),
+            Just("CREATE VIRTUAL TABLE vt USING fts5(content)".to_string()),
+            Just("CREATE TRIGGER tr AFTER INSERT ON tbl_test BEGIN SELECT 1; END".to_string()),
+            Just("DROP INDEX idx".to_string()),
+            Just("DROP VIEW v".to_string()),
+        ],
+    ) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let store = MockStore::new();
+        let mut engine = SqlEngine::new(&idx, &store);
+        let result = engine.execute(&stmt);
+        prop_assert!(result.is_err(), "expected Err for unsupported '{}', got: {:?}", stmt, result);
+    }
+
+    /// Empty and whitespace-only strings return Err.
+    #[test]
+    fn sql_empty_input_returns_err(
+        input in prop_oneof![
+            Just("".to_string()),
+            Just(" ".to_string()),
+            Just("  \t  ".to_string()),
+            Just("\n".to_string()),
+            Just("   \n   \n   ".to_string()),
+        ],
+    ) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let store = MockStore::new();
+        let mut engine = SqlEngine::new(&idx, &store);
+        let result = engine.execute_batch(&input);
+        prop_assert!(result.is_err(), "expected Err for empty/whitespace input '{:?}'", input);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SQL engine: injection/edge-case properties (Task #7)
+// ---------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(1_000))]
+
+    /// Injection strings in VALUES are treated as data, not code.
+    #[test]
+    fn sql_injection_in_values_no_escape(injection in arb_injection_string()) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let store = MockStore::new();
+        let mut engine = SqlEngine::new(&idx, &store);
+
+        engine.execute("CREATE TABLE tbl_inject (col_data TEXT)").unwrap();
+
+        // Escape single quotes for SQL string literal
+        let escaped = injection.replace('\'', "''");
+        let insert_sql = format!("INSERT INTO tbl_inject (col_data) VALUES ('{escaped}')");
+        let result = engine.execute(&insert_sql);
+        // Either Err (parse failure) or the literal string is stored — never executed as SQL
+        if result.is_ok() {
+            let sel = engine.execute("SELECT col_data FROM tbl_inject");
+            if let Ok(zdb_core::sql_engine::SqlResult::Rows { rows, .. }) = sel {
+                if !rows.is_empty() {
+                    // The stored value should be the literal injection string
+                    prop_assert!(
+                        rows[0][0].contains(&injection) || rows[0][0].contains(&escaped),
+                        "injection string not stored literally: got '{}', expected '{}'",
+                        rows[0][0], injection
+                    );
+                }
+            }
+        }
+    }
+
+    /// SQL reserved words as double-quoted column identifiers succeed.
+    #[test]
+    fn sql_reserved_word_identifiers(
+        word in prop_oneof![
+            Just("select"),
+            Just("table"),
+            Just("index"),
+            Just("where"),
+            Just("from"),
+            Just("order"),
+            Just("group"),
+            Just("insert"),
+            Just("update"),
+            Just("delete"),
+            Just("create"),
+            Just("drop"),
+        ],
+    ) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let store = MockStore::new();
+        let mut engine = SqlEngine::new(&idx, &store);
+
+        let sql = format!("CREATE TABLE tbl_reserved (\"{word}\" TEXT)");
+        let result = engine.execute(&sql);
+        prop_assert!(
+            result.is_ok(),
+            "CREATE TABLE with reserved word '{}' failed: {:?}", word, result.err()
+        );
+    }
+
+    /// Hyphenated identifiers in double quotes succeed.
+    #[test]
+    fn sql_hyphenated_identifiers(
+        prefix in safe_word(),
+        suffix in safe_word(),
+    ) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let store = MockStore::new();
+        let mut engine = SqlEngine::new(&idx, &store);
+
+        let tbl_name = format!("tbl_{prefix}-{suffix}");
+        let sql = format!("CREATE TABLE \"{tbl_name}\" (col_a TEXT)");
+        let result = engine.execute(&sql);
+        prop_assert!(
+            result.is_ok(),
+            "CREATE TABLE with hyphen '{}' failed: {:?}", tbl_name, result.err()
+        );
+    }
+
+    /// Unicode identifiers in double quotes don't panic.
+    #[test]
+    fn sql_unicode_identifiers(name in arb_unicode_safe_string()) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let store = MockStore::new();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut engine = SqlEngine::new(&idx, &store);
+            let sql = format!("CREATE TABLE \"tbl_{}\" (col_a TEXT)", name);
+            let _ = engine.execute(&sql);
+        }));
+        prop_assert!(result.is_ok(), "panicked on unicode identifier: {:?}", name);
+    }
+
+    /// Edge-case SQL structures don't cause panics.
+    #[test]
+    fn sql_edge_case_structures_no_panic(
+        input in prop_oneof![
+            Just(";;;".to_string()),
+            Just("SELECT 1; ; SELECT 2".to_string()),
+            Just("SELECT 1 WHERE (((((1=1)))))".to_string()),
+            Just("SELECT 1 WHERE ((((((((((1=1))))))))))".to_string()),
+            Just("SELECT ''; SELECT '';".to_string()),
+            prop::collection::vec(Just(";"), 1..=50).prop_map(|v| v.join("")),
+            prop::collection::vec(Just("()"), 1..=30).prop_map(|v| format!("SELECT {}", v.join(""))),
+        ],
+    ) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let store = MockStore::new();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut engine = SqlEngine::new(&idx, &store);
+            let _ = engine.execute_batch(&input);
+        }));
+        prop_assert!(result.is_ok(), "panicked on edge-case input: {:?}", input);
     }
 }
 
