@@ -138,6 +138,12 @@ enum Command {
         /// Show what would be done without doing it
         #[arg(long)]
         dry_run: bool,
+        /// Skip pre-compaction backup bundle
+        #[arg(long)]
+        no_backup: bool,
+        /// Custom path for backup bundle
+        #[arg(long)]
+        backup_path: Option<PathBuf>,
     },
     /// Rebuild the search index
     Reindex,
@@ -676,7 +682,7 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
             }
         },
 
-        Command::Compact { force, dry_run } => {
+        Command::Compact { force, dry_run, no_backup, backup_path } => {
             let repo = GitRepo::open(&cli.repo)?;
             let mgr = SyncManager::open(&repo)?;
             if dry_run {
@@ -696,9 +702,25 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
                 };
                 outln!("shared head: {:?}", head)?;
                 outln!("crdt temp files: {temp_count}")?;
+                if no_backup {
+                    outln!("backup: skipped")?;
+                } else {
+                    let bp = backup_path.clone().unwrap_or_else(|| {
+                        zdb_core::compaction::default_backup_path(&repo)
+                    });
+                    outln!("backup would write: {}", bp.display())?;
+                }
                 outln!("(dry run — no changes made)")?;
             } else {
-                let report = compaction::compact(&repo, &mgr, force)?;
+                let opts = zdb_core::types::CompactOptions {
+                    force,
+                    skip_backup: no_backup,
+                    backup_path,
+                };
+                let report = compaction::compact(&repo, &mgr, &opts)?;
+                if let Some(ref bp) = report.backup_path {
+                    outln!("backup: {}", bp.display())?;
+                }
                 outln!(
                     "files removed: {} | crdt compacted: {} | gc: {}",
                     report.files_removed,

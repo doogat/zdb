@@ -6,6 +6,14 @@ use crate::git_ops::GitRepo;
 use crate::sync_manager::SyncManager;
 use crate::types::{CompactOptions, CompactionReport};
 
+/// Compute the default backup path for a pre-compaction bundle.
+pub fn default_backup_path(repo: &GitRepo) -> PathBuf {
+    let ts = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+    repo.path
+        .join(".zdb/backups")
+        .join(format!("pre-compact-{ts}.bundle.tar"))
+}
+
 /// Create a pre-compaction backup bundle.
 /// Default path: `.zdb/backups/pre-compact-{ISO8601}.bundle.tar`
 pub fn backup_before_compact(
@@ -15,12 +23,7 @@ pub fn backup_before_compact(
 ) -> Result<PathBuf> {
     let path = match backup_path {
         Some(p) => p.to_path_buf(),
-        None => {
-            let ts = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
-            repo.path
-                .join(".zdb/backups")
-                .join(format!("pre-compact-{ts}.bundle.tar"))
-        }
+        None => default_backup_path(repo),
     };
 
     if let Some(parent) = path.parent() {

@@ -1694,7 +1694,7 @@ sed -n '249,305p' zdb-core/src/compaction.rs
 pub fn compact(repo: &GitRepo, sync_mgr: &SyncManager, opts: &CompactOptions) -> Result<CompactionReport> {
 ```
 
-`compact()` accepts `CompactOptions` (force, skip_backup, backup_path) instead of a bare `bool`. `backup_before_compact()` delegates to `bundle::export_full_bundle`, writing to `.zdb/backups/pre-compact-{ISO8601}.bundle.tar` by default. Backup runs after the threshold check but before any mutations, so a failed backup aborts compaction without side effects.
+`compact()` accepts `CompactOptions` (force, skip_backup, backup_path) instead of a bare `bool`. `default_backup_path()` computes the default location (`.zdb/backups/pre-compact-{ISO8601}.bundle.tar`), shared by both `backup_before_compact()` and the CLI dry-run path display. `backup_before_compact()` delegates to `bundle::export_full_bundle`. Backup runs after the threshold check but before any mutations, so a failed backup aborts compaction without side effects.
 
 Compaction runs in stages, measuring storage before and after each phase:
 
