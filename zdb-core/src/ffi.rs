@@ -873,4 +873,143 @@ mod tests {
         let direct_upd: SqlResultRecord = direct_upd.into();
         assert_eq!(ffi_upd.affected_rows, direct_upd.affected_rows);
     }
+
+    // --- Delta bundle export tests ---
+
+    #[test]
+    fn export_delta_bundle_targets_node() {
+        let (_tmp, driver) = fresh_driver();
+        driver.register_node("Local".to_string()).unwrap();
+
+        // Create initial content (before remote's sync point)
+        driver
+            .create_zettel(
+                "---\ntitle: first\n---\nBody1".into(),
+                "add first".into(),
+            )
+            .unwrap();
+
+        // Capture head as remote's sync point
+        let sync_point = {
+            let repo = driver.repo.lock().unwrap();
+            repo.head_oid().unwrap().0.clone()
+        };
+
+        // Register a remote node with known_heads at sync_point
+        let node2_uuid = "remote-node-2";
+        let node2_config = format!(
+            "uuid = \"{node2_uuid}\"\nname = \"Node2\"\nknown_heads = [\"{sync_point}\"]\n\
+             status = \"Active\"\n"
+        );
+        {
+            let repo = driver.repo.lock().unwrap();
+            repo.commit_file(
+                &format!(".nodes/{node2_uuid}.toml"),
+                &node2_config,
+                "register node2",
+            )
+            .unwrap();
+        }
+
+        // Add new content after remote's sync point
+        driver
+            .create_zettel(
+                "---\ntitle: second\n---\nBody2".into(),
+                "add second".into(),
+            )
+            .unwrap();
+
+        // Export delta bundle targeting node2
+        let output = _tmp.path().join("delta.bundle.tar");
+        let path = driver
+            .export_delta_bundle(
+                node2_uuid.to_string(),
+                output.to_str().unwrap().to_string(),
+            )
+            .unwrap();
+        assert!(std::path::Path::new(&path).exists());
+    }
+
+    #[test]
+    fn export_delta_bundle_unknown_node_errors() {
+        let (_tmp, driver) = fresh_driver();
+        driver.register_node("Local".to_string()).unwrap();
+        driver
+            .create_zettel("---\ntitle: test\n---\nBody".into(), "add".into())
+            .unwrap();
+
+        let output = _tmp.path().join("delta.bundle.tar");
+        let result = driver.export_delta_bundle(
+            "nonexistent-uuid".to_string(),
+            output.to_str().unwrap().to_string(),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn export_delta_bundle_smaller_than_full() {
+        let (_tmp, driver) = fresh_driver();
+        driver.register_node("Local".to_string()).unwrap();
+
+        // Create initial content
+        driver
+            .create_zettel(
+                "---\ntitle: first\n---\nBody1".into(),
+                "add first".into(),
+            )
+            .unwrap();
+
+        // Capture head as remote's sync point
+        let sync_point = {
+            let repo = driver.repo.lock().unwrap();
+            repo.head_oid().unwrap().0.clone()
+        };
+
+        // Register remote node with known_heads
+        let node2_uuid = "remote-node-2";
+        let node2_config = format!(
+            "uuid = \"{node2_uuid}\"\nname = \"Node2\"\nknown_heads = [\"{sync_point}\"]\n\
+             status = \"Active\"\n"
+        );
+        {
+            let repo = driver.repo.lock().unwrap();
+            repo.commit_file(
+                &format!(".nodes/{node2_uuid}.toml"),
+                &node2_config,
+                "register node2",
+            )
+            .unwrap();
+        }
+
+        // Add more content after sync point
+        for i in 0..3 {
+            driver
+                .create_zettel(
+                    format!("---\ntitle: note{i}\n---\nContent {i}"),
+                    format!("add note{i}"),
+                )
+                .unwrap();
+        }
+
+        // Export both bundle types
+        let delta_path = _tmp.path().join("delta.bundle.tar");
+        driver
+            .export_delta_bundle(
+                node2_uuid.to_string(),
+                delta_path.to_str().unwrap().to_string(),
+            )
+            .unwrap();
+
+        let full_path = _tmp.path().join("full.bundle.tar");
+        driver
+            .export_full_bundle(full_path.to_str().unwrap().to_string())
+            .unwrap();
+
+        let delta_size = std::fs::metadata(&delta_path).unwrap().len();
+        let full_size = std::fs::metadata(&full_path).unwrap().len();
+        assert!(
+            delta_size < full_size,
+            "delta ({delta_size}B) should be smaller than full ({full_size}B)"
+        );
+    }
 }
