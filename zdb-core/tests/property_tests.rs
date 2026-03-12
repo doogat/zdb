@@ -241,6 +241,338 @@ proptest! {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Extended parser generators
+// ---------------------------------------------------------------------------
+
+/// Strings containing YAML-special characters.
+fn arb_yaml_special_string() -> impl Strategy<Value = String> {
+    prop::collection::vec(
+        prop_oneof![
+            Just(":".to_string()),
+            Just("-".to_string()),
+            Just("[".to_string()),
+            Just("]".to_string()),
+            Just("{".to_string()),
+            Just("}".to_string()),
+            Just("#".to_string()),
+            Just("&".to_string()),
+            Just("*".to_string()),
+            Just("!".to_string()),
+            Just("|".to_string()),
+            Just(">".to_string()),
+            Just("%".to_string()),
+            Just("@".to_string()),
+            Just("`".to_string()),
+            "[a-zA-Z0-9 ]{1,10}".prop_map(|s| s),
+        ],
+        1..=20,
+    )
+    .prop_map(|parts| parts.join(""))
+}
+
+/// Unicode chars safe for YAML values (no leading `:`, `---`, or `#` at start).
+fn arb_unicode_safe_string() -> impl Strategy<Value = String> {
+    prop::collection::vec(
+        any::<char>().prop_filter("yaml-safe unicode", |c| {
+            // Exclude control chars, YAML-special, BOM, surrogates, private-use, and
+            // other chars that YAML serializers may escape or mangle.
+            !c.is_control()
+                && *c != ':'
+                && *c != '#'
+                && *c != '-'
+                && *c != '\r'
+                && *c != '\u{FEFF}' // BOM
+                && *c != '\\'
+                && *c != '"'
+                && *c != '\''
+                && !(*c >= '\u{E000}' && *c <= '\u{F8FF}') // private use area
+                && !(*c >= '\u{FFF0}' && *c <= '\u{FFFF}') // specials
+                && *c != '\u{00A0}' // non-breaking space
+                && *c != '\t'
+                && *c != '['
+                && *c != ']'
+                && *c != '{'
+                && *c != '}'
+                && *c != '&'
+                && *c != '*'
+                && *c != '!'
+                && *c != '|'
+                && *c != '>'
+                && *c != '%'
+                && *c != '@'
+                && *c != '`'
+                && *c != '?'
+                && *c != ','
+        }),
+        1..=50,
+    )
+    .prop_map(|chars| {
+        let s: String = chars.into_iter().collect();
+        // Trim to avoid leading/trailing whitespace issues
+        let trimmed = s.trim().to_string();
+        if trimmed.is_empty() {
+            "unicode".to_string()
+        } else {
+            trimmed
+        }
+    })
+}
+
+/// Single string of 10K+ chars (no newlines).
+fn arb_long_line() -> impl Strategy<Value = String> {
+    prop::collection::vec("[a-zA-Z0-9 ]{100,200}", 50..=120)
+        .prop_map(|parts| parts.join(" "))
+}
+
+/// Vec of 100+ tags.
+fn arb_many_tags() -> impl Strategy<Value = Vec<String>> {
+    prop::collection::vec(arb_tag(), 100..=150)
+}
+
+/// Vec of 500+ ref lines.
+fn arb_many_refs() -> impl Strategy<Value = String> {
+    prop::collection::vec(arb_ref_line(), 500..=600).prop_map(|lines| lines.join("\n"))
+}
+
+/// BTreeMap of 50+ extra fields.
+fn arb_many_extras() -> impl Strategy<Value = std::collections::BTreeMap<String, Value>> {
+    prop::collection::btree_map(arb_extra_key(), arb_value_leaf(), 50..=80)
+}
+
+// ---------------------------------------------------------------------------
+// Extended parser properties
+// ---------------------------------------------------------------------------
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(5_000))]
+
+    // -- Category 1: Malformed frontmatter --
+
+    #[test]
+    fn malformed_yaml_special_chars_no_panic(content in arb_yaml_special_string()) {
+        let input = format!("---\n{content}\n---\n");
+        let result = std::panic::catch_unwind(|| parser::parse(&input, "test.md"));
+        prop_assert!(result.is_ok(), "panicked on input: {}", input);
+    }
+
+    #[test]
+    fn malformed_random_bytes_no_panic(bytes in prop::collection::vec(0x20u8..0x7E, 10..500)) {
+        let content = String::from_utf8_lossy(&bytes).to_string();
+        let input = format!("---\n{content}\n---\n");
+        let result = std::panic::catch_unwind(|| parser::parse(&input, "test.md"));
+        prop_assert!(result.is_ok(), "panicked on input: {}", input);
+    }
+
+    #[test]
+    fn malformed_truncated_frontmatter_no_panic(content in arb_yaml_special_string()) {
+        let input = format!("---\n{content}\nsome body text");
+        let result = std::panic::catch_unwind(|| parser::parse(&input, "test.md"));
+        prop_assert!(result.is_ok(), "panicked on input: {}", input);
+    }
+
+    #[test]
+    fn malformed_nested_yaml_no_panic(depth in 10u32..30, word in safe_word()) {
+        let mut input = String::from("---\n");
+        for i in 0..depth {
+            let indent = "  ".repeat(i as usize);
+            input.push_str(&format!("{indent}level{i}:\n"));
+        }
+        let deep_indent = "  ".repeat(depth as usize);
+        input.push_str(&format!("{deep_indent}{word}\n---\n"));
+        let result = std::panic::catch_unwind(|| parser::parse(&input, "test.md"));
+        prop_assert!(result.is_ok(), "panicked on input: {}", input);
+    }
+
+    #[test]
+    fn malformed_mixed_valid_invalid_no_panic(
+        id in arb_zettel_id(),
+        garbage in arb_yaml_special_string(),
+        title in safe_word(),
+    ) {
+        let input = format!("---\nid: {id}\n{garbage}\ntitle: {title}\n---\n");
+        let result = std::panic::catch_unwind(|| parser::parse(&input, "test.md"));
+        prop_assert!(result.is_ok(), "panicked on input: {}", input);
+    }
+
+    // -- Category 2: Unicode --
+
+    #[test]
+    fn unicode_title_roundtrip(
+        meta in arb_zettel_meta(),
+        uni_title in arb_unicode_safe_string(),
+        body in arb_body(),
+    ) {
+        let mut m = meta;
+        m.title = Some(uni_title.clone());
+        let md = build_zettel_markdown(&m, &body, "");
+        let parsed = parser::parse(&md, "test.md");
+        if let Ok(p) = parsed {
+            let serialized = parser::serialize(&p);
+            let reparsed = parser::parse(&serialized, "test.md");
+            if let Ok(rp) = reparsed {
+                prop_assert_eq!(&p.meta.title, &rp.meta.title);
+            }
+        }
+    }
+
+    #[test]
+    fn unicode_tags_preserved(
+        meta in arb_zettel_meta(),
+        uni_tags in prop::collection::vec(arb_unicode_safe_string(), 1..=4),
+        body in arb_body(),
+    ) {
+        let mut m = meta;
+        m.tags = uni_tags;
+        let md = build_zettel_markdown(&m, &body, "");
+        let parsed = parser::parse(&md, "test.md");
+        if let Ok(p) = parsed {
+            let serialized = parser::serialize(&p);
+            let reparsed = parser::parse(&serialized, "test.md");
+            if let Ok(rp) = reparsed {
+                prop_assert_eq!(&p.meta.tags, &rp.meta.tags);
+            }
+        }
+    }
+
+    #[test]
+    fn unicode_body_roundtrip(
+        meta in arb_zettel_meta(),
+        uni_body in arb_unicode_safe_string(),
+    ) {
+        let md = build_zettel_markdown(&meta, &uni_body, "");
+        let parsed = parser::parse(&md, "test.md");
+        if let Ok(p) = parsed {
+            let serialized = parser::serialize(&p);
+            let reparsed = parser::parse(&serialized, "test.md");
+            if let Ok(rp) = reparsed {
+                prop_assert_eq!(&p.body, &rp.body);
+            }
+        }
+    }
+
+    #[test]
+    fn unicode_extra_values_roundtrip(
+        meta in arb_zettel_meta(),
+        key in arb_extra_key(),
+        uni_val in arb_unicode_safe_string(),
+        body in arb_body(),
+    ) {
+        let mut m = meta;
+        m.extra.insert(key, Value::String(uni_val));
+        let md = build_zettel_markdown(&m, &body, "");
+        let parsed = parser::parse(&md, "test.md");
+        if let Ok(p) = parsed {
+            let serialized = parser::serialize(&p);
+            let reparsed = parser::parse(&serialized, "test.md");
+            if let Ok(rp) = reparsed {
+                prop_assert_eq!(&p.meta.extra, &rp.meta.extra);
+            }
+        }
+    }
+
+    // -- Category 3: Empty/missing zones --
+
+    #[test]
+    fn empty_body_roundtrip(
+        meta in arb_zettel_meta(),
+        refs in arb_reference_section(),
+    ) {
+        let md = build_zettel_markdown(&meta, "", &refs);
+        let parsed = parser::parse(&md, "test.md").unwrap();
+        let serialized = parser::serialize(&parsed);
+        let reparsed = parser::parse(&serialized, "test.md").unwrap();
+        prop_assert_eq!(&parsed.meta.id, &reparsed.meta.id);
+        prop_assert_eq!(&parsed.meta.title, &reparsed.meta.title);
+        prop_assert_eq!(&parsed.meta.tags, &reparsed.meta.tags);
+        prop_assert_eq!(&parsed.body, &reparsed.body);
+    }
+
+    #[test]
+    fn empty_refs_roundtrip(
+        meta in arb_zettel_meta(),
+        body in arb_body(),
+    ) {
+        let md = build_zettel_markdown(&meta, &body, "");
+        let parsed = parser::parse(&md, "test.md").unwrap();
+        let serialized = parser::serialize(&parsed);
+        let reparsed = parser::parse(&serialized, "test.md").unwrap();
+        prop_assert_eq!(&parsed.meta.id, &reparsed.meta.id);
+        prop_assert_eq!(&parsed.body, &reparsed.body);
+        prop_assert!(reparsed.reference_section.is_empty());
+    }
+
+    #[test]
+    fn minimal_frontmatter_no_panic(body in prop::option::of(arb_body())) {
+        let input = match body {
+            Some(b) => format!("---\n---\n{b}"),
+            None => "---\n---\n".to_string(),
+        };
+        let result = std::panic::catch_unwind(|| parser::parse(&input, "test.md"));
+        prop_assert!(result.is_ok(), "panicked on input: {}", input);
+    }
+
+    // -- Category 4: Boundary cases --
+
+    #[test]
+    fn boundary_long_line_body(
+        meta in arb_zettel_meta(),
+        long_line in arb_long_line(),
+    ) {
+        let md = build_zettel_markdown(&meta, &long_line, "");
+        let parsed = parser::parse(&md, "test.md").unwrap();
+        let serialized = parser::serialize(&parsed);
+        let reparsed = parser::parse(&serialized, "test.md").unwrap();
+        prop_assert_eq!(&parsed.body, &reparsed.body);
+    }
+
+    #[test]
+    fn boundary_many_tags(
+        meta in arb_zettel_meta(),
+        tags in arb_many_tags(),
+        body in arb_body(),
+    ) {
+        let mut m = meta;
+        m.tags = tags;
+        let md = build_zettel_markdown(&m, &body, "");
+        let parsed = parser::parse(&md, "test.md").unwrap();
+        let serialized = parser::serialize(&parsed);
+        let reparsed = parser::parse(&serialized, "test.md").unwrap();
+        prop_assert_eq!(&parsed.meta.tags, &reparsed.meta.tags);
+    }
+
+    #[test]
+    fn boundary_many_refs(
+        meta in arb_zettel_meta(),
+        body in arb_body(),
+        refs in arb_many_refs(),
+    ) {
+        let md = build_zettel_markdown(&meta, &body, &refs);
+        let parsed = parser::parse(&md, "test.md").unwrap();
+        let serialized = parser::serialize(&parsed);
+        let reparsed = parser::parse(&serialized, "test.md").unwrap();
+        prop_assert_eq!(
+            sorted_lines(&parsed.reference_section),
+            sorted_lines(&reparsed.reference_section),
+        );
+    }
+
+    #[test]
+    fn boundary_many_extras(
+        meta in arb_zettel_meta(),
+        extras in arb_many_extras(),
+        body in arb_body(),
+    ) {
+        let mut m = meta;
+        m.extra = extras;
+        let md = build_zettel_markdown(&m, &body, "");
+        let parsed = parser::parse(&md, "test.md").unwrap();
+        let serialized = parser::serialize(&parsed);
+        let reparsed = parser::parse(&serialized, "test.md").unwrap();
+        prop_assert_eq!(&parsed.meta.extra, &reparsed.meta.extra);
+    }
+}
+
 /// Compare reference sections as sorted line sets (CRDT merge may reorder).
 fn sorted_lines(s: &str) -> Vec<&str> {
     let mut lines: Vec<&str> = s.lines().filter(|l| !l.trim().is_empty()).collect();
