@@ -239,6 +239,72 @@ impl ServerGuard {
 
         ws
     }
+
+    /// Open a graphql-ws WebSocket connection WITHOUT an Authorization header.
+    /// Browser clients can't set headers on WebSocket, so this simulates that.
+    pub fn ws_connect_no_header(
+        &self,
+    ) -> tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>> {
+        let request = Request::builder()
+            .uri(format!("ws://127.0.0.1:{}/ws", self.port))
+            .header("Sec-WebSocket-Protocol", "graphql-transport-ws")
+            .header("Host", format!("127.0.0.1:{}", self.port))
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header(
+                "Sec-WebSocket-Key",
+                tungstenite::handshake::client::generate_key(),
+            )
+            .body(())
+            .unwrap();
+
+        let (ws, _resp) = connect(request).expect("WebSocket connect failed");
+        ws
+    }
+
+    /// Connect without header, authenticate via connection_init payload, subscribe.
+    pub fn ws_subscribe_with_payload_auth(
+        &self,
+        subscription_query: &str,
+    ) -> tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>> {
+        let mut ws = self.ws_connect_no_header();
+
+        // connection_init with bearer token in payload
+        ws.send(Message::Text(
+            serde_json::json!({
+                "type": "connection_init",
+                "payload": { "Authorization": format!("Bearer {}", self.token) }
+            })
+            .to_string()
+            .into(),
+        ))
+        .unwrap();
+
+        // Wait for connection_ack
+        let ack = ws.read().expect("no ack");
+        let ack: serde_json::Value = serde_json::from_str(ack.to_text().unwrap()).unwrap();
+        assert_eq!(ack["type"], "connection_ack");
+
+        // Subscribe
+        ws.send(Message::Text(
+            serde_json::json!({
+                "type": "subscribe",
+                "id": "1",
+                "payload": { "query": subscription_query }
+            })
+            .to_string()
+            .into(),
+        ))
+        .unwrap();
+
+        // Set read timeout to avoid blocking forever
+        if let tungstenite::stream::MaybeTlsStream::Plain(ref s) = ws.get_ref() {
+            s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        }
+
+        ws
+    }
 }
 
 impl Drop for ServerGuard {
