@@ -220,6 +220,89 @@ final class ZettelDBTests: XCTestCase {
         XCTAssertTrue(names.contains("workspace"))
     }
 
+    /// Run a git command in the given directory and return trimmed stdout.
+    @discardableResult
+    private func git(_ args: String..., in dir: URL) throws -> String {
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        proc.arguments = args
+        proc.currentDirectoryURL = dir
+        proc.environment = [
+            "GIT_AUTHOR_NAME": "test",
+            "GIT_AUTHOR_EMAIL": "test@test",
+            "GIT_COMMITTER_NAME": "test",
+            "GIT_COMMITTER_EMAIL": "test@test",
+        ]
+        let pipe = Pipe()
+        proc.standardOutput = pipe
+        proc.standardError = Pipe()
+        try proc.run()
+        proc.waitUntilExit()
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        return String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    }
+
+    func testDeltaBundleExportImport() throws {
+        // Register local node and create initial content
+        let _ = try driver.registerNode(name: "source-node")
+        let _ = try driver.createZettel(
+            content: "---\ntitle: Pre-sync Note\n---\nBefore delta.",
+            message: "create pre-sync note"
+        )
+
+        // Capture current HEAD as remote's sync point
+        let syncPoint = try git("rev-parse", "HEAD", in: tmpDir)
+        XCTAssertFalse(syncPoint.isEmpty, "should have a HEAD commit")
+
+        // Register a fake remote node with known_heads at syncPoint
+        let remoteUuid = "remote-delta-node"
+        let nodesDir = tmpDir.appendingPathComponent(".nodes")
+        try FileManager.default.createDirectory(at: nodesDir, withIntermediateDirectories: true)
+        let nodeToml = """
+        uuid = "\(remoteUuid)"
+        name = "RemoteNode"
+        known_heads = ["\(syncPoint)"]
+        status = "Active"
+        """
+        try nodeToml.write(
+            to: nodesDir.appendingPathComponent("\(remoteUuid).toml"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try git("add", ".nodes/", in: tmpDir)
+        try git("commit", "-m", "register remote node", in: tmpDir)
+
+        // Create new content after remote's sync point
+        let _ = try driver.createZettel(
+            content: "---\ntitle: Post-sync Note\n---\nAfter delta.",
+            message: "create post-sync note"
+        )
+
+        // Export delta bundle targeting the remote node
+        let deltaPath = tmpDir.appendingPathComponent("delta.bundle.tar").path
+        let resultPath = try driver.exportDeltaBundle(
+            targetNodeUuid: remoteUuid,
+            outputPath: deltaPath
+        )
+        XCTAssertTrue(FileManager.default.fileExists(atPath: resultPath),
+                       "delta bundle file should exist")
+
+        // Import into fresh repo and verify post-sync content is present
+        let importDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("zdb-delta-import-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: importDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: importDir) }
+
+        let importDriver = try ZettelDriver.createRepo(repoPath: importDir.path)
+        let _ = try importDriver.registerNode(name: "import-target")
+        try importDriver.importBundle(bundlePath: resultPath)
+        try _ = importDriver.reindex()
+
+        // The delta should include the post-sync note
+        let results = try importDriver.search(query: "Post-sync")
+        XCTAssertEqual(results.count, 1, "delta import should contain post-sync note")
+    }
+
     func testBundleExportImport() throws {
         // Register a sync node via FFI
         let _ = try driver.registerNode(name: "test-source")
