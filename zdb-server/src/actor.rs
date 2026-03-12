@@ -1050,10 +1050,11 @@ fn run_maintenance(
     };
     let report = zdb_core::compaction::compact(repo, &mgr, &opts)?;
     log::info!(
-        "maintenance: compacted — files_removed={} crdt_compacted={} gc={}",
+        "maintenance: compacted — files_removed={} crdt_compacted={} gc={} backup={}",
         report.files_removed,
         report.crdt_docs_compacted,
-        if report.gc_success { "ok" } else { "failed" }
+        if report.gc_success { "ok" } else { "failed" },
+        report.backup_path.as_ref().map_or("skipped".to_string(), |p| p.display().to_string()),
     );
 
     // Rebuild index after compaction
