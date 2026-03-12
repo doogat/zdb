@@ -1283,79 +1283,16 @@ WAL mode is enabled for concurrent read/write. The `_zdb_meta` table tracks the 
 
 ### Index Rebuild
 
-`rebuild()` walks every zettel in git, parses it, and upserts into SQLite. It also materializes typed tables and infers schemas:
+`rebuild()` drops all tables (internal and materialized), recreates the schema from `SCHEMA_DDL`, then re-indexes every zettel from git. No migration framework — the index is a disposable cache, so schema changes are handled by rebuilding from scratch.
 
-```bash
-grep -n 'pub fn rebuild\b' zdb-core/src/indexer.rs
-```
+Rebuild phases:
 
-```rust
-275:    pub fn rebuild(&self, repo: &impl ZettelSource) -> Result<crate::types::RebuildReport> {
-```
+1. **Drop & recreate** — drop every table (FK checks disabled for drop order), recreate internal schema from `SCHEMA_DDL`
+2. **Index all zettels** — parse each .md file and upsert into all six tables
+3. **Consistency warnings** — detect malformed YAML, cross-zone duplicates, missing required fields
+4. **Materialize typed tables** — create a SQLite table for each zettel type (e.g. `project`, `contact`) with columns derived from _typedef zettels or inferred from existing data. Column names are normalized to lowercase during inference since SQLite column names are case-insensitive; this prevents duplicate column errors from case-variant frontmatter keys (e.g. `xP` and `xp`)
 
-```bash
-sed -n '275,325p' zdb-core/src/indexer.rs
-```
-
-```rust
-    pub fn rebuild(&self, repo: &impl ZettelSource) -> Result<crate::types::RebuildReport> {
-        tracing::info!("rebuild_triggered");
-        let paths = repo.list_zettels()?;
-        let mut report = crate::types::RebuildReport::default();
-
-        // Phase 1: index all zettels
-        for path in &paths {
-            let content = repo.read_file(path)?;
-            let parsed = crate::parser::parse(&content, path)?;
-            self.index_zettel(&parsed)?;
-            report.indexed += 1;
-        }
-
-        // Phase 2: collect consistency warnings
-        report.warnings = self.collect_consistency_warnings(repo);
-
-        // Phase 3: materialize typed tables using merged schemas
-        let mat_report = self.materialize_all_types(repo)?;
-        report.tables_materialized = mat_report.0;
-        report.types_inferred = mat_report.1;
-
-        let head = repo.head_oid()?.to_string();
-        self.conn.execute(
-            "INSERT OR REPLACE INTO _zdb_meta (key, value) VALUES ('head', ?1)",
-            params![head],
-        )?;
-
-        tracing::info!(
-            indexed = report.indexed,
-            tables = report.tables_materialized,
-            warnings = report.warnings.len(),
-            "rebuild_complete"
-        );
-
-        Ok(report)
-    }
-
-    /// Materialize SQLite tables for all typed zettels using merged schemas.
-    /// Returns (tables_materialized, types_inferred).
-    pub fn materialize_all_types(&self, repo: &impl ZettelSource) -> Result<(usize, Vec<String>)> {
-        let mut tables_materialized = 0;
-        let mut types_inferred = Vec::new();
-
-        // Load explicit _typedef schemas
-        let typedef_schemas = self.load_all_typedefs(repo);
-
-        // Find all distinct types (excluding _typedef and empty)
-        let mut stmt = self.conn.prepare(
-            "SELECT DISTINCT type FROM zettels WHERE type != '_typedef' AND type != '' AND type IS NOT NULL",
-        )?;
-        let type_names: Vec<String> = stmt
-```
-
-Rebuild runs in three phases:
-
-1. **Index all zettels** — parse each .md file and upsert into all six tables
-2. **Consistency warnings** — detect malformed YAML, cross-zone duplicates, missing required fields
-3. **Materialize typed tables** — create a SQLite table for each zettel type (e.g. `project`, `contact`) with columns derived from _typedef zettels or inferred from existing data. Column names are normalized to lowercase during inference since SQLite column names are case-insensitive; this prevents duplicate column errors from case-variant frontmatter keys (e.g. `xP` and `xp`)
+Full rebuild is only triggered by explicit `zdb reindex`, index corruption, or unreachable HEAD OID (e.g. after `git gc`). Normal operations use incremental reindex instead (see below).
 
 The HEAD commit hash is stored in `_zdb_meta` so subsequent operations can detect when the index is stale (HEAD changed without reindex). `rebuild_if_stale()` checks this before reads.
 
@@ -2484,13 +2421,15 @@ ID2=$($ZDB create --title "Links to first" --body "See [[$ID1]]")
 
 ### Property-Based Tests
 
-`zdb-core/tests/property_tests.rs` uses proptest to systematically explore input spaces across three subsystems:
+`zdb-core/tests/property_tests.rs` uses proptest to systematically explore input spaces. 51 property tests across four subsystems:
 
-**Parser (10K cases):** parse-serialize-parse idempotency, zone isolation (body edits don't affect frontmatter/references), no false reference boundary detection from thematic breaks.
+**Parser (20 tests, 5K–10K cases):** parse-serialize-parse idempotency, zone isolation (body edits don't affect frontmatter/references), no false reference boundary detection from thematic breaks, malformed frontmatter never panics (YAML-special chars, random bytes, truncated delimiters, deeply nested YAML, mixed valid/invalid fields), full Unicode round-trips for titles/tags/body/extra fields, empty/missing zone combinations, boundary cases (10K-char lines, 100+ tags, 500+ references, 50+ extra fields).
 
-**CRDT Resolver (1K cases):** merge commutativity for non-overlapping frontmatter, body, and reference edits; frontmatter field independence (changing X doesn't affect Y); merge idempotency (identical ours/theirs → original); non-overlapping body edits both survive; concurrent reference additions produce union.
+**SQL Engine (15 tests, 500–1K cases):** valid DDL/DML round-trips (CREATE TABLE, INSERT, SELECT, UPDATE, DELETE, typedef verification), invalid input never panics (random strings, partial fragments, unsupported operations, empty input), injection safety (embedded quotes/semicolons/comments stored as data not executed), edge-case identifiers (reserved words, hyphens, Unicode in double-quoted identifiers), structural edge cases (multiple semicolons, nested parentheses).
 
-**Indexer (500 cases):** sequential `index_zettel` calls produce same query results as full `rebuild`, staleness detection correct after commit change.
+**CRDT Resolver (7 tests, 1K cases):** merge commutativity for non-overlapping frontmatter, body, and reference edits; frontmatter field independence (changing X doesn't affect Y); merge idempotency (identical ours/theirs → original); non-overlapping body edits both survive; concurrent reference additions produce union.
+
+**Indexer (9 tests, 500 cases):** sequential `index_zettel` calls produce same query results as full `rebuild`, staleness detection correct after commit change, FTS5 query fuzzing (random strings, FTS5 operators, long queries, empty queries never crash), type inference consistency (same-type fields preserved), deterministic indexing (two DBs with same input match), mixed-type widening never panics.
 
 Run with `cargo test -p zdb-core --test property_tests`. Override case count via `PROPTEST_CASES` env var (e.g. 100 for CI).
 
