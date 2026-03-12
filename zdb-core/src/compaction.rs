@@ -1,10 +1,34 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::error::{Result, ZettelError};
 use crate::git_ops::GitRepo;
 use crate::sync_manager::SyncManager;
-use crate::types::CompactionReport;
+use crate::types::{CompactOptions, CompactionReport};
+
+/// Create a pre-compaction backup bundle.
+/// Default path: `.zdb/backups/pre-compact-{ISO8601}.bundle.tar`
+pub fn backup_before_compact(
+    repo: &GitRepo,
+    sync_mgr: &SyncManager,
+    backup_path: Option<&Path>,
+) -> Result<PathBuf> {
+    let path = match backup_path {
+        Some(p) => p.to_path_buf(),
+        None => {
+            let ts = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+            repo.path
+                .join(".zdb/backups")
+                .join(format!("pre-compact-{ts}.bundle.tar"))
+        }
+    };
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    crate::bundle::export_full_bundle(repo, sync_mgr, &path)
+}
 
 /// Find the greatest common ancestor commit reachable from all active nodes' known_heads.
 /// Stale and retired nodes are excluded from the calculation.
@@ -249,11 +273,11 @@ pub fn run_gc(repo_path: &Path) -> Result<bool> {
     Ok(output.status.success())
 }
 
-/// Full compaction pipeline: threshold check → shared head → cleanup → crdt doc compact → gc.
+/// Full compaction pipeline: threshold check → backup → shared head → cleanup → crdt doc compact → gc.
 #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
-pub fn compact(repo: &GitRepo, sync_mgr: &SyncManager, force: bool) -> Result<CompactionReport> {
+pub fn compact(repo: &GitRepo, sync_mgr: &SyncManager, opts: &CompactOptions) -> Result<CompactionReport> {
     // Threshold check: skip if under threshold (unless forced)
-    if !force {
+    if !opts.force {
         let config = repo.load_config()?;
         let (crdt_bytes, crdt_files) = crdt_temp_stats(repo);
         let size_mb = crdt_bytes as f64 / (1024.0 * 1024.0);
@@ -274,9 +298,19 @@ pub fn compact(repo: &GitRepo, sync_mgr: &SyncManager, force: bool) -> Result<Co
                 crdt_temp_files_after: crdt_files,
                 repo_bytes_before: repo_bytes,
                 repo_bytes_after: repo_bytes,
+                backup_path: None,
             });
         }
     }
+
+    // Pre-compaction backup
+    let backup_path = if !opts.skip_backup {
+        let bp = backup_before_compact(repo, sync_mgr, opts.backup_path.as_deref())?;
+        tracing::info!(backup_path = %bp.display(), "pre_compaction_backup");
+        Some(bp)
+    } else {
+        None
+    };
 
     let (crdt_temp_bytes_before, crdt_temp_files_before) = crdt_temp_stats(repo);
     let repo_bytes_before = dir_size(&repo.path.join(".git"));
@@ -318,6 +352,7 @@ pub fn compact(repo: &GitRepo, sync_mgr: &SyncManager, force: bool) -> Result<Co
         crdt_temp_files_after,
         repo_bytes_before,
         repo_bytes_after,
+        backup_path,
     })
 }
 
@@ -493,7 +528,7 @@ mod tests {
         let mgr = SyncManager::open(&repo).unwrap();
 
         // No CRDT files → under threshold → should skip but still report actual stats
-        let report = compact(&repo, &mgr, false).unwrap();
+        let report = compact(&repo, &mgr, &CompactOptions { skip_backup: true, ..Default::default() }).unwrap();
         assert_eq!(report.files_removed, 0);
         assert_eq!(report.crdt_docs_compacted, 0);
         assert!(report.gc_success);
@@ -511,7 +546,7 @@ mod tests {
         crate::sync_manager::register_node(&repo, "Test").unwrap();
         let mgr = SyncManager::open(&repo).unwrap();
 
-        let report = compact(&repo, &mgr, true).unwrap();
+        let report = compact(&repo, &mgr, &CompactOptions { force: true, skip_backup: true, ..Default::default() }).unwrap();
         assert!(report.gc_success);
         // Repo bytes should be measured (git dir exists)
         assert!(report.repo_bytes_before > 0 || report.repo_bytes_after > 0);
@@ -544,7 +579,7 @@ mod tests {
         crate::sync_manager::register_node(&repo, "Test").unwrap();
         let mgr = SyncManager::open(&repo).unwrap();
 
-        let report = compact(&repo, &mgr, true).unwrap();
+        let report = compact(&repo, &mgr, &CompactOptions { force: true, skip_backup: true, ..Default::default() }).unwrap();
         assert!(report.gc_success);
         assert!(report.crdt_temp_bytes_before > 0);
         assert!(report.crdt_temp_files_before >= 2);
@@ -627,5 +662,90 @@ mod tests {
         let c2_oid = git2::Oid::from_str(&c2.0).unwrap();
         let removed = cleanup_crdt_temp(&repo, Some(c2_oid)).unwrap();
         assert_eq!(removed, 2);
+    }
+
+    #[test]
+    fn backup_before_compact_writes_file() {
+        let (_dir, repo) = temp_repo();
+        repo.commit_file("zettelkasten/a.md", "a", "c1").unwrap();
+        crate::sync_manager::register_node(&repo, "Test").unwrap();
+        let mgr = SyncManager::open(&repo).unwrap();
+
+        let out = repo.path.join("test-backup.bundle.tar");
+        let result = backup_before_compact(&repo, &mgr, Some(&out)).unwrap();
+        assert_eq!(result, out);
+        assert!(out.exists());
+        assert!(std::fs::metadata(&out).unwrap().len() > 0);
+    }
+
+    #[test]
+    fn backup_before_compact_default_path() {
+        let (_dir, repo) = temp_repo();
+        repo.commit_file("zettelkasten/a.md", "a", "c1").unwrap();
+        crate::sync_manager::register_node(&repo, "Test").unwrap();
+        let mgr = SyncManager::open(&repo).unwrap();
+
+        let result = backup_before_compact(&repo, &mgr, None).unwrap();
+        assert!(result.starts_with(&repo.path.join(".zdb/backups")));
+        assert!(result.to_string_lossy().contains("pre-compact-"));
+        assert!(result.to_string_lossy().ends_with(".bundle.tar"));
+        assert!(result.exists());
+    }
+
+    #[test]
+    fn compact_skip_backup() {
+        let (_dir, repo) = temp_repo();
+        crate::sync_manager::register_node(&repo, "Test").unwrap();
+        let mgr = SyncManager::open(&repo).unwrap();
+
+        let opts = CompactOptions { force: true, skip_backup: true, ..Default::default() };
+        let report = compact(&repo, &mgr, &opts).unwrap();
+        assert!(report.backup_path.is_none());
+    }
+
+    #[test]
+    fn compact_backup_failure_aborts() {
+        let (_dir, repo) = temp_repo();
+        let c1 = repo.commit_file("zettelkasten/a.md", "a", "c1").unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let _c2 = repo.commit_file("zettelkasten/b.md", "b", "c2").unwrap();
+
+        // Create CRDT temp files that compaction would normally remove
+        let temp_dir = repo.path.join(".crdt/temp");
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let temp_file = temp_dir.join(format!("{}_20260101120000.crdt", c1.0));
+        std::fs::write(&temp_file, "crdt-data").unwrap();
+
+        crate::sync_manager::register_node(&repo, "Test").unwrap();
+        let mgr = SyncManager::open(&repo).unwrap();
+
+        let (bytes_before, files_before) = crdt_temp_stats(&repo);
+
+        // Point to an impossible path
+        let opts = CompactOptions {
+            force: true,
+            skip_backup: false,
+            backup_path: Some(PathBuf::from("/nonexistent/dir/deep/backup.bundle.tar")),
+        };
+        let result = compact(&repo, &mgr, &opts);
+        assert!(result.is_err());
+
+        // Verify no mutations occurred — CRDT temp files untouched
+        let (bytes_after, files_after) = crdt_temp_stats(&repo);
+        assert_eq!(bytes_before, bytes_after);
+        assert_eq!(files_before, files_after);
+        assert!(temp_file.exists());
+    }
+
+    #[test]
+    fn compact_under_threshold_no_backup() {
+        let (_dir, repo) = temp_repo();
+        crate::sync_manager::register_node(&repo, "Test").unwrap();
+        let mgr = SyncManager::open(&repo).unwrap();
+
+        // Under threshold, backup should not run
+        let opts = CompactOptions { skip_backup: false, ..Default::default() };
+        let report = compact(&repo, &mgr, &opts).unwrap();
+        assert!(report.backup_path.is_none());
     }
 }
