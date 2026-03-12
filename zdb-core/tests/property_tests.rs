@@ -675,12 +675,12 @@ impl ZettelStore for MockStore {
 
 /// Safe SQL column name (prefixed to avoid reserved words).
 fn arb_column_name() -> impl Strategy<Value = String> {
-    safe_word().prop_map(|w| format!("col_{w}"))
+    safe_word().prop_map(|w| format!("col_{}", w.to_lowercase()))
 }
 
 /// Safe SQL table name (prefixed, not "zettels" or "_zdb_*").
 fn arb_table_name() -> impl Strategy<Value = String> {
-    safe_word().prop_map(|w| format!("tbl_{w}"))
+    safe_word().prop_map(|w| format!("tbl_{}", w.to_lowercase()))
 }
 
 /// Random SQL column type.
@@ -704,7 +704,7 @@ fn arb_create_table_sql() -> impl Strategy<Value = (String, String, Vec<(String,
             let mut seen = std::collections::HashSet::new();
             let cols: Vec<(String, String)> = cols
                 .into_iter()
-                .filter(|(name, _)| seen.insert(name.clone()))
+                .filter(|(name, _)| seen.insert(name.to_lowercase()))
                 .collect();
             let col_defs: Vec<String> = cols
                 .iter()
