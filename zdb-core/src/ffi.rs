@@ -341,7 +341,12 @@ impl ZettelDriver {
     pub fn compact(&self) -> Result<(), ZdbError> {
         let repo = self.repo.lock().unwrap();
         let sync_mgr = SyncManager::open(&repo).map_err(ZdbError::from)?;
-        crate::compaction::compact(&repo, &sync_mgr, true).map_err(ZdbError::from)?;
+        let opts = crate::types::CompactOptions {
+            force: true,
+            skip_backup: true,
+            ..Default::default()
+        };
+        crate::compaction::compact(&repo, &sync_mgr, &opts).map_err(ZdbError::from)?;
         Ok(())
     }
 

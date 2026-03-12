@@ -83,6 +83,19 @@ impl Index {
     /// Open (or create) the SQLite index database.
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
+        Self::configure_connection(conn)
+    }
+
+    /// Open an isolated in-memory SQLite index.
+    ///
+    /// This is primarily useful for tests that need a fresh derived index
+    /// without paying filesystem setup costs on every case.
+    pub fn open_in_memory() -> Result<Self> {
+        let conn = Connection::open_in_memory()?;
+        Self::configure_connection(conn)
+    }
+
+    fn configure_connection(conn: Connection) -> Result<Self> {
         conn.execute_batch("PRAGMA journal_mode=WAL;")?;
         conn.execute_batch("PRAGMA busy_timeout=5000;")?;
         conn.execute_batch(Self::SCHEMA_DDL)?;

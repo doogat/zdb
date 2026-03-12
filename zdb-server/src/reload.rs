@@ -21,7 +21,7 @@ impl SchemaReloader {
     /// Create a reloader and spawn its background reload task.
     ///
     /// The returned `ArcSwap` is initially empty (placeholder schema).
-    /// Call [`store_initial`] after building the real schema.
+    /// Call [`Self::store_initial`] after building the real schema.
     pub fn new(actor: ActorHandle) -> (Arc<Self>, Arc<ArcSwap<Schema>>) {
         // Placeholder schema — replaced by store_initial before serving requests
         let placeholder = Schema::build("Query", None, None)

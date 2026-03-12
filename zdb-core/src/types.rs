@@ -289,6 +289,13 @@ pub struct ResolvedFile {
     pub fm_crdt_bytes: Option<Vec<u8>>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct CompactOptions {
+    pub force: bool,
+    pub skip_backup: bool,
+    pub backup_path: Option<std::path::PathBuf>,
+}
+
 #[derive(Debug, Clone)]
 pub struct CompactionReport {
     pub files_removed: usize,
@@ -300,6 +307,7 @@ pub struct CompactionReport {
     pub crdt_temp_files_after: usize,
     pub repo_bytes_before: u64,
     pub repo_bytes_after: u64,
+    pub backup_path: Option<std::path::PathBuf>,
 }
 
 /// Kind of change detected by diff_tree_to_tree.

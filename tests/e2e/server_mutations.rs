@@ -7,7 +7,7 @@ fn compact_mutation_returns_result() {
     let server = ServerGuard::start(&repo);
 
     let result =
-        server.graphql(r#"mutation { compact { filesRemoved crdtDocsCompacted gcSuccess } }"#);
+        server.graphql(r#"mutation { compact { filesRemoved crdtDocsCompacted gcSuccess backupPath } }"#);
     assert!(result.get("errors").is_none(), "compact failed: {result}");
     let compact = &result["data"]["compact"];
     assert!(compact["filesRemoved"].is_i64());
@@ -21,11 +21,57 @@ fn compact_force_mutation() {
     let server = ServerGuard::start(&repo);
 
     let result = server.graphql(
-        r#"mutation { compact(force: true) { filesRemoved crdtDocsCompacted gcSuccess } }"#,
+        r#"mutation { compact(force: true) { filesRemoved crdtDocsCompacted gcSuccess backupPath } }"#,
     );
     assert!(
         result.get("errors").is_none(),
         "compact(force: true) failed: {result}"
+    );
+}
+
+#[test]
+fn compact_with_node_produces_backup() {
+    let repo = ZdbTestRepo::init();
+    repo.zdb()
+        .args(["register-node", "TestNode"])
+        .assert()
+        .success();
+    let server = ServerGuard::start(&repo);
+
+    let result = server.graphql(
+        r#"mutation { compact(force: true) { gcSuccess backupPath } }"#,
+    );
+    assert!(
+        result.get("errors").is_none(),
+        "compact with node failed: {result}"
+    );
+    let compact = &result["data"]["compact"];
+    assert!(
+        compact["backupPath"].is_string(),
+        "compact with registered node should produce backupPath: {result}"
+    );
+}
+
+#[test]
+fn compact_no_backup_mutation() {
+    let repo = ZdbTestRepo::init();
+    repo.zdb()
+        .args(["register-node", "TestNode"])
+        .assert()
+        .success();
+    let server = ServerGuard::start(&repo);
+
+    let result = server.graphql(
+        r#"mutation { compact(force: true, noBackup: true) { gcSuccess backupPath } }"#,
+    );
+    assert!(
+        result.get("errors").is_none(),
+        "compact(noBackup: true) failed: {result}"
+    );
+    let compact = &result["data"]["compact"];
+    assert!(
+        compact["backupPath"].is_null(),
+        "compact(noBackup: true) should have null backupPath: {result}"
     );
 }
 

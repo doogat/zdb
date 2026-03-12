@@ -67,7 +67,8 @@ fn simulate_year(repo: &GitRepo, with_compaction: bool) -> Vec<GrowthSnapshot> {
             let month = (day + 1) / DAYS_PER_MONTH;
 
             if let Some(ref mgr) = mgr {
-                let _ = compaction::compact(repo, mgr, true);
+                let opts = zdb_core::types::CompactOptions { force: true, skip_backup: true, ..Default::default() };
+                let _ = compaction::compact(repo, mgr, &opts);
             }
 
             snapshots.push(GrowthSnapshot {

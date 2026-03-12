@@ -56,6 +56,16 @@
 
 **Tradeoff**: Higher development overhead than scripting languages. Justified by the system's data integrity requirements — CRDT merge correctness and Git operations benefit from Rust's safety guarantees.
 
+## Sparse Index Not Applicable
+
+**Decision**: Drop Git sparse index from the scalability roadmap.
+
+**Why**: ZDB indexes all zettels and requires full-clone semantics on every device. Sparse index is coupled to sparse checkout, which conflicts with ZDB's "all zettels locally available" contract. The original Phase 2 spec item was formally evaluated during Phase 2 exit and ruled out.
+
+**Alternatives considered**: (1) Git sparse checkout for specific operating modes — rejected because it breaks the full-clone guarantee. (2) Application-level partial index — unnecessary since SQLite FTS5 already serves as the read cache and scales independently of Git's index format.
+
+**What replaces it**: Commit-graph integration (done), incremental reindex (done), and future fsmonitor/file-watcher support address the same large-repo scalability concern through different mechanisms.
+
 ## Known Limitations (MVP)
 
 ## Broadcast Channel for Subscriptions

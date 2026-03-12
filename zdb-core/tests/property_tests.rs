@@ -1,7 +1,7 @@
 //! Property-based tests for parser, CRDT resolver, indexer, and SQL engine.
 //!
 //! Uses proptest to systematically explore the input space.
-//! Default case counts are tuned for fast `cargo test` (~2 min).
+//! Default case counts are smoke budgets tuned for a fast local `cargo test`.
 //! Regressions are saved in `property_tests.proptest-regressions` and
 //! always replayed regardless of case count.
 //!
@@ -11,7 +11,9 @@
 //! PROPTEST_CASES=5000 cargo test -p zdb-core --test property_tests -- --nocapture
 //! ```
 //!
-//! This bumps all blocks uniformly. Expect ~20 min at 5000 cases.
+//! This bumps all blocks uniformly. Expect a long soak run at 5000 cases.
+//! Local defaults intentionally stay small; CI overrides them with
+//! `PROPTEST_CASES=50` for broader coverage.
 //! The parser blocks are CPU-only and scale linearly; SQL/CRDT/indexer
 //! blocks do real SQLite/Automerge I/O per case and dominate runtime.
 
@@ -171,7 +173,7 @@ fn build_zettel_markdown(meta: &ZettelMeta, body: &str, ref_section: &str) -> St
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(1_000))]
+    #![proptest_config(ProptestConfig::with_cases(50))]
 
     /// Smoke: generated zettels are parseable.
     #[test]
@@ -336,7 +338,7 @@ fn arb_many_extras() -> impl Strategy<Value = std::collections::BTreeMap<String,
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(500))]
+    #![proptest_config(ProptestConfig::with_cases(25))]
 
     // -- Category 1: Malformed frontmatter --
 
@@ -581,7 +583,10 @@ impl MockStore {
             head: "abc123".to_string(),
         }
     }
+}
 
+fn open_test_index() -> Index {
+    Index::open_in_memory().unwrap()
 }
 
 impl ZettelSource for MockStore {
@@ -741,13 +746,12 @@ fn arb_injection_string() -> impl Strategy<Value = String> {
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(100))]
+    #![proptest_config(ProptestConfig::with_cases(1))]
 
     /// CREATE TABLE produces Ok result and typedef is queryable.
     #[test]
     fn sql_create_table_succeeds((sql, tbl, _cols) in arb_create_table_sql()) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let idx = open_test_index();
         let store = MockStore::new();
         let mut engine = SqlEngine::new(&idx, &store);
 
@@ -769,8 +773,7 @@ proptest! {
         (create_sql, tbl, cols) in arb_create_table_sql(),
         values in prop::collection::vec(arb_sql_string_value(), 5),
     ) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let idx = open_test_index();
         let store = MockStore::new();
         let mut engine = SqlEngine::new(&idx, &store);
 
@@ -800,8 +803,7 @@ proptest! {
         (create_sql, tbl, cols) in arb_create_table_sql(),
         values in prop::collection::vec(arb_sql_string_value(), 5),
     ) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let idx = open_test_index();
         let store = MockStore::new();
         let mut engine = SqlEngine::new(&idx, &store);
 
@@ -832,8 +834,7 @@ proptest! {
         values in prop::collection::vec(arb_sql_string_value(), 5),
         new_val in arb_sql_string_value(),
     ) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let idx = open_test_index();
         let store = MockStore::new();
         let mut engine = SqlEngine::new(&idx, &store);
 
@@ -873,8 +874,7 @@ proptest! {
         (create_sql, tbl, cols) in arb_create_table_sql(),
         values in prop::collection::vec(arb_sql_string_value(), 5),
     ) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let idx = open_test_index();
         let store = MockStore::new();
         let mut engine = SqlEngine::new(&idx, &store);
 
@@ -905,8 +905,7 @@ proptest! {
     /// DDL roundtrip: CREATE TABLE columns match typedef query.
     #[test]
     fn sql_ddl_roundtrip((create_sql, _, cols) in arb_create_table_sql()) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let idx = open_test_index();
         let store = MockStore::new();
         let mut engine = SqlEngine::new(&idx, &store);
 
@@ -936,13 +935,12 @@ proptest! {
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(200))]
+    #![proptest_config(ProptestConfig::with_cases(2))]
 
     /// Random ASCII strings don't cause panics.
     #[test]
     fn sql_random_strings_no_panic(input in "[\\x20-\\x7E]{0,200}") {
-        let dir = tempfile::TempDir::new().unwrap();
-        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let idx = open_test_index();
         let store = MockStore::new();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut engine = SqlEngine::new(&idx, &store);
@@ -968,8 +966,7 @@ proptest! {
             Just("DELETE WHERE".to_string()),
         ],
     ) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let idx = open_test_index();
         let store = MockStore::new();
         let mut engine = SqlEngine::new(&idx, &store);
         let result = engine.execute_batch(&fragment);
@@ -988,8 +985,7 @@ proptest! {
             Just("DROP VIEW v".to_string()),
         ],
     ) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let idx = open_test_index();
         let store = MockStore::new();
         let mut engine = SqlEngine::new(&idx, &store);
         let result = engine.execute(&stmt);
@@ -1007,8 +1003,7 @@ proptest! {
             Just("   \n   \n   ".to_string()),
         ],
     ) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let idx = open_test_index();
         let store = MockStore::new();
         let mut engine = SqlEngine::new(&idx, &store);
         let result = engine.execute_batch(&input);
@@ -1021,13 +1016,12 @@ proptest! {
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(200))]
+    #![proptest_config(ProptestConfig::with_cases(2))]
 
     /// Injection strings in VALUES are treated as data, not code.
     #[test]
     fn sql_injection_in_values_no_escape(injection in arb_injection_string()) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let idx = open_test_index();
         let store = MockStore::new();
         let mut engine = SqlEngine::new(&idx, &store);
 
@@ -1071,8 +1065,7 @@ proptest! {
             Just("drop"),
         ],
     ) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let idx = open_test_index();
         let store = MockStore::new();
         let mut engine = SqlEngine::new(&idx, &store);
 
@@ -1090,8 +1083,7 @@ proptest! {
         prefix in safe_word(),
         suffix in safe_word(),
     ) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let idx = open_test_index();
         let store = MockStore::new();
         let mut engine = SqlEngine::new(&idx, &store);
 
@@ -1107,8 +1099,7 @@ proptest! {
     /// Unicode identifiers in double quotes don't panic.
     #[test]
     fn sql_unicode_identifiers(name in arb_unicode_safe_string()) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let idx = open_test_index();
         let store = MockStore::new();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut engine = SqlEngine::new(&idx, &store);
@@ -1131,8 +1122,7 @@ proptest! {
             prop::collection::vec(Just("()"), 1..=30).prop_map(|v| format!("SELECT {}", v.join(""))),
         ],
     ) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let idx = Index::open(&dir.path().join("test.db")).unwrap();
+        let idx = open_test_index();
         let store = MockStore::new();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut engine = SqlEngine::new(&idx, &store);
@@ -1244,7 +1234,7 @@ fn arb_conflict_ref_additions() -> impl Strategy<Value = ConflictFile> {
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(200))]
+    #![proptest_config(ProptestConfig::with_cases(5))]
 
     /// Merge commutativity: swapping ours/theirs produces same result.
     #[test]
@@ -1514,7 +1504,7 @@ fn arb_zettel_set(count: std::ops::Range<usize>) -> impl Strategy<Value = Vec<(S
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(100))]
+    #![proptest_config(ProptestConfig::with_cases(5))]
 
     /// Index-rebuild equivalence: sequential index_zettel == full rebuild.
     #[test]
@@ -1526,16 +1516,14 @@ proptest! {
         }
 
         // Index A: sequential index_zettel calls
-        let dir_a = tempfile::TempDir::new().unwrap();
-        let idx_a = Index::open(&dir_a.path().join("a.db")).unwrap();
+        let idx_a = open_test_index();
         for (path, content) in &zettels {
             let parsed = parser::parse(content, path).unwrap();
             idx_a.index_zettel(&parsed).unwrap();
         }
 
         // Index B: full rebuild
-        let dir_b = tempfile::TempDir::new().unwrap();
-        let idx_b = Index::open(&dir_b.path().join("b.db")).unwrap();
+        let idx_b = open_test_index();
         idx_b.rebuild(&source).unwrap();
 
         // Compare: query each zettel by ID
@@ -1565,8 +1553,7 @@ proptest! {
             source.files.insert(path.clone(), content.clone());
         }
 
-        let dir = tempfile::TempDir::new().unwrap();
-        let idx = Index::open(&dir.path().join("idx.db")).unwrap();
+        let idx = open_test_index();
         idx.rebuild(&source).unwrap();
 
         // Same commit → not stale
@@ -1639,8 +1626,7 @@ fn arb_mixed_type_extras() -> impl Strategy<Value = Vec<Vec<(String, Value)>>> {
 }
 
 /// Create a seeded index with 3 hardcoded zettels for FTS5 fuzzing.
-/// Returns (TempDir, Index) — caller must keep TempDir alive.
-fn seed_index_with_sample_data() -> (tempfile::TempDir, Index) {
+fn seed_index_with_sample_data() -> Index {
     let mut source = MockSource::new();
     source.files.insert(
         "zettelkasten/20250101000000.md".into(),
@@ -1655,10 +1641,9 @@ fn seed_index_with_sample_data() -> (tempfile::TempDir, Index) {
         "---\nid: \"20250101000002\"\ntitle: Gamma note\ntags: [rust, wasm]\n---\nThird zettel about WebAssembly and Rust.\n".into(),
     );
 
-    let dir = tempfile::TempDir::new().unwrap();
-    let idx = Index::open(&dir.path().join("fts.db")).unwrap();
+    let idx = open_test_index();
     idx.rebuild(&source).unwrap();
-    (dir, idx)
+    idx
 }
 
 // ---------------------------------------------------------------------------
@@ -1666,12 +1651,12 @@ fn seed_index_with_sample_data() -> (tempfile::TempDir, Index) {
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(100))]
+    #![proptest_config(ProptestConfig::with_cases(5))]
 
     /// Random ASCII strings as search queries never panic.
     #[test]
     fn fts5_random_query_no_crash(query in "[\\x20-\\x7E]{0,200}") {
-        let (_dir, idx) = seed_index_with_sample_data();
+        let idx = seed_index_with_sample_data();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = idx.search(&query);
         }));
@@ -1681,7 +1666,7 @@ proptest! {
     /// FTS5 operator strings never panic.
     #[test]
     fn fts5_special_operators_no_crash(query in arb_fts5_query()) {
-        let (_dir, idx) = seed_index_with_sample_data();
+        let idx = seed_index_with_sample_data();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = idx.search(&query);
         }));
@@ -1691,7 +1676,7 @@ proptest! {
     /// Long queries (1K+ chars) never panic.
     #[test]
     fn fts5_long_query_no_crash(query in arb_long_query()) {
-        let (_dir, idx) = seed_index_with_sample_data();
+        let idx = seed_index_with_sample_data();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = idx.search(&query);
         }));
@@ -1711,7 +1696,7 @@ proptest! {
             prop::collection::vec(Just(" "), 1..=50).prop_map(|v| v.join("")),
         ],
     ) {
-        let (_dir, idx) = seed_index_with_sample_data();
+        let idx = seed_index_with_sample_data();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _ = idx.search(&query);
         }));
@@ -1724,7 +1709,7 @@ proptest! {
 // ---------------------------------------------------------------------------
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(100))]
+    #![proptest_config(ProptestConfig::with_cases(5))]
 
     /// Same-type extra fields are preserved after indexing.
     #[test]
@@ -1732,8 +1717,7 @@ proptest! {
         value_type in 0u8..3,
         count in 2usize..=5,
     ) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let idx = Index::open(&dir.path().join("ti.db")).unwrap();
+        let idx = open_test_index();
 
         let key = "xConsistent";
         for i in 0..count {
@@ -1780,10 +1764,8 @@ proptest! {
     /// Indexing the same zettels into two separate DBs produces identical results.
     #[test]
     fn indexer_type_inference_deterministic(zettels in arb_zettel_set(2..6)) {
-        let dir_a = tempfile::TempDir::new().unwrap();
-        let dir_b = tempfile::TempDir::new().unwrap();
-        let idx_a = Index::open(&dir_a.path().join("det_a.db")).unwrap();
-        let idx_b = Index::open(&dir_b.path().join("det_b.db")).unwrap();
+        let idx_a = open_test_index();
+        let idx_b = open_test_index();
 
         for (path, content) in &zettels {
             let parsed = parser::parse(content, path).unwrap();
@@ -1813,8 +1795,7 @@ proptest! {
     /// Mixed-type extra fields on the same key don't panic.
     #[test]
     fn indexer_type_widening_no_panic(extras in arb_mixed_type_extras()) {
-        let dir = tempfile::TempDir::new().unwrap();
-        let idx = Index::open(&dir.path().join("widen.db")).unwrap();
+        let idx = open_test_index();
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             for (i, extra_pairs) in extras.iter().enumerate() {

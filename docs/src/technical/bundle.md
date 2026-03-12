@@ -58,6 +58,18 @@ Steps:
 7. Import node registrations
 8. Rebuild index
 
+## Pre-compaction Backup
+
+Compaction automatically exports a full bundle before mutating data, providing a recovery path if compaction corrupts the repository. Backups are stored at `.zdb/backups/pre-compact-{ISO8601}.bundle.tar` by default.
+
+```bash
+zdb compact                          # backup + compact
+zdb compact --no-backup              # skip backup
+zdb compact --backup-path /tmp/b.tar # custom path
+```
+
+The GraphQL `compact` mutation accepts `noBackup: Boolean` and returns `backupPath: String` (null when skipped). To recover from a backup: `zdb bundle import <backup.bundle.tar>` on a fresh `zdb init`.
+
 ## Verification
 
 ```rust

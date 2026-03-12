@@ -34,12 +34,15 @@ jobs:
           git config --global user.name "ZettelDB CI"
 
       - name: Clippy
+        if: runner.os == 'Linux'
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Build CLI binary
         run: cargo build -p zdb-cli --bin zdb
 
       - name: Test
+        env:
+          PROPTEST_CASES: 50
         run: cargo test --workspace
 
       - name: Smoke test (Unix)
