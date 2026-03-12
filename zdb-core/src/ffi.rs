@@ -502,6 +502,23 @@ impl ZettelDriver {
         Ok(path.to_string_lossy().into_owned())
     }
 
+    pub fn export_delta_bundle(
+        &self,
+        target_node_uuid: String,
+        output_path: String,
+    ) -> Result<String, ZdbError> {
+        let repo = self.repo.lock().unwrap();
+        let sync_mgr = SyncManager::open(&repo).map_err(ZdbError::from)?;
+        let path = crate::bundle::export_bundle(
+            &repo,
+            &sync_mgr,
+            &target_node_uuid,
+            Path::new(&output_path),
+        )
+        .map_err(ZdbError::from)?;
+        Ok(path.to_string_lossy().into_owned())
+    }
+
     pub fn import_bundle(&self, bundle_path: String) -> Result<(), ZdbError> {
         let index = self.index.lock().unwrap();
         let repo = self.repo.lock().unwrap();
