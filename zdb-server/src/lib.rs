@@ -64,10 +64,9 @@ pub async fn run(
     };
     reloader.store_initial(gql_schema);
 
-    // Router
-    let mut app = Router::new()
+    // Auth-gated routes
+    let mut auth_routes = Router::new()
         .route("/graphql", axum::routing::post(graphql_handler))
-        .route("/ws", axum::routing::get(ws::ws_handler))
         .route(
             "/attachments/{zettel_id}/{filename}",
             axum::routing::get(serve_attachment),
@@ -78,7 +77,7 @@ pub async fn run(
 
     if playground {
         let playground_token = token.clone();
-        app = app.route(
+        auth_routes = auth_routes.route(
             "/graphql",
             axum::routing::get(move || {
                 let t = playground_token.clone();
@@ -91,6 +90,11 @@ pub async fn run(
             }),
         );
     }
+
+    let auth_routes = auth_routes.layer(middleware::from_fn(auth::require_auth));
+
+    // WebSocket route — auth handled in ws_handler via header or connection_init payload
+    let ws_routes = Router::new().route("/ws", axum::routing::get(ws::ws_handler));
 
     // Background maintenance
     if cfg.maintenance_enabled {
@@ -109,8 +113,9 @@ pub async fn run(
     let pg_token = token.clone();
     let pg_reloader = reloader.clone();
 
-    let app = app
-        .layer(middleware::from_fn(auth::require_auth))
+    // Merge routers — shared extensions available to all routes
+    let app = auth_routes
+        .merge(ws_routes)
         .layer(Extension(AuthToken(token)))
         .layer(Extension(rest_actor))
         .layer(Extension(shared_schema))
