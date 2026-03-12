@@ -501,6 +501,131 @@ fn bundle_recovery_after_compaction() {
     );
 }
 
+// ── Test: compact creates recoverable backup ─────────────────────
+
+#[test]
+fn compact_creates_recoverable_backup() {
+    let setup = MultiNodeSetup::new(2);
+
+    // Node0 creates content
+    let id = MultiNodeSetup::create(&setup.nodes[0], "Backup test", "original body");
+    MultiNodeSetup::push(&setup.nodes[0]);
+    MultiNodeSetup::sync(&setup.nodes[1]);
+
+    // Node0 edits and compacts (backup created automatically)
+    for i in 0..3 {
+        MultiNodeSetup::update(
+            &setup.nodes[0],
+            &id,
+            &format!("Edit {i}"),
+            &format!("body {i}"),
+        );
+    }
+    let compact_out = ZdbTestRepo::zdb_at(&setup.nodes[0])
+        .args(["compact", "--force"])
+        .output()
+        .expect("compact failed");
+    assert!(compact_out.status.success(), "compact should succeed");
+    let stdout = String::from_utf8_lossy(&compact_out.stdout);
+    assert!(
+        stdout.contains("backup:"),
+        "compact output should show backup path: {stdout}"
+    );
+
+    // Extract backup path from output
+    let backup_line = stdout
+        .lines()
+        .find(|l| l.starts_with("backup:"))
+        .expect("backup line missing");
+    let backup_path = backup_line.trim_start_matches("backup:").trim();
+    assert!(
+        std::path::Path::new(backup_path).exists(),
+        "backup file should exist at {backup_path}"
+    );
+
+    // Import backup into a fresh node to verify it's recoverable
+    let fresh = tempfile::TempDir::new().unwrap();
+    let fresh_path = fresh.path().to_path_buf();
+    ZdbTestRepo::zdb_at(&fresh_path)
+        .args(["init"])
+        .assert()
+        .success();
+    ZdbTestRepo::zdb_at(&fresh_path)
+        .args(["register-node", "RecoveryNode"])
+        .assert()
+        .success();
+    ZdbTestRepo::zdb_at(&fresh_path)
+        .args(["bundle", "import", backup_path])
+        .assert()
+        .success();
+
+    let out = MultiNodeSetup::read(&fresh_path, &id);
+    assert!(
+        out.contains("Edit"),
+        "recovered node should have edited content: {out}"
+    );
+}
+
+#[test]
+fn compact_no_backup_flag() {
+    let setup = MultiNodeSetup::new(2);
+
+    MultiNodeSetup::create(&setup.nodes[0], "No-backup test", "body");
+    let compact_out = ZdbTestRepo::zdb_at(&setup.nodes[0])
+        .args(["compact", "--force", "--no-backup"])
+        .output()
+        .expect("compact failed");
+    assert!(compact_out.status.success(), "compact --no-backup should succeed");
+    let stdout = String::from_utf8_lossy(&compact_out.stdout);
+    assert!(
+        !stdout.contains("backup:"),
+        "compact --no-backup should not show backup path: {stdout}"
+    );
+
+    // Verify no backup file was created in .zdb/backups/
+    let backups_dir = setup.nodes[0].join(".zdb/backups");
+    if backups_dir.exists() {
+        let entries: Vec<_> = std::fs::read_dir(&backups_dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert!(
+            entries.is_empty(),
+            "no backup files should exist with --no-backup: {entries:?}"
+        );
+    }
+}
+
+#[test]
+fn compact_backup_path_flag() {
+    let setup = MultiNodeSetup::new(2);
+
+    MultiNodeSetup::create(&setup.nodes[0], "Custom path test", "body");
+    let custom_backup = tempfile::NamedTempFile::new().unwrap();
+    let custom_path = custom_backup.path().with_extension("bundle.tar");
+
+    let compact_out = ZdbTestRepo::zdb_at(&setup.nodes[0])
+        .args([
+            "compact",
+            "--force",
+            "--backup-path",
+            custom_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("compact failed");
+    assert!(compact_out.status.success(), "compact --backup-path should succeed");
+    let stdout = String::from_utf8_lossy(&compact_out.stdout);
+    assert!(
+        stdout.contains("backup:"),
+        "compact --backup-path should show backup path: {stdout}"
+    );
+    assert!(
+        custom_path.exists(),
+        "backup file should exist at custom path: {}",
+        custom_path.display()
+    );
+}
+
 // ── Test: air-gapped delta transfer ──────────────────────────────
 
 #[test]
