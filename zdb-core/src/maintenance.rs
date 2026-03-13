@@ -122,9 +122,52 @@ mod tests {
     }
 
     #[test]
-    fn run_with_invalid_path_returns_error() {
-        let result = run(Path::new("/nonexistent/path"), None);
+    fn run_with_deleted_dir_returns_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().to_path_buf();
+        drop(dir); // delete the directory
+        let result = run(&path, None);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn run_reports_fallback_field() {
+        let dir = tempfile::tempdir().unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let report = run(dir.path(), None).unwrap();
+        // fallback_used reflects whether git maintenance subcommand was available
+        assert_eq!(report.fallback_used, !probe_git_maintenance());
+    }
+
+    #[test]
+    fn run_with_explicit_task() {
+        let dir = tempfile::tempdir().unwrap();
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        let report = run(dir.path(), Some(&["commit-graph"]));
+        // If git maintenance is available, explicit task should work.
+        // If not (fallback), it falls back to gc --auto regardless.
+        if probe_git_maintenance() {
+            let report = report.unwrap();
+            assert!(!report.fallback_used);
+        }
     }
 
     #[test]
