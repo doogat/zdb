@@ -2151,34 +2151,27 @@ pub async fn run(
     };
     reloader.store_initial(gql_schema);
 
-    // Router
-    let mut app = Router::new()
+    // Auth-gated routes
+    let mut auth_routes = Router::new()
         .route("/graphql", axum::routing::post(graphql_handler))
-        .route("/ws", axum::routing::get(ws::ws_handler))
         .nest("/rest", rest::router());
 
     if playground {
-        let playground_token = token.clone();
-        app = app.route(
-            "/graphql",
-            axum::routing::get(move || {
-                let t = playground_token.clone();
-                async move {
-                    axum::response::Html(async_graphql::http::playground_source(
-                        async_graphql::http::GraphQLPlaygroundConfig::new("/graphql")
-                            .with_header("Authorization", &format!("Bearer {t}")),
-                    ))
-                }
-            }),
-        );
+        // ... playground route on /graphql GET ...
     }
+
+    let auth_routes = auth_routes.layer(middleware::from_fn(auth::require_auth));
+
+    // WebSocket route — auth handled in ws_handler via header or connection_init payload
+    let ws_routes = Router::new().route("/ws", axum::routing::get(ws::ws_handler));
 
     let pg_actor = rest_actor.clone();
     let pg_token = token.clone();
     let pg_reloader = reloader.clone();
 
-    let app = app
-        .layer(middleware::from_fn(auth::require_auth))
+    // Merge routers — shared extensions available to all routes
+    let app = auth_routes
+        .merge(ws_routes)
         .layer(Extension(AuthToken(token)))
         .layer(Extension(rest_actor))
         .layer(Extension(shared_schema));
@@ -2229,7 +2222,27 @@ The GraphQL schema is **dynamic** — built at runtime from `_typedef` zettels. 
 
 The reload loop (`SchemaReloader::reload_loop`) handles errors gracefully: if `get_type_schemas()` fails or `build_schema()` returns `Err`, the error is logged and the last-known-good schema is preserved. Invalid typedef table names (those failing `is_valid_graphql_name()`) are skipped with a warning during schema build, so one bad typedef doesn't poison the entire schema.
 
-Auth is bearer-token based. The token file lives at `~/.config/zetteldb/auth-token`. All routes pass through `require_auth` middleware.
+Auth is bearer-token based. The token file lives at `~/.config/zetteldb/token`. All routes except `/ws` pass through the `require_auth` middleware. The `/ws` route handles auth in the handler itself (see below).
+
+### WebSocket Authentication
+
+The `/ws` route is split from the auth-gated router so browser clients can connect without setting HTTP headers. `ws_handler` in `ws.rs` implements dual-path auth:
+
+```rust
+pub async fn ws_handler(
+    ws: WebSocketUpgrade,
+    protocol: GraphQLProtocol,
+    Extension(shared_schema): Extension<Arc<ArcSwap<Schema>>>,
+    Extension(auth): Extension<AuthToken>,
+    headers: axum::http::HeaderMap,
+) -> Response
+```
+
+1. **Header present + valid** (`validate_bearer` from `auth.rs`): session pre-authenticated, `on_connection_init` is a no-op that returns `Ok(Data::default())`
+2. **Header absent**: `on_connection_init` callback extracts `payload["Authorization"]`, validates via `validate_bearer`. Valid → `connection_ack`; missing → `"Missing authentication"` error; invalid → `"Invalid authentication"` error
+3. **Header present + invalid**: returns `StatusCode::UNAUTHORIZED` before upgrade
+
+The `validate_bearer` helper (extracted from `require_auth`) checks `"Bearer "` prefix and compares the token. Both the middleware and `ws_handler` use it.
 
 ### Filtering, Sorting, and Aggregation
 
