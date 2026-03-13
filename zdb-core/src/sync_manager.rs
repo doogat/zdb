@@ -129,12 +129,16 @@ impl<'a> SyncManager<'a> {
     /// Full sync cycle: fetch → merge → resolve → push → update state → reindex.
     #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
     pub fn sync(&mut self, remote: &str, branch: &str, index: &Index) -> Result<SyncReport> {
+        let sync_start = std::time::Instant::now();
         tracing::info!(remote, branch, "sync_start");
+
         // Fetch
+        let phase_start = std::time::Instant::now();
         self.repo.fetch(remote, branch)?;
-        tracing::debug!(remote, branch, "fetch_complete");
+        tracing::info!(phase = "fetch", elapsed_ms = phase_start.elapsed().as_millis(), "sync_phase");
 
         // Merge
+        let phase_start = std::time::Instant::now();
         let merge_result = self.repo.merge_remote(remote, branch)?;
 
         let mut report = SyncReport {
@@ -212,20 +216,31 @@ impl<'a> SyncManager<'a> {
             }
         }
 
+        tracing::info!(phase = "merge", elapsed_ms = phase_start.elapsed().as_millis(), "sync_phase");
+
         // Push
+        let phase_start = std::time::Instant::now();
         if report.direction != "up-to-date" {
             self.repo.push(remote, branch)?;
-            tracing::debug!(remote, branch, "push_complete");
         }
+        tracing::info!(phase = "push1", elapsed_ms = phase_start.elapsed().as_millis(), "sync_phase");
 
         // Update sync state
+        let phase_start = std::time::Instant::now();
         self.update_sync_state()?;
+        tracing::info!(phase = "update_sync_state", elapsed_ms = phase_start.elapsed().as_millis(), "sync_phase");
 
         // Push again to propagate node registry
+        let phase_start = std::time::Instant::now();
         self.repo.push(remote, branch)?;
+        tracing::info!(phase = "push2", elapsed_ms = phase_start.elapsed().as_millis(), "sync_phase");
 
         // Reindex
+        let phase_start = std::time::Instant::now();
         index.rebuild(self.repo)?;
+        tracing::info!(phase = "reindex", elapsed_ms = phase_start.elapsed().as_millis(), "sync_phase");
+
+        tracing::info!(total_ms = sync_start.elapsed().as_millis(), "sync_complete");
 
         Ok(report)
     }
