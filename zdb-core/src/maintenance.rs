@@ -11,7 +11,7 @@ static GIT_MAINTENANCE_AVAILABLE: OnceLock<bool> = OnceLock::new();
 fn probe_git_maintenance() -> bool {
     *GIT_MAINTENANCE_AVAILABLE.get_or_init(|| {
         std::process::Command::new("git")
-            .args(["maintenance", "run", "--help"])
+            .args(["maintenance", "run", "-h"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status()
