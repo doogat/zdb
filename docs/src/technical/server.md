@@ -10,7 +10,7 @@ ZettelDB exposes a GraphQL API via `zdb serve`, enabling mobile, desktop, and we
 Client → HTTP (axum) → Bearer auth middleware → GraphQL POST /graphql
                                                → REST /rest/*
                                                → NoSQL /nosql/*
-                                               → WebSocket /ws (subscriptions)
+                     → WebSocket /ws (auth in handler: header or connection_init payload)
        → TCP (pgwire) → MD5 password auth ─────→ SQL simple query protocol
                                                        ↓
                                               ActorHandle (mpsc channel)
@@ -171,12 +171,39 @@ type ZettelChangeEvent {
 
 **WebSocket endpoint**: `ws://host:port/ws`
 
-**Authentication**: The HTTP upgrade request must include the `Authorization: Bearer <token>` header (same token as REST/GraphQL). Note: browser `WebSocket` API cannot set custom headers, so browser clients would need query-param auth or `connection_init` payload auth (not yet implemented). Native clients (UniFFI, CLI tools) can set headers on the upgrade request.
+**Authentication**: The `/ws` route is NOT behind the bearer auth middleware. Instead, `ws_handler` supports two auth paths:
+
+1. **Header auth** (native clients): include `Authorization: Bearer <token>` on the HTTP upgrade request. If valid, the session is pre-authenticated and `connection_init` payload is ignored. If invalid, the server returns 401 before upgrade.
+2. **Payload auth** (browser clients): omit the `Authorization` header. The server accepts the upgrade, then validates the token from the `connection_init` payload:
+
+```json
+{
+  "type": "connection_init",
+  "payload": {
+    "Authorization": "Bearer <token>"
+  }
+}
+```
+
+If the payload token is valid, the server responds with `connection_ack`. If missing or invalid, the server sends an error and closes the connection.
+
+**JavaScript browser example** (using [graphql-ws](https://github.com/enisdenjo/graphql-ws)):
+
+```js
+import { createClient } from 'graphql-ws';
+
+const client = createClient({
+  url: 'ws://127.0.0.1:2891/ws',
+  connectionParams: {
+    Authorization: `Bearer ${token}`,
+  },
+});
+```
 
 **Protocol**: Clients connect using the `graphql-transport-ws` subprotocol. Flow:
 
-1. Client sends `connection_init`
-2. Server responds with `connection_ack`
+1. Client sends `connection_init` (with optional `payload` for auth)
+2. Server validates auth (header or payload) and responds with `connection_ack`
 3. Client sends `subscribe` with the subscription query
 4. Server pushes `next` messages as mutations occur
 5. Client sends `complete` to unsubscribe
