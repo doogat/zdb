@@ -20,8 +20,8 @@ fn zettel_path(i: usize) -> String {
 }
 
 /// NFR-03 target: sync < 2s at 5K on LAN.
-/// Currently measured at ~12.6s (release, localhost). Needs optimization.
-/// Run with: cargo test --release --test sync_thresholds -- --ignored
+/// Measured at ~120ms after incremental reindex, single push, deferred commit-graph.
+/// Run with: cargo test --release --test sync_thresholds
 #[test]
 fn nfr03_sync_under_2s_at_5k() {
     let _ = tracing_subscriber::fmt()
