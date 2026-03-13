@@ -44,10 +44,10 @@ Reads the UUID from `.git/zdb-node`, then loads the corresponding `.nodes/{uuid}
    - `FastForward` → report 1 commit transferred
    - `Clean` → report 1 commit transferred (Git auto-committed)
    - `Conflicts` → three-step merge cascade (see below)
-4. **Push**: `git push {remote} {branch}` (skip if up-to-date)
-5. **Update state**: set `known_heads = [current HEAD]`, `last_sync = now`, commit `.nodes/{uuid}.toml`
-6. **Push again**: propagate updated node registry
-7. **Reindex**: `index.rebuild(repo)` to keep search current
+4. **Update state**: set `known_heads = [current HEAD]`, `last_sync = now`, commit `.nodes/{uuid}.toml`
+5. **Push**: single `git push {remote} {branch}` carries both merge result and node state
+6. **Commit-graph**: write once (deferred from per-commit writes during sync)
+7. **Reindex**: `index.rebuild_if_stale(repo)` — incremental reindex via `diff_paths` processes only changed files
 
 ### Three-Step Merge Cascade
 
@@ -251,3 +251,26 @@ If the reconstructed merge produces invalid markdown (rare edge case), the casca
 - Bundle full bootstrap (export full from node, import on fresh node)
 - Air-gapped delta transfer (export bundle, import on disconnected node)
 - Stale node resync after compaction (conflict with compacted CRDT state, LWW fallback)
+
+## Performance
+
+### NFR-03: Two-node sync under 2s at 5K zettels
+
+Measured on macOS (Apple Silicon), release build, localhost bare remote.
+
+Scenario: 5000 zettels seeded, fast-forward sync of 10 new zettels.
+
+| Phase | Before (ms) | After (ms) |
+|-------|------------|-----------|
+| fetch | 13 | 12 |
+| merge | 65 | 44 |
+| push | 18 (2 pushes) | 13 (1 push) |
+| update_sync_state | 26 | 8 |
+| reindex | 10101 | 24 |
+| **total** | **10226** | **118** |
+
+### Optimizations applied
+
+1. **Incremental reindex** — replaced `index.rebuild()` (full 5K re-parse) with `rebuild_if_stale()` which uses `incremental_reindex` to diff `old_head..new_head` and process only changed files. 421x improvement for the reindex phase.
+2. **Single push** — merged two pushes (content + node state) into one by reordering `update_sync_state()` before push.
+3. **Deferred commit-graph** — `write_commit_graph()` skipped during mid-sync commits, written once at the end via `set_skip_commit_graph` flag on `GitRepo`.
