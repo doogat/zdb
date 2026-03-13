@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use tempfile::TempDir;
+use tracing_subscriber::EnvFilter;
 use zdb_core::git_ops::GitRepo;
 use zdb_core::indexer::Index;
 use zdb_core::sync_manager::{register_node, SyncManager};
@@ -24,6 +25,11 @@ fn zettel_path(i: usize) -> String {
 #[test]
 #[ignore = "NFR-03 not yet met: sync ~12.6s vs 2s target"]
 fn nfr03_sync_under_2s_at_5k() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::new("zdb_core=info"))
+        .with_writer(std::io::stderr)
+        .try_init();
+
     let bare = TempDir::new().unwrap();
     let da = TempDir::new().unwrap();
     let db = TempDir::new().unwrap();
