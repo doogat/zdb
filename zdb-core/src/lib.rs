@@ -27,6 +27,7 @@ pub mod ffi;
 pub mod git_ops;
 pub mod hlc;
 pub mod indexer;
+pub mod maintenance;
 pub mod parser;
 pub mod sql_engine;
 pub mod sync_manager;

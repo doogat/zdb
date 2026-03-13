@@ -218,6 +218,11 @@ enum Command {
         /// Zettel ID
         id: String,
     },
+    /// Run git maintenance tasks
+    Maintenance {
+        #[command(subcommand)]
+        action: MaintenanceAction,
+    },
     /// [experimental] Update zdb to the latest release
     UpdateBin,
     /// Background update check (internal)
@@ -248,6 +253,31 @@ enum TypeAction {
         /// Bundled type name (project, contact)
         name: String,
     },
+}
+
+#[derive(Subcommand)]
+enum MaintenanceAction {
+    /// Run maintenance tasks
+    Run {
+        /// Specific task (e.g. commit-graph, gc, incremental-repack)
+        #[arg(long)]
+        task: Option<String>,
+    },
+    /// Toggle or query auto-maintenance
+    Auto {
+        #[command(subcommand)]
+        action: AutoAction,
+    },
+}
+
+#[derive(Subcommand)]
+enum AutoAction {
+    /// Enable auto-maintenance after sync and compact
+    On,
+    /// Disable auto-maintenance
+    Off,
+    /// Show current auto-maintenance setting
+    Status,
 }
 
 #[derive(Subcommand)]
@@ -910,6 +940,66 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
                 .map_err(zdb_core::error::ZettelError::Io)
             })?;
         }
+
+        Command::Maintenance { action } => match action {
+            MaintenanceAction::Run { task } => {
+                let repo = GitRepo::open(&cli.repo)?;
+                let tasks_slice: Vec<&str>;
+                let tasks_opt = match &task {
+                    Some(t) => {
+                        tasks_slice = vec![t.as_str()];
+                        Some(tasks_slice.as_slice())
+                    }
+                    None => None,
+                };
+                let report = zdb_core::maintenance::run(&repo.path, tasks_opt)?;
+                outln!(
+                    "maintenance: {} | {}ms{}",
+                    if report.success { "ok" } else { "failed" },
+                    report.duration_ms,
+                    if report.fallback_used {
+                        " (fallback: git gc)"
+                    } else {
+                        ""
+                    }
+                )?;
+            }
+            MaintenanceAction::Auto { action: auto } => {
+                let repo = GitRepo::open(&cli.repo)?;
+                match auto {
+                    AutoAction::Status => {
+                        let config = repo.load_config()?;
+                        outln!(
+                            "{}",
+                            if config.maintenance.auto_enabled {
+                                "on"
+                            } else {
+                                "off"
+                            }
+                        )?;
+                    }
+                    AutoAction::On | AutoAction::Off => {
+                        let enabled = matches!(auto, AutoAction::On);
+                        let mut config = repo.load_config()?;
+                        config.maintenance.auto_enabled = enabled;
+                        let toml_str = toml::to_string_pretty(&config)
+                            .map_err(|e| zdb_core::error::ZettelError::Toml(e.to_string()))?;
+                        repo.commit_file(
+                            ".zetteldb.toml",
+                            &toml_str,
+                            &format!(
+                                "maintenance auto {}",
+                                if enabled { "on" } else { "off" }
+                            ),
+                        )?;
+                        outln!(
+                            "auto-maintenance {}",
+                            if enabled { "enabled" } else { "disabled" }
+                        )?;
+                    }
+                }
+            }
+        },
 
         // Handled in main() before run() is called
         Command::UpdateBin | Command::UpdateCheck => unreachable!(),

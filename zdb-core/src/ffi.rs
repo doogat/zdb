@@ -350,6 +350,12 @@ impl ZettelDriver {
         Ok(())
     }
 
+    pub fn run_maintenance(&self) -> Result<bool, ZdbError> {
+        let repo = self.repo.lock().unwrap();
+        let report = crate::maintenance::run(&repo.path, None).map_err(ZdbError::from)?;
+        Ok(report.success)
+    }
+
     pub fn list_zettels(&self) -> Result<Vec<String>, ZdbError> {
         let repo = self.repo.lock().unwrap();
         repo.list_zettels().map_err(ZdbError::from)

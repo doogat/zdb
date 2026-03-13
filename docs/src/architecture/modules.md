@@ -28,14 +28,17 @@ traits (depends: error, types — defines ZettelSource, ZettelStore,
   │      │                           crdt_resolver, indexer)
   │      │
   │      └──> compaction (depends: error, types, git_ops,
-  │                                sync_manager)
+  │                                sync_manager, maintenance)
+  │
+  ├──> maintenance (depends: error, types, git_ops
+  │                          — git maintenance runner + auto-trigger)
   │
   ├──> attachments (depends: error, types, git_ops, indexer, parser)
   │
   ├──> bundled_types (standalone, no deps)
   │
   ├──> ffi (depends: error, types, git_ops, indexer, parser,
-  │         sync_manager, compaction — UniFFI ZettelDriver facade)
+  │         sync_manager, compaction, maintenance — UniFFI ZettelDriver facade)
   │
   └──> CLI (depends: all core modules)
 ```
@@ -55,6 +58,7 @@ traits (depends: error, types — defines ZettelSource, ZettelStore,
 | `bundled_types` | Built-in _typedef templates (project, contact) | — |
 | `sync_manager` | Multi-device sync orchestration | uuid, toml, chrono |
 | `compaction` | CRDT cleanup + git gc | — |
+| `maintenance` | Git maintenance runner, auto-trigger | — |
 | `attachments` | File attachment CRUD (attach, detach, list) on `reference/{id}/` | — |
 | `ffi` | UniFFI facade (ZettelDriver) for Swift/Kotlin bindings | uniffi |
 | **CLI** | Command-line interface | clap |
