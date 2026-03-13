@@ -237,7 +237,7 @@ impl<'a> SyncManager<'a> {
 
         // Reindex
         let phase_start = std::time::Instant::now();
-        index.rebuild(self.repo)?;
+        index.rebuild_if_stale(self.repo)?;
         tracing::info!(phase = "reindex", elapsed_ms = phase_start.elapsed().as_millis(), "sync_phase");
 
         tracing::info!(total_ms = sync_start.elapsed().as_millis(), "sync_complete");
