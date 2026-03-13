@@ -1518,7 +1518,7 @@ sed -n '105,204p' zdb-core/src/sync_manager.rs
 
 The sync flow (with per-phase timing instrumentation):
 
-1. **Defer commit-graph** — `set_skip_commit_graph(true)` to avoid per-commit `git commit-graph write` overhead
+1. **Defer commit-graph** — `set_skip_commit_graph(true)` to avoid per-commit `git commit-graph write` overhead, with a drop guard that always restores `false` on sync exit (including error paths)
 2. **Fetch** from remote
 3. **Merge** — git's 3-way merge classifies the result
 4. **Handle conflicts**:
@@ -2362,7 +2362,7 @@ CLI/GraphQL → sql_engine::execute(sql) → sqlparser AST → dispatch:
 
 ```
 CLI → sync_manager::sync:
-  set_skip_commit_graph(true)
+  set_skip_commit_graph(true) + drop guard reset
   → git_ops::fetch → git_ops::merge_remote → MergeResult::Conflicts?
     → crdt_resolver::resolve_conflicts (per-zone Automerge)
     → validate → fallback to LWW if invalid

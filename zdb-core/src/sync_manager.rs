@@ -88,6 +88,17 @@ fn write_fm_crdt_files(
     Ok(())
 }
 
+/// Ensures `skip_commit_graph` is reset when sync exits (success or error).
+struct SkipCommitGraphResetGuard<'a> {
+    repo: &'a GitRepo,
+}
+
+impl<'a> Drop for SkipCommitGraphResetGuard<'a> {
+    fn drop(&mut self) {
+        self.repo.set_skip_commit_graph(false);
+    }
+}
+
 impl<'a> SyncManager<'a> {
     /// Open a SyncManager from an existing repo with a registered node.
     pub fn open(repo: &'a GitRepo) -> Result<Self> {
@@ -134,6 +145,7 @@ impl<'a> SyncManager<'a> {
 
         // Defer commit-graph writes until end of sync
         self.repo.set_skip_commit_graph(true);
+        let _reset_skip_commit_graph = SkipCommitGraphResetGuard { repo: self.repo };
 
         // Fetch
         let phase_start = std::time::Instant::now();
@@ -691,5 +703,32 @@ mod tests {
         assert!(parser::parse(&repaired, path).is_ok());
         let head = repo.repo.head().unwrap().peel_to_commit().unwrap();
         assert_eq!(head.parent_count(), 1);
+    }
+
+    #[test]
+    fn sync_error_resets_skip_commit_graph_for_subsequent_commits() {
+        let (dir, repo) = temp_repo();
+        register_node(&repo, "Test").unwrap();
+
+        let db_path = dir.path().join(".zdb/index.db");
+        std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+        let index = crate::indexer::Index::open(&db_path).unwrap();
+
+        let mut mgr = SyncManager::open(&repo).unwrap();
+        let sync_result = mgr.sync("missing-remote", "master", &index);
+        assert!(sync_result.is_err());
+
+        let commit_graph = repo.path.join(".git/objects/info/commit-graph");
+        let _ = std::fs::remove_file(&commit_graph);
+        assert!(!commit_graph.exists());
+
+        repo.commit_file(
+            "zettelkasten/after-sync-error.md",
+            "---\ntitle: After sync error\n---\nBody",
+            "post-sync-error commit",
+        )
+        .unwrap();
+
+        assert!(commit_graph.exists());
     }
 }
