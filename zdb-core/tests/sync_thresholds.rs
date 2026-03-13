@@ -23,7 +23,6 @@ fn zettel_path(i: usize) -> String {
 /// Currently measured at ~12.6s (release, localhost). Needs optimization.
 /// Run with: cargo test --release --test sync_thresholds -- --ignored
 #[test]
-#[ignore = "NFR-03 not yet met: sync ~12.6s vs 2s target"]
 fn nfr03_sync_under_2s_at_5k() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new("zdb_core=info"))
