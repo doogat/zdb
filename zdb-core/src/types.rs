@@ -9,6 +9,8 @@ pub struct RepoConfig {
     pub compaction: CompactionConfig,
     #[serde(default)]
     pub crdt: CrdtConfig,
+    #[serde(default)]
+    pub maintenance: MaintenanceConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,6 +56,35 @@ impl Default for CrdtConfig {
 
 fn default_crdt_strategy() -> String {
     "preset:default".to_string()
+}
+
+fn default_write_threshold() -> u32 {
+    50
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MaintenanceConfig {
+    #[serde(default)]
+    pub auto_enabled: bool,
+    #[serde(default = "default_write_threshold")]
+    pub write_threshold: u32,
+}
+
+impl Default for MaintenanceConfig {
+    fn default() -> Self {
+        Self {
+            auto_enabled: false,
+            write_threshold: default_write_threshold(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MaintenanceReport {
+    pub tasks_run: Vec<String>,
+    pub success: bool,
+    pub duration_ms: u64,
+    pub fallback_used: bool,
 }
 
 /// Domain-level value type, decoupled from serde_yaml::Value.

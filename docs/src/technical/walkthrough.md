@@ -1639,11 +1639,14 @@ The maintenance module delegates git repository housekeeping (commit-graph updat
 ```rust
 pub fn run(repo_path: &Path, tasks: Option<&[&str]>) -> Result<MaintenanceReport>;
 pub fn maybe_auto_run(repo: &GitRepo);
+pub fn check_write_threshold(repo: &GitRepo);
 ```
 
 `run()` shells out to `git maintenance run --auto` (or `--task=<t>` for explicit task selection). Returns a `MaintenanceReport` with `success`, `duration_ms`, `fallback_used`, and `tasks_run`. Errors from git are logged but still returned — callers decide whether to propagate.
 
-`maybe_auto_run()` is the automatic trigger. It loads `RepoConfig`, checks `maintenance.auto_enabled`, and calls `run()` if enabled. All errors are caught and logged internally — the function never propagates failures to callers, so `compact()` and `sync()` can call it unconditionally.
+`maybe_auto_run()` is the automatic trigger for sync/compact. It loads `RepoConfig`, checks `maintenance.auto_enabled`, and calls `run()` if enabled. All errors are caught and logged internally — the function never propagates failures to callers, so `compact()` and `sync()` can call it unconditionally.
+
+`check_write_threshold()` is the high-write session trigger. It increments a per-repo atomic commit counter (`GitRepo::session_commits`) and checks if it has crossed `MaintenanceConfig::write_threshold` (default: 50). When the threshold is reached, it runs maintenance and resets the counter. Called automatically from `commit_files()` and `commit_binary_file()`.
 
 ### Configuration
 
@@ -1652,6 +1655,7 @@ Auto-maintenance is configured in `.zetteldb.toml`:
 ```toml
 [maintenance]
 auto_enabled = false   # default: opt-in
+write_threshold = 50   # commits before auto-maintenance triggers
 ```
 
 The `MaintenanceConfig` struct uses `#[serde(default)]` so existing config files without a `[maintenance]` section load cleanly.
@@ -1660,6 +1664,7 @@ The `MaintenanceConfig` struct uses `#[serde(default)]` so existing config files
 
 - **Compaction** — `maybe_auto_run()` is called at the end of `compact()`, after git gc
 - **Sync** — `maybe_auto_run()` is called at the end of `SyncManager::sync()`, before the final timing log
+- **High-write sessions** — `check_write_threshold()` is called from `commit_files()` and `commit_binary_file()` after every successful commit
 - **CLI** — `zdb maintenance run [--task <t>]` for explicit runs; `zdb maintenance auto on|off|status` to toggle
 - **Server** — `maintenance(task: String)` GraphQL mutation via the actor
 - **FFI** — `ZettelDriver::run_maintenance()` returns success bool

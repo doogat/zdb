@@ -62,6 +62,7 @@ pub struct GitRepo {
     pub repo: Repository,
     pub path: PathBuf,
     skip_commit_graph: std::cell::Cell<bool>,
+    session_commits: std::sync::atomic::AtomicU32,
 }
 
 impl GitRepo {
@@ -72,6 +73,7 @@ impl GitRepo {
             repo,
             path: path.to_path_buf(),
             skip_commit_graph: std::cell::Cell::new(false),
+            session_commits: std::sync::atomic::AtomicU32::new(0),
         };
 
         // Create standard directories with .gitkeep
@@ -120,6 +122,7 @@ impl GitRepo {
             repo,
             path: path.to_path_buf(),
             skip_commit_graph: std::cell::Cell::new(false),
+            session_commits: std::sync::atomic::AtomicU32::new(0),
         };
 
         git_repo.check_format_version()?;
@@ -247,6 +250,7 @@ impl GitRepo {
             .repo
             .commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
         self.write_commit_graph();
+        crate::maintenance::check_write_threshold(self);
         Ok(CommitHash(oid.to_string()))
     }
 
@@ -280,6 +284,7 @@ impl GitRepo {
             .repo
             .commit(Some("HEAD"), &sig, &sig, message, &tree, &[&parent])?;
         self.write_commit_graph();
+        crate::maintenance::check_write_threshold(self);
         Ok(CommitHash(oid.to_string()))
     }
 
@@ -679,6 +684,19 @@ impl GitRepo {
     /// Call `write_commit_graph` explicitly once when done.
     pub fn set_skip_commit_graph(&self, skip: bool) {
         self.skip_commit_graph.set(skip);
+    }
+
+    /// Increment the session commit counter and return the new value.
+    pub fn increment_session_commits(&self) -> u32 {
+        self.session_commits
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1
+    }
+
+    /// Reset the session commit counter to zero.
+    pub fn reset_session_commits(&self) {
+        self.session_commits
+            .store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Write the commit-graph file for faster traversal (merge-base, log).

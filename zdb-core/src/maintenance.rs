@@ -65,6 +65,35 @@ pub fn run(repo_path: &Path, tasks: Option<&[&str]>) -> Result<MaintenanceReport
     })
 }
 
+/// Check if session commit count has crossed the write threshold;
+/// if so, run maintenance and reset the counter.
+pub fn check_write_threshold(repo: &GitRepo) {
+    let count = repo.increment_session_commits();
+    let config = match repo.load_config() {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    if !config.maintenance.auto_enabled || config.maintenance.write_threshold == 0 {
+        return;
+    }
+    if count >= config.maintenance.write_threshold {
+        repo.reset_session_commits();
+        match run(&repo.path, None) {
+            Ok(report) => {
+                tracing::info!(
+                    success = report.success,
+                    duration_ms = report.duration_ms,
+                    trigger = "write_threshold",
+                    "auto-maintenance completed"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "write-threshold auto-maintenance failed");
+            }
+        }
+    }
+}
+
 pub fn maybe_auto_run(repo: &GitRepo) {
     let config = match repo.load_config() {
         Ok(c) => c,
@@ -186,5 +215,34 @@ mod tests {
         repo.commit_file(".zetteldb.toml", toml, "enable maintenance")
             .unwrap();
         maybe_auto_run(&repo);
+    }
+
+    #[test]
+    fn check_write_threshold_skips_when_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = GitRepo::init(dir.path()).unwrap();
+        // Default: auto_enabled = false. Should increment but not trigger maintenance.
+        for _ in 0..60 {
+            check_write_threshold(&repo);
+        }
+        // No panic, no error — just a no-op.
+    }
+
+    #[test]
+    fn check_write_threshold_triggers_at_threshold() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = GitRepo::init(dir.path()).unwrap();
+        let toml = "[maintenance]\nauto_enabled = true\nwrite_threshold = 3\n";
+        repo.commit_file(".zetteldb.toml", toml, "enable maintenance")
+            .unwrap();
+        // Counter was incremented by commit_file above (via check_write_threshold in commit_files).
+        // Reset to control the test precisely.
+        repo.reset_session_commits();
+
+        check_write_threshold(&repo); // count=1
+        check_write_threshold(&repo); // count=2
+        check_write_threshold(&repo); // count=3 — triggers + resets
+        // After trigger, counter resets; next call should not trigger.
+        check_write_threshold(&repo); // count=1
     }
 }
