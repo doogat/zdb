@@ -359,6 +359,11 @@ mod tests {
     fn temp_repo() -> (::tempfile::TempDir, GitRepo) {
         let dir = ::tempfile::TempDir::new().unwrap();
         let repo = GitRepo::init(dir.path()).unwrap();
+        repo.repo
+            .config()
+            .unwrap()
+            .set_bool("commit.gpgsign", false)
+            .unwrap();
         (dir, repo)
     }
 

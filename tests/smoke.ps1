@@ -1,12 +1,23 @@
 #!/usr/bin/env pwsh
+param(
+    [ValidateSet("quick", "full")]
+    [string]$SmokeProfile = $(if ($env:SMOKE_PROFILE) { $env:SMOKE_PROFILE } else { "full" })
+)
+
 # Windows smoke test — PowerShell port of tests/smoke.sh
 $ErrorActionPreference = "Stop"
 
-# Build and lint (skip if ZDB_BIN is set, e.g. in CI where build already ran)
+# Build and lint for the full profile when ZDB_BIN is not injected.
+$prepLabel = "prebuilt binary"
 if (-not $env:ZDB_BIN) {
-    cargo clippy --workspace --quiet
     cargo build --quiet
-    cargo bench --no-run --quiet 2>$null
+    if ($SmokeProfile -eq "full") {
+        cargo clippy --workspace --quiet
+        cargo bench --no-run --quiet 2>$null
+        $prepLabel = "clippy + bench compile"
+    } else {
+        $prepLabel = "build"
+    }
 }
 
 if ($env:ZDB_BIN) {
@@ -46,8 +57,9 @@ function pass($msg) { Write-Host "  ✓ $msg" }
 
 function zdb {
     $output = & $ZDB @args 2>&1
-    if ($LASTEXITCODE -ne 0) { throw "zdb $($args -join ' ') failed: $output" }
-    return $output
+    $text = [string]::Join("`n", @($output))
+    if ($LASTEXITCODE -ne 0) { throw "zdb $($args -join ' ') failed: $text" }
+    return $text
 }
 
 # Expect failure: returns true if command fails
@@ -56,9 +68,9 @@ function zdb-fails {
     return ($LASTEXITCODE -ne 0)
 }
 
-Write-Host "=== smoke test ==="
+Write-Host "=== smoke test ($SmokeProfile) ==="
 
-pass "clippy + bench compile"
+pass $prepLabel
 
 # 1. init
 zdb init . | Out-Null
@@ -202,7 +214,7 @@ pass "register-node + compact"
 # 15. node list + retire
 $output = zdb node list
 if ($output -notmatch "smoke-test-laptop") { throw "node list failed" }
-$NODE_UUID = ($output | Select-String "smoke-test-laptop").ToString().Split()[0]
+$NODE_UUID = (($output -split "\r?\n") | Select-String "smoke-test-laptop").ToString().Split()[0]
 $output = zdb node retire $NODE_UUID
 if ($output -notmatch "retired node") { throw "node retire failed" }
 pass "node list + retire"
@@ -227,6 +239,11 @@ if ($output -notmatch "backup:") { throw "compact --backup-path missing backup l
 if ($output -notmatch [regex]::Escape($customBackup)) { throw "compact --backup-path wrong path" }
 if (-not (Test-Path $customBackup)) { throw "custom backup file not created" }
 pass "compact --backup-path"
+
+if ($SmokeProfile -eq "quick") {
+    pass "quick profile complete"
+    exit 0
+}
 
 # 17. GraphQL server
 $SERVER_PORT = 19200 + (Get-Random -Maximum 800)
@@ -486,7 +503,7 @@ Push-Location $NODE2_DIR
 $output = zdb sync origin master
 if ($output -notmatch "conflicts resolved: 1") { throw "expected 1 conflict" }
 
-$title = zdb read $SYNC_ID | Select-String "^title:"
+$title = ((zdb read $SYNC_ID) -split "\r?\n") | Select-String "^title:"
 if ($title -notmatch "(Laptop Title|Desktop Title)") { throw "title not resolved" }
 pass "frontmatter scalar conflict (CRDT)"
 

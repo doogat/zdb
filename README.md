@@ -34,16 +34,20 @@ Doogat ZettelDB is a database engine that pairs decentralized Git-backed storage
 ### Build
 
 ```bash
-cargo build                # debug build
-cargo build --release      # release build
+cargo build                # debug build (default dev crates)
+cargo build --workspace    # full workspace build
+cargo build --release      # release build (default dev crates)
 ```
 
 ### Test
 
 ```bash
-cargo test                 # unit + e2e tests
+cargo test                 # fast local tier
+cargo test-ci              # bounded CI matrix tier (unit/bin targets only)
+cargo test-full            # full cargo suite (includes zdb-e2e)
 cargo clippy --workspace   # lint
-./tests/smoke.sh           # full CLI + server + sync smoke test
+SMOKE_PROFILE=quick ./tests/smoke.sh   # quick CLI smoke
+./tests/smoke.sh           # full CLI + server + sync smoke
 ```
 
 ### Benchmarks

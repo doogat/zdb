@@ -1,11 +1,26 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Build and lint (skip if ZDB_BIN is set, e.g. in CI where build already ran)
+SMOKE_PROFILE="${SMOKE_PROFILE:-full}"
+case "$SMOKE_PROFILE" in
+  quick|full) ;;
+  *)
+    echo "unknown SMOKE_PROFILE: $SMOKE_PROFILE (expected quick or full)" >&2
+    exit 2
+    ;;
+esac
+
+# Build and lint for the full profile when ZDB_BIN is not injected.
+PREP_LABEL="prebuilt binary"
 if [ -z "${ZDB_BIN:-}" ]; then
-  cargo clippy --workspace --quiet
   cargo build --quiet
-  cargo bench --no-run --quiet 2>/dev/null
+  if [ "$SMOKE_PROFILE" = "full" ]; then
+    cargo clippy --workspace --quiet
+    cargo bench --no-run --quiet 2>/dev/null
+    PREP_LABEL="clippy + bench compile"
+  else
+    PREP_LABEL="build"
+  fi
 fi
 ZDB="${ZDB_BIN:-$(cargo metadata --format-version=1 --no-deps | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')/debug/zdb}"
 
@@ -20,9 +35,9 @@ cd "$TMPDIR"
 
 pass() { printf '  ✓ %s\n' "$1"; }
 
-echo "=== smoke test ==="
+echo "=== smoke test ($SMOKE_PROFILE) ==="
 
-pass "clippy + bench compile"
+pass "$PREP_LABEL"
 
 # 1. init
 $ZDB init . >/dev/null
@@ -166,6 +181,11 @@ echo "$BKPATH_OUT" | grep -q "backup:"
 echo "$BKPATH_OUT" | grep -q "$CUSTOM_BACKUP"
 [ -f "$CUSTOM_BACKUP" ]
 pass "compact --backup-path"
+
+if [ "$SMOKE_PROFILE" = "quick" ]; then
+  pass "quick profile complete"
+  exit 0
+fi
 
 # 17. GraphQL server
 SERVER_PORT=$((19200 + (RANDOM % 800)))

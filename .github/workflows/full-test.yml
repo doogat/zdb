@@ -1,10 +1,7 @@
-name: Test
+name: Full Test
 
 on:
-  push:
-    branches: [master]
-  pull_request:
-    branches: [master]
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -40,47 +37,19 @@ jobs:
       - name: Build CLI binary
         run: cargo build -p zdb-cli --bin zdb
 
-      - name: Fast cargo test tier
-        run: cargo test-ci
+      - name: Full cargo test suite
+        env:
+          PROPTEST_CASES: 50
+        run: cargo test-full
 
-      - name: Quick smoke test (Unix)
+      - name: Full smoke test (Unix)
         if: runner.os != 'Windows'
         env:
-          SMOKE_PROFILE: quick
           ZDB_BIN: ${{ github.workspace }}/target/debug/zdb
         run: ./tests/smoke.sh
 
-      - name: Quick smoke test (Windows)
+      - name: Full smoke test (Windows)
         if: runner.os == 'Windows'
         env:
-          SMOKE_PROFILE: quick
           ZDB_BIN: ${{ github.workspace }}\target\debug\zdb.exe
         run: pwsh -File tests/smoke.ps1
-
-  integration:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Install system dependencies (Linux)
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
-
-      - name: Configure git identity
-        run: |
-          git config --global user.email "ci@zetteldb.dev"
-          git config --global user.name "ZettelDB CI"
-
-      - name: Property tests
-        env:
-          PROPTEST_CASES: 50
-        run: cargo test -p zdb-core --test property_tests
-
-      - name: Sync integration tests
-        run: cargo test -p zdb-core --test sync_test
-
-      - name: Threshold tests
-        run: cargo test -p zdb-core --test query_thresholds --test sync_thresholds --test growth_thresholds

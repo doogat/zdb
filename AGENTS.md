@@ -71,10 +71,10 @@ Follow SOLID and Clean Architecture principles as adapted for Rust. These are ma
 
 A task is NOT complete unless ALL of these pass:
 
-1. **Tests** — unit tests in the module AND integration/e2e tests in `tests/` (not just unit tests)
+1. **Tests** — unit tests in the module AND integration/e2e tests in `tests/` (not just unit tests; use `cargo test --workspace` for the full cargo suite)
 2. **Smoke test** — if the change adds a CLI command, server endpoint, or user-facing behavior, add a corresponding scenario to BOTH `tests/smoke.sh` (bash, runs on Linux/macOS) and `tests/smoke.ps1` (PowerShell, runs on Windows) following each file's existing numbered-section + `pass` helper pattern
 3. **Docs** — update relevant files in `docs/src/` to reflect any behavioral or API changes
-4. **Build** — `cargo clippy --workspace` and `cargo test` both pass
+4. **Build** — `cargo clippy --workspace`, fast-tier `cargo test`, and full-suite `cargo test --workspace` all pass
 5. **Walkthrough** — update `docs/src/technical/walkthrough.md` (see below)
 
 ## Code Walkthrough
@@ -97,13 +97,19 @@ After every task, update the code walkthrough at `docs/src/technical/walkthrough
 ## Commands
 
 ```
-cargo build                           Build all
-cargo test                            Run all tests (unit + e2e)
+cargo build                           Build default workspace members (fast local loop)
+cargo build --workspace               Build all crates
+cargo test                            Run fast local test tier
+cargo test-ci                         Run bounded CI matrix tier (unit/bin targets only)
+cargo test-full                       Run full cargo test suite (workspace + e2e)
 cargo test -p zdb-e2e                 Run e2e tests only
 cargo bench                           Run criterion benchmarks (CRUD + search)
 cargo bench --no-run                  Compile benchmarks without running
 cargo build -p zdb-core --features profiling   Build with tracing instrumentation
-./tests/smoke.sh                      CLI smoke test
+SMOKE_PROFILE=quick ./tests/smoke.sh  Quick CLI smoke test
+./tests/smoke.sh                      Full CLI + server + sync smoke test
+cargo test -p zdb-core --test property_tests   Property-based integration tests
+cargo test -p zdb-core --test sync_test        Core sync integration tests
 cargo clippy --workspace              Lint
 cargo doc --no-deps --document-private-items   Generate rustdoc
 cd docs && mdbook build               Build documentation

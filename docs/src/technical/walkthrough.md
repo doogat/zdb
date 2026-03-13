@@ -2975,7 +2975,7 @@ ZDB="${ZDB_BIN:-$(cargo metadata --format-version=1 --no-deps | sed -n 's/.*"tar
 
 The important detail is the absolute `ZDB_BIN`. `tests/smoke.sh` changes into a temporary directory before invoking the CLI, so a relative path like `target/debug/zdb` would work only from the repository root and then break as soon as the smoke script moves into its sandbox. Passing the workspace-absolute path preserves the single-build optimization and keeps the smoke scripts portable across Linux, macOS, and Windows.
 
-The new split adds three runtime guardrails. First, the root workspace default excludes `zdb-e2e` and `zdb-uniffi-bindgen` from plain `cargo test`, so pre-commit runs no longer drag the external harness into every loop. Second, pull-request CI no longer repeats the heavy core integration tests on every OS; the matrix stays on unit/bin coverage plus `SMOKE_PROFILE=quick`, and Linux runs `property_tests` and `sync_test` once. Third, the manual `Full Test` workflow keeps the exhaustive path one click away when you need the old breadth. The temp-repo helpers also write `commit.gpgsign = false` into their local `.git/config`, which prevents shell-based `git merge` / `git commit` steps from inheriting a developer's global GPG-signing policy and breaking otherwise-isolated tests.
+The new split adds three runtime guardrails. First, the root workspace default excludes `zdb-e2e` and `zdb-uniffi-bindgen` from plain `cargo test`, so pre-commit runs no longer drag the external harness into every loop. Second, pull-request CI no longer repeats the heavy core integration tests on every OS; the matrix stays on unit/bin coverage (`--lib --bins`) plus `SMOKE_PROFILE=quick`, and a single Linux integration job runs `property_tests` (with explicit `PROPTEST_CASES=50`), `sync_test`, and the three threshold test files (all currently `#[ignore]`, but compiled to catch breakage). Third, the manual `Full Test` workflow keeps the exhaustive path one click away when you need the old breadth. The temp-repo helpers disable `commit.gpgsign` in their local `.git/config` — `bundle.rs` uses the `git2` config API while the e2e harness shells out to `git config` — which prevents shell-based `git merge` / `git commit` steps from inheriting a developer's global GPG-signing policy and breaking otherwise-isolated tests. On Windows, the PowerShell smoke helper normalizes native command output into a single string before regex assertions, which avoids the `-notmatch`/array behavior that can falsely fail multiline CLI output.
 
 ```bash
 sed -n '892,909p' zdb-core/src/git_ops.rs
@@ -3054,7 +3054,7 @@ name = "large_scale"
 
 ### Threshold Tests
 
-Alongside Criterion benchmarks, two test files enforce NFR targets with hard assertions:
+Alongside Criterion benchmarks, three test files enforce NFR targets with hard assertions. All threshold tests are `#[ignore]` in CI (they need `--release` or very large datasets), but the CI integration job still compiles them to catch breakage:
 
 ```bash
 grep -E '^(#\[test\]|#\[ignore|fn [a-z])' zdb-core/tests/query_thresholds.rs

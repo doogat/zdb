@@ -352,6 +352,7 @@ impl ZdbTestRepo {
             .arg(dir.path())
             .assert()
             .success();
+        Self::disable_git_signing(dir.path());
         Self { dir }
     }
 
@@ -368,6 +369,15 @@ impl ZdbTestRepo {
 
     pub fn path(&self) -> &Path {
         self.dir.path()
+    }
+
+    fn disable_git_signing(path: &Path) {
+        let status = std::process::Command::new("git")
+            .current_dir(path)
+            .args(["config", "commit.gpgsign", "false"])
+            .status()
+            .expect("failed to run git config");
+        assert!(status.success(), "git config commit.gpgsign failed");
     }
 }
 
@@ -420,6 +430,7 @@ impl TwoNodeSetup {
             .arg(&node2_path)
             .output()
             .unwrap();
+        ZdbTestRepo::disable_git_signing(&node2_path);
         ZdbTestRepo::zdb_at(&node2_path)
             .args(["register-node", "Desktop"])
             .assert()
@@ -459,6 +470,7 @@ impl MultiNodeSetup {
             .arg(&path0)
             .assert()
             .success();
+        ZdbTestRepo::disable_git_signing(&path0);
         std::process::Command::new("git")
             .current_dir(&path0)
             .args(["remote", "add", "origin"])
@@ -483,6 +495,7 @@ impl MultiNodeSetup {
                 .arg(&path)
                 .output()
                 .unwrap();
+            ZdbTestRepo::disable_git_signing(&path);
             ZdbTestRepo::zdb_at(&path)
                 .args(["register-node", &format!("Node-{i}")])
                 .assert()
