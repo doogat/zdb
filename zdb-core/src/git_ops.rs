@@ -61,6 +61,7 @@ fn validate_path(repo_root: &Path, relative: &str) -> Result<()> {
 pub struct GitRepo {
     pub repo: Repository,
     pub path: PathBuf,
+    skip_commit_graph: std::cell::Cell<bool>,
 }
 
 impl GitRepo {
@@ -70,6 +71,7 @@ impl GitRepo {
         let git_repo = Self {
             repo,
             path: path.to_path_buf(),
+            skip_commit_graph: std::cell::Cell::new(false),
         };
 
         // Create standard directories with .gitkeep
@@ -117,6 +119,7 @@ impl GitRepo {
         let git_repo = Self {
             repo,
             path: path.to_path_buf(),
+            skip_commit_graph: std::cell::Cell::new(false),
         };
 
         git_repo.check_format_version()?;
@@ -672,9 +675,23 @@ impl GitRepo {
         }
     }
 
+    /// Suppress per-commit `write_commit_graph` calls (for batch operations like sync).
+    /// Call `write_commit_graph` explicitly once when done.
+    pub fn set_skip_commit_graph(&self, skip: bool) {
+        self.skip_commit_graph.set(skip);
+    }
+
     /// Write the commit-graph file for faster traversal (merge-base, log).
     /// Best-effort: silently ignored if `git` CLI unavailable.
-    fn write_commit_graph(&self) {
+    /// Skipped when `skip_commit_graph` flag is set (for batch operations).
+    pub fn write_commit_graph(&self) {
+        if self.skip_commit_graph.get() {
+            return;
+        }
+        self.write_commit_graph_unconditional();
+    }
+
+    fn write_commit_graph_unconditional(&self) {
         let _ = std::process::Command::new("git")
             .args(["commit-graph", "write", "--reachable"])
             .current_dir(&self.path)

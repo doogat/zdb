@@ -132,6 +132,9 @@ impl<'a> SyncManager<'a> {
         let sync_start = std::time::Instant::now();
         tracing::info!(remote, branch, "sync_start");
 
+        // Defer commit-graph writes until end of sync
+        self.repo.set_skip_commit_graph(true);
+
         // Fetch
         let phase_start = std::time::Instant::now();
         self.repo.fetch(remote, branch)?;
@@ -227,6 +230,10 @@ impl<'a> SyncManager<'a> {
         let phase_start = std::time::Instant::now();
         self.repo.push(remote, branch)?;
         tracing::info!(phase = "push", elapsed_ms = phase_start.elapsed().as_millis(), "sync_phase");
+
+        // Write commit-graph once (covers all commits made during sync)
+        self.repo.set_skip_commit_graph(false);
+        self.repo.write_commit_graph();
 
         // Reindex
         let phase_start = std::time::Instant::now();
