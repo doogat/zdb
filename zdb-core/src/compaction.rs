@@ -345,6 +345,8 @@ pub fn compact(repo: &GitRepo, sync_mgr: &SyncManager, opts: &CompactOptions) ->
         "compaction_result"
     );
 
+    crate::maintenance::maybe_auto_run(repo);
+
     Ok(CompactionReport {
         files_removed,
         crdt_docs_compacted,

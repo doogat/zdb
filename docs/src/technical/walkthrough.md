@@ -1626,6 +1626,52 @@ Recovery from a pre-compaction backup: `zdb bundle import <backup.bundle.tar>` o
 
 That threshold behavior matters for tests and smoke scripts: a plain `zdb compact` on a tiny repo is allowed to omit the backup line entirely because no compaction work ran. The smoke coverage that asserts `backup:` now uses `zdb compact --force`, while the non-forced path is covered separately by the dry-run and under-threshold tests.
 
+## 12a. Git Maintenance — `zdb-core/src/maintenance.rs`
+
+The maintenance module delegates git repository housekeeping (commit-graph updates, incremental repacks, loose object cleanup) to `git maintenance run --auto`. It complements compaction — compaction handles CRDT temp files, maintenance handles git-level storage optimization.
+
+### Probe and Fallback
+
+`probe_git_maintenance()` checks whether the installed `git` supports the `maintenance` subcommand (added in git 2.29). The result is cached per process in an `OnceLock<bool>`. If unavailable, all maintenance calls fall back to `git gc --auto`.
+
+### Public API
+
+```rust
+pub fn run(repo_path: &Path, tasks: Option<&[&str]>) -> Result<MaintenanceReport>;
+pub fn maybe_auto_run(repo: &GitRepo);
+```
+
+`run()` shells out to `git maintenance run --auto` (or `--task=<t>` for explicit task selection). Returns a `MaintenanceReport` with `success`, `duration_ms`, `fallback_used`, and `tasks_run`. Errors from git are logged but still returned — callers decide whether to propagate.
+
+`maybe_auto_run()` is the automatic trigger. It loads `RepoConfig`, checks `maintenance.auto_enabled`, and calls `run()` if enabled. All errors are caught and logged internally — the function never propagates failures to callers, so `compact()` and `sync()` can call it unconditionally.
+
+### Configuration
+
+Auto-maintenance is configured in `.zetteldb.toml`:
+
+```toml
+[maintenance]
+auto_enabled = false   # default: opt-in
+```
+
+The `MaintenanceConfig` struct uses `#[serde(default)]` so existing config files without a `[maintenance]` section load cleanly.
+
+### Integration Points
+
+- **Compaction** — `maybe_auto_run()` is called at the end of `compact()`, after git gc
+- **Sync** — `maybe_auto_run()` is called at the end of `SyncManager::sync()`, before the final timing log
+- **CLI** — `zdb maintenance run [--task <t>]` for explicit runs; `zdb maintenance auto on|off|status` to toggle
+- **Server** — `gitMaintenance(task: String)` GraphQL mutation via the actor
+- **FFI** — `ZettelDriver::run_maintenance()` returns success bool
+
+### Platform Behavior
+
+| Environment | Behavior |
+|---|---|
+| macOS/Linux with git >= 2.29 | `git maintenance run --auto` |
+| Older git | Falls back to `git gc --auto`, `fallback_used: true` |
+| No git binary (mobile/FFI) | `run()` returns `Err(Io(...))` |
+
 ## 13. CLI — `zdb-cli/src/main.rs`
 
 The `zdb` binary is a thin shell over `zdb-core`. Clap provides the command structure. Subcommands are divided into **stable** and **experimental** tiers — experimental commands show an `[experimental]` prefix in `--help` output. See the Stability Tiers section below for the full classification.

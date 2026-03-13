@@ -252,6 +252,8 @@ impl<'a> SyncManager<'a> {
         index.rebuild_if_stale(self.repo)?;
         tracing::info!(phase = "reindex", elapsed_ms = phase_start.elapsed().as_millis(), "sync_phase");
 
+        crate::maintenance::maybe_auto_run(self.repo);
+
         tracing::info!(total_ms = sync_start.elapsed().as_millis(), "sync_complete");
 
         Ok(report)
