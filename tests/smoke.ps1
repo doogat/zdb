@@ -240,6 +240,25 @@ if ($output -notmatch [regex]::Escape($customBackup)) { throw "compact --backup-
 if (-not (Test-Path $customBackup)) { throw "custom backup file not created" }
 pass "compact --backup-path"
 
+# 16c. maintenance
+$output = zdb maintenance run
+if ($output -notmatch "maintenance:") { throw "maintenance run missing output" }
+pass "maintenance run"
+
+$output = zdb maintenance auto status
+if ($output -notmatch "off") { throw "maintenance auto status should default to off" }
+pass "maintenance auto status (default off)"
+
+zdb maintenance auto on | Out-Null
+$output = zdb maintenance auto status
+if ($output -notmatch "on") { throw "maintenance auto status should be on" }
+pass "maintenance auto on"
+
+zdb maintenance auto off | Out-Null
+$output = zdb maintenance auto status
+if ($output -notmatch "off") { throw "maintenance auto status should be off" }
+pass "maintenance auto off"
+
 if ($SmokeProfile -eq "quick") {
     pass "quick profile complete"
     exit 0
@@ -429,6 +448,11 @@ if ($result -notmatch "gcSuccess") { throw "compact(backupPath) failed" }
 if ($result -notmatch "backupPath") { throw "compact(backupPath) missing backupPath" }
 if (-not (Test-Path $gqlBackup)) { throw "compact(backupPath) file not created" }
 pass "serve: compact(backupPath) mutation"
+
+# maintenance mutation
+$result = gql '{"query":"mutation { maintenance { success durationMs fallbackUsed tasksRun } }"}'
+if ($result -notmatch "success") { throw "maintenance mutation failed" }
+pass "serve: maintenance mutation"
 
 # sync mutation — no remote configured, expect error not panic
 $result = gql '{"query":"mutation { sync { direction commitsTransferred conflictsResolved resurrected } }"}'
