@@ -5,16 +5,23 @@
 
 ZettelDB is a hybrid Git-CRDT decentralized Zettelkasten database written in Rust. Git stores the source of truth — plain Markdown files — while a derived SQLite index provides fast full-text search and SQL queries. When two devices edit the same zettel offline, Automerge CRDTs resolve conflicts automatically at the zone level (frontmatter, body, references).
 
-The codebase is a Cargo workspace with four crates:
+The codebase is a Cargo workspace with four product crates plus one external e2e test package:
 
 ```bash
 cat Cargo.toml
 ```
 
-```rust
+```toml
 [workspace]
 members = ["zdb-core", "zdb-cli", "zdb-server", "zdb-uniffi-bindgen", "tests"]
+default-members = ["zdb-core", "zdb-cli", "zdb-server"]
 resolver = "2"
+```
+
+```toml
+[alias]
+"test-ci" = ["test", "--workspace", "--exclude", "zdb-e2e", "--exclude", "zdb-uniffi-bindgen", "--lib", "--bins"]
+"test-full" = ["test", "--workspace"]
 ```
 
 - **zdb-core** — the library crate with all domain logic (parser, git, CRDT, index, SQL, sync, compaction)
@@ -24,6 +31,8 @@ resolver = "2"
 - **tests** — e2e test harness (assert_cmd + reqwest)
 
 All public API surfaces live in zdb-core. The other crates are thin consumers.
+
+`default-members` keeps the everyday `cargo build` and `cargo test` loop focused on the library, CLI, and server crates. The external e2e harness (`zdb-e2e`) and the UniFFI bindgen helper are still available through `cargo test-full` / `cargo test --workspace`, but they no longer slow every inner-loop run. The `cargo test-ci` alias goes one step further for the cross-platform matrix: it runs only workspace library and binary targets, leaving the heavier core integration tests to a single Linux job.
 
 ## 1. Library Root — `zdb-core/src/lib.rs`
 
@@ -1507,121 +1516,21 @@ The sync manager orchestrates multi-device sync with a cascade merge strategy:
 sed -n '105,204p' zdb-core/src/sync_manager.rs
 ```
 
-```rust
-    /// Full sync cycle: fetch → merge → resolve → push → update state → reindex.
-    #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
-    pub fn sync(&mut self, remote: &str, branch: &str, index: &Index) -> Result<SyncReport> {
-        tracing::info!(remote, branch, "sync_start");
-        // Fetch
-        self.repo.fetch(remote, branch)?;
-        tracing::debug!(remote, branch, "fetch_complete");
+The sync flow (with per-phase timing instrumentation):
 
-        // Merge
-        let merge_result = self.repo.merge_remote(remote, branch)?;
-
-        let mut report = SyncReport {
-            direction: "bidirectional".into(),
-            commits_transferred: 0,
-            conflicts_resolved: 0,
-            resurrected: 0,
-        };
-
-        match merge_result {
-            MergeResult::AlreadyUpToDate => {
-                tracing::info!("merge_result: up-to-date");
-                report.direction = "up-to-date".into();
-            }
-            MergeResult::FastForward(_) => {
-                report.commits_transferred = 1;
-            }
-            MergeResult::Clean(oid) => {
-                report.commits_transferred = 1;
-                report.conflicts_resolved = self.validate_clean_merge_or_fallback(oid, index)?;
-            }
-            MergeResult::Conflicts(conflicts, theirs_oid) => {
-                let count = conflicts.len();
-                tracing::info!(count, "merge_result: conflicts");
-                // Separate delete-vs-edit from normal conflicts
-                let (delete_edit, normal): (Vec<_>, Vec<_>) = conflicts
-                    .into_iter()
-                    .partition(|c| c.ours.is_empty() || c.theirs.is_empty());
-
-                let mut resolved = Vec::new();
-
-                // Delete-vs-edit: edit wins, add resurrected marker
-                for conflict in &delete_edit {
-                    let surviving = if conflict.ours.is_empty() {
-                        &conflict.theirs
-                    } else {
-                        &conflict.ours
-                    };
-                    let content = add_resurrected_marker(surviving);
-                    resolved.push(crate::types::ResolvedFile {
-                        path: conflict.path.clone(),
-                        content,
-                    });
-                }
-                report.resurrected = delete_edit.len();
-                if report.resurrected > 0 {
-                    tracing::info!(count = report.resurrected, "delete_edit_resolved");
-                }
-
-                // Normal conflicts: cascade resolve
-                if !normal.is_empty() {
-                    let strategy = self.lookup_crdt_strategy_for_conflicts(&normal, index);
-                    resolved.extend(self.cascade_resolve(normal, strategy.as_deref()));
-                }
-
-                // Tick HLC for merge commit
-                let hlc = self.tick_hlc();
-                let merge_msg = crate::hlc::append_hlc_trailer(
-                    "resolve merge conflicts via CRDT",
-                    &hlc,
-                );
-
-                // Write resolved files and create merge commit with both parents
-                let files: Vec<(&str, &str)> = resolved
-                    .iter()
-                    .map(|r| (r.path.as_str(), r.content.as_str()))
-                    .collect();
-                self.repo.commit_merge(&files, &merge_msg, &theirs_oid)?;
-
-                report.conflicts_resolved = count;
-                report.commits_transferred = 1;
-            }
-        }
-
-        // Push
-        if report.direction != "up-to-date" {
-            self.repo.push(remote, branch)?;
-            tracing::debug!(remote, branch, "push_complete");
-        }
-
-        // Update sync state
-        self.update_sync_state()?;
-
-        // Push again to propagate node registry
-        self.repo.push(remote, branch)?;
-
-        // Reindex
-        index.rebuild(self.repo)?;
-
-        Ok(report)
-    }
-```
-
-The sync flow:
-
-1. **Fetch** from remote
-2. **Merge** — git's 3-way merge classifies the result
-3. **Handle conflicts**:
+1. **Defer commit-graph** — `set_skip_commit_graph(true)` to avoid per-commit `git commit-graph write` overhead
+2. **Fetch** from remote
+3. **Merge** — git's 3-way merge classifies the result
+4. **Handle conflicts**:
    - **Delete-vs-edit**: edit wins, add `resurrected: true` to frontmatter
    - **Normal conflicts**: run cascade resolve (CRDT → validate → LWW fallback)
-4. **Commit merge** with both parents + HLC trailer
-5. **Push** back to remote
-6. **Update sync state** (known_heads, last_sync timestamp)
-7. **Push again** to propagate node registry changes
-8. **Reindex** the local SQLite index
+   - **Commit merge** with both parents + HLC trailer
+5. **Update sync state** — `known_heads = [HEAD]`, `last_sync = now`, commit `.nodes/{uuid}.toml`
+6. **Push** — single push carries both merge result and node state
+7. **Write commit-graph** once (re-enable with `set_skip_commit_graph(false)`)
+8. **Incremental reindex** — `rebuild_if_stale()` diffs `old_head..new_head`, processes only changed files
+
+This ordering (update state before push, single push) halves network round-trips. The incremental reindex reduced sync from ~10s to ~120ms at 5K zettels (see [Performance](sync.md#performance)).
 
 ### Cascade Merge Strategy
 
@@ -2398,7 +2307,7 @@ ID1=$($ZDB create --title "First note" --tags "test,smoke" --body "Hello world")
 ID2=$($ZDB create --title "Links to first" --body "See [[$ID1]]")
 ```
 
-167 unit tests across 12 modules, plus a 382-line integration smoke test with 28 sections covering the full CLI (init, CRUD, delete, search, SQL DDL/DML, type install/suggest, node list/retire, compact --dry-run), server protocols (GraphQL CRUD + expanded operations, REST API CRUD with auth and filtering, PgWire SELECT with auth rejection), multi-node sync with conflict resolution, and air-gapped bundle sync (full export/import, delta export/import).
+167 unit tests across 12 modules, plus a smoke harness with two profiles. `SMOKE_PROFILE=quick` stops after the single-repo CLI/SQL/compact path and is meant for fast local and CI checks. The default `full` profile continues through server protocols (GraphQL, REST, PgWire, NoSQL), multi-node sync with conflict resolution, and air-gapped bundle sync.
 
 ### Property-Based Tests
 
@@ -2416,7 +2325,7 @@ Run with `cargo test -p zdb-core --test property_tests`. Override case count via
 
 One subtle failure mode showed up only at high case counts on shared CI runners: the Unicode round-trip properties originally built strings from `any::<char>()` and then filtered out YAML-hostile characters with a long deny-list. That worked functionally, but at 5K cases proptest could burn through its local reject budget before it found enough acceptable strings, aborting with `Too many local rejects` after spending hours in the test job. The generator now samples directly from a curated set of YAML-safe Unicode characters across multiple scripts and normalizes whitespace, so the Unicode properties still exercise non-ASCII serialization paths without reject storms.
 
-The local default case counts are intentionally tiny smoke budgets now. That keeps `cargo test` usable during development while still replaying any saved regressions. Two implementation details matter for runtime: the SQL/indexer property tests use `Index::open_in_memory()` instead of creating a fresh on-disk SQLite database for every case, and the default case counts are much lower for SQL/CRDT/indexer blocks than for parser-only blocks. CI then applies an explicit `PROPTEST_CASES=50` cap for a broader but still bounded cross-platform pass, while `PROPTEST_CASES=5000 cargo test -p zdb-core --test property_tests -- --nocapture` remains the manual soak command.
+The local default case counts are intentionally tiny smoke budgets now. That keeps `cargo test` usable during development while still replaying any saved regressions. Two implementation details matter for runtime: the SQL/indexer property tests use `Index::open_in_memory()` instead of creating a fresh on-disk SQLite database for every case, and the default case counts are much lower for SQL/CRDT/indexer blocks than for parser-only blocks. The workspace root now reinforces that split by making plain `cargo test` target only `zdb-core`, `zdb-cli`, and `zdb-server`; `cargo test-full` / `cargo test --workspace` restores the full workspace including `zdb-e2e`. CI goes one step further by keeping `cargo test-ci` to unit/bin targets in the OS matrix and running `property_tests` / `sync_test` once on Linux, while `PROPTEST_CASES=5000 cargo test -p zdb-core --test property_tests -- --nocapture` remains the manual soak command.
 
 ## Data Flow Summary
 
@@ -2453,10 +2362,13 @@ CLI/GraphQL → sql_engine::execute(sql) → sqlparser AST → dispatch:
 
 ```
 CLI → sync_manager::sync:
-  git_ops::fetch → git_ops::merge_remote → MergeResult::Conflicts?
+  set_skip_commit_graph(true)
+  → git_ops::fetch → git_ops::merge_remote → MergeResult::Conflicts?
     → crdt_resolver::resolve_conflicts (per-zone Automerge)
     → validate → fallback to LWW if invalid
-    → git_ops::commit_merge → git_ops::push → indexer::rebuild
+    → git_ops::commit_merge
+  → update_sync_state → git_ops::push (single)
+  → write_commit_graph (once) → indexer::rebuild_if_stale (incremental)
 ```
 
 **Incremental reindex:**
@@ -3006,10 +2918,10 @@ sed -n '/let broken = index.broken_backlinks/,/^                }/p' zdb-cli/src
 
 ## 20. CI Test Workflow and Cross-Platform Path Tests
 
-The GitHub Actions test job now restores the minimum artifact set needed for the expensive integration layers without going back to a full workspace build. Instead of relying on `cargo clippy --all-targets` to leave behind a runnable CLI, the workflow explicitly builds only `zdb-cli` and then reuses that binary in both the e2e suite and smoke scripts. The smoke scripts themselves honor `ZDB_BIN`, which lets CI skip a redundant rebuild and point at an absolute path even after the script changes into a temporary working directory.
+The GitHub Actions test setup is now explicitly tiered. The pull-request workflow keeps the cross-platform matrix on the bounded path: build only `zdb-cli`, run `cargo test-ci`, and execute the `quick` smoke profile against the prebuilt binary. Linux then carries the heavier `property_tests` and `sync_test` coverage once. A separate manually triggered `Full Test` workflow restores the old breadth when you want the whole workspace (`cargo test-full`) and the full smoke script across Linux, macOS, and Windows.
 
 ```bash
-sed -n '36,52p' .github/workflows/test.yml
+sed -n '36,56p' .github/workflows/test.yml
 ```
 
 ```yaml
@@ -3019,40 +2931,51 @@ sed -n '36,52p' .github/workflows/test.yml
       - name: Build CLI binary
         run: cargo build -p zdb-cli --bin zdb
 
-      - name: Test
-        run: cargo test --workspace
+      - name: Fast cargo test tier
+        run: cargo test-ci
 
-      - name: Smoke test (Unix)
+      - name: Quick smoke test (Unix)
         if: runner.os != 'Windows'
         env:
+          SMOKE_PROFILE: quick
           ZDB_BIN: ${{ github.workspace }}/target/debug/zdb
         run: ./tests/smoke.sh
 
-      - name: Smoke test (Windows)
+      - name: Quick smoke test (Windows)
         if: runner.os == 'Windows'
 ```
 
 ```bash
-sed -n '4,14p' tests/smoke.sh
+sed -n '1,22p' tests/smoke.sh
 ```
 
 ```bash
-# Build and lint (skip if ZDB_BIN is set, e.g. in CI where build already ran)
+SMOKE_PROFILE="${SMOKE_PROFILE:-full}"
+case "$SMOKE_PROFILE" in
+  quick|full) ;;
+  *)
+    echo "unknown SMOKE_PROFILE: $SMOKE_PROFILE (expected quick or full)" >&2
+    exit 2
+    ;;
+esac
+
+PREP_LABEL="prebuilt binary"
 if [ -z "${ZDB_BIN:-}" ]; then
-  cargo clippy --workspace --quiet
   cargo build --quiet
-  cargo bench --no-run --quiet 2>/dev/null
+  if [ "$SMOKE_PROFILE" = "full" ]; then
+    cargo clippy --workspace --quiet
+    cargo bench --no-run --quiet 2>/dev/null
+    PREP_LABEL="clippy + bench compile"
+  else
+    PREP_LABEL="build"
+  fi
 fi
 ZDB="${ZDB_BIN:-$(cargo metadata --format-version=1 --no-deps | sed -n 's/.*"target_directory":"\([^"]*\)".*/\1/p')/debug/zdb}"
-
-# Work in temp directories, clean up on exit
-TMPDIR="$(mktemp -d)"
-REMOTE_DIR="$(mktemp -d)"
 ```
 
 The important detail is the absolute `ZDB_BIN`. `tests/smoke.sh` changes into a temporary directory before invoking the CLI, so a relative path like `target/debug/zdb` would work only from the repository root and then break as soon as the smoke script moves into its sandbox. Passing the workspace-absolute path preserves the single-build optimization and keeps the smoke scripts portable across Linux, macOS, and Windows.
 
-The workflow now adds two more guardrails around that build/test pipeline. First, `cargo clippy --workspace --all-targets` only runs on Linux, which drops several redundant minutes from the Windows and macOS legs without reducing lint coverage because the lint set is platform-agnostic for this workspace. Second, the `Test` step exports `PROPTEST_CASES=50`, which prevents the cross-platform matrix from accidentally running the full exhaustive property budgets that are meant for manual soak testing. The result is that CI still exercises the same parser/SQL/CRDT/indexer properties everywhere, but with a bounded workload and without the Unicode generator reject failure that previously consumed the whole job.
+The new split adds three runtime guardrails. First, the root workspace default excludes `zdb-e2e` and `zdb-uniffi-bindgen` from plain `cargo test`, so pre-commit runs no longer drag the external harness into every loop. Second, pull-request CI no longer repeats the heavy core integration tests on every OS; the matrix stays on unit/bin coverage plus `SMOKE_PROFILE=quick`, and Linux runs `property_tests` and `sync_test` once. Third, the manual `Full Test` workflow keeps the exhaustive path one click away when you need the old breadth. The temp-repo helpers also write `commit.gpgsign = false` into their local `.git/config`, which prevents shell-based `git merge` / `git commit` steps from inheriting a developer's global GPG-signing policy and breaking otherwise-isolated tests.
 
 ```bash
 sed -n '892,909p' zdb-core/src/git_ops.rs
@@ -3162,9 +3085,10 @@ grep -E '^(#\[test\]|#\[ignore|fn [a-z])' zdb-core/tests/sync_thresholds.rs
 fn zettel_content(i: usize) -> String {
 fn zettel_path(i: usize) -> String {
 #[test]
-#[ignore = "NFR-03 not yet met: sync ~12.6s vs 2s target"]
 fn nfr03_sync_under_2s_at_5k() {
 ```
+
+NFR-03 passes at ~120ms (threshold: 2000ms) after sync optimizations (incremental reindex, single push, deferred commit-graph).
 
 ```bash
 sed -n '/^fn median_ms/,/^}/p' zdb-core/tests/query_thresholds.rs
