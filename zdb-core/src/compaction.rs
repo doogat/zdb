@@ -702,7 +702,7 @@ mod tests {
         let mgr = SyncManager::open(&repo).unwrap();
 
         let result = backup_before_compact(&repo, &mgr, None).unwrap();
-        assert!(result.starts_with(&repo.path.join(".zdb/backups")));
+        assert!(result.starts_with(repo.path.join(".zdb/backups")));
         assert!(result.to_string_lossy().contains("pre-compact-"));
         assert!(result.to_string_lossy().ends_with(".bundle.tar"));
         assert!(result.exists());
@@ -737,11 +737,14 @@ mod tests {
 
         let (bytes_before, files_before) = crdt_temp_stats(&repo);
 
-        // Point to an impossible path
+        // Use an existing file as the would-be parent directory so create_dir_all fails
+        // consistently across Unix and Windows.
+        let invalid_parent = repo.path.join("not-a-directory");
+        std::fs::write(&invalid_parent, "x").unwrap();
         let opts = CompactOptions {
             force: true,
             skip_backup: false,
-            backup_path: Some(PathBuf::from("/nonexistent/dir/deep/backup.bundle.tar")),
+            backup_path: Some(invalid_parent.join("backup.bundle.tar")),
         };
         let result = compact(&repo, &mgr, &opts);
         assert!(result.is_err());

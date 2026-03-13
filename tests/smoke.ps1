@@ -192,7 +192,7 @@ $output = zdb register-node "smoke-test-laptop"
 if ($output -notmatch "registered node") { throw "register-node failed" }
 $output = zdb status
 if ($output -notmatch "registered nodes: 1") { throw "status missing node" }
-$output = zdb compact
+$output = zdb compact --force
 if ($output -notmatch "backup:") { throw "compact missing backup path" }
 if ($output -notmatch "gc: ok") { throw "compact failed" }
 if ($output -notmatch "crdt temp:") { throw "compact missing crdt temp stats" }

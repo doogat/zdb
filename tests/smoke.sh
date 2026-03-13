@@ -130,7 +130,7 @@ pass "type suggest"
 # 14. register node + compact
 $ZDB register-node "smoke-test-laptop" | grep -q "registered node"
 $ZDB status | grep -q "registered nodes: 1"
-COMPACT_OUT=$($ZDB compact)
+COMPACT_OUT=$($ZDB compact --force)
 echo "$COMPACT_OUT" | grep -q "backup:"
 echo "$COMPACT_OUT" | grep -q "gc: ok"
 echo "$COMPACT_OUT" | grep -q "crdt temp:"

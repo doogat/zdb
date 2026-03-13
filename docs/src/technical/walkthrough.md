@@ -1715,6 +1715,8 @@ When a stale node returns after compaction has removed CRDT history, the conflic
 
 Recovery from a pre-compaction backup: `zdb bundle import <backup.bundle.tar>` on a fresh `zdb init` restores the full repository state as of the backup moment. See [Bundle](bundle.md) for format details.
 
+That threshold behavior matters for tests and smoke scripts: a plain `zdb compact` on a tiny repo is allowed to omit the backup line entirely because no compaction work ran. The smoke coverage that asserts `backup:` now uses `zdb compact --force`, while the non-forced path is covered separately by the dry-run and under-threshold tests.
+
 ## 13. CLI — `zdb-cli/src/main.rs`
 
 The `zdb` binary is a thin shell over `zdb-core`. Clap provides the command structure. Subcommands are divided into **stable** and **experimental** tiers — experimental commands show an `[experimental]` prefix in `--help` output. See the Stability Tiers section below for the full classification.
