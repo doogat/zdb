@@ -218,22 +218,15 @@ impl<'a> SyncManager<'a> {
 
         tracing::info!(phase = "merge", elapsed_ms = phase_start.elapsed().as_millis(), "sync_phase");
 
-        // Push
-        let phase_start = std::time::Instant::now();
-        if report.direction != "up-to-date" {
-            self.repo.push(remote, branch)?;
-        }
-        tracing::info!(phase = "push1", elapsed_ms = phase_start.elapsed().as_millis(), "sync_phase");
-
-        // Update sync state
+        // Update sync state (before push so node registry travels with content)
         let phase_start = std::time::Instant::now();
         self.update_sync_state()?;
         tracing::info!(phase = "update_sync_state", elapsed_ms = phase_start.elapsed().as_millis(), "sync_phase");
 
-        // Push again to propagate node registry
+        // Push (single push carries both merge result and node state)
         let phase_start = std::time::Instant::now();
         self.repo.push(remote, branch)?;
-        tracing::info!(phase = "push2", elapsed_ms = phase_start.elapsed().as_millis(), "sync_phase");
+        tracing::info!(phase = "push", elapsed_ms = phase_start.elapsed().as_millis(), "sync_phase");
 
         // Reindex
         let phase_start = std::time::Instant::now();
