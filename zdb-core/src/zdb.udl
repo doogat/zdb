@@ -76,6 +76,9 @@ interface ZettelDriver {
     void compact();
 
     [Throws=ZdbError]
+    boolean run_maintenance();
+
+    [Throws=ZdbError]
     sequence<string> list_zettels();
 
     [Throws=ZdbError]
