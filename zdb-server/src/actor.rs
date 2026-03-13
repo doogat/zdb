@@ -8,7 +8,8 @@ use zdb_core::indexer::Index;
 use zdb_core::parser;
 use zdb_core::sql_engine::{schema_from_parsed, SqlEngine, SqlResult};
 use zdb_core::types::{
-    CompactionReport, PaginatedSearchResult, ParsedZettel, SyncReport, TableSchema, ZettelMeta,
+    CompactionReport, MaintenanceReport, PaginatedSearchResult, ParsedZettel, SyncReport,
+    TableSchema, ZettelMeta,
 };
 
 use crate::events::{EventBus, EventKind, ZettelEvent};
@@ -87,10 +88,13 @@ pub enum ActorCommand {
     ListAttachments {
         zettel_id: String,
     },
-    RunMaintenance {
+    Compact {
         force: bool,
         no_backup: bool,
         backup_path: Option<String>,
+    },
+    GitMaintenance {
+        task: Option<String>,
     },
     Sync {
         remote: String,
@@ -125,6 +129,7 @@ pub enum ActorReply {
     Attachment(ActorResult<zdb_core::types::AttachmentInfo>),
     AttachmentList(ActorResult<Vec<zdb_core::types::AttachmentInfo>>),
     Maintenance(ActorResult<CompactionReport>),
+    GitMaintenance(ActorResult<MaintenanceReport>),
     SyncResult(ActorResult<SyncReport>),
     NoSqlZettel(Box<ActorResult<Option<ParsedZettel>>>),
     NoSqlIds(ActorResult<Vec<String>>),
@@ -386,9 +391,16 @@ impl ActorHandle {
         }
     }
 
-    pub async fn run_maintenance(&self, force: bool, no_backup: bool, backup_path: Option<String>) -> ActorResult<CompactionReport> {
-        match self.send(ActorCommand::RunMaintenance { force, no_backup, backup_path }).await {
+    pub async fn compact(&self, force: bool, no_backup: bool, backup_path: Option<String>) -> ActorResult<CompactionReport> {
+        match self.send(ActorCommand::Compact { force, no_backup, backup_path }).await {
             ActorReply::Maintenance(r) => r,
+            _ => Err(ZettelError::Validation("unexpected reply".into())),
+        }
+    }
+
+    pub async fn run_maintenance(&self, task: Option<String>) -> ActorResult<MaintenanceReport> {
+        match self.send(ActorCommand::GitMaintenance { task }).await {
+            ActorReply::GitMaintenance(r) => r,
             _ => Err(ZettelError::Validation("unexpected reply".into())),
         }
     }
@@ -713,8 +725,19 @@ fn handle_command_shared(
             let id = zdb_core::types::ZettelId(zettel_id);
             ActorReply::AttachmentList(zdb_core::attachments::list_attachments(repo, &id))
         }
-        ActorCommand::RunMaintenance { force, no_backup, backup_path } => {
-            ActorReply::Maintenance(run_maintenance(repo, index, repo_path, force, no_backup, backup_path))
+        ActorCommand::Compact { force, no_backup, backup_path } => {
+            ActorReply::Maintenance(handle_compact(repo, index, repo_path, force, no_backup, backup_path))
+        }
+        ActorCommand::GitMaintenance { task } => {
+            let tasks_vec: Vec<&str>;
+            let tasks_opt = match &task {
+                Some(t) => {
+                    tasks_vec = vec![t.as_str()];
+                    Some(tasks_vec.as_slice())
+                }
+                None => None,
+            };
+            ActorReply::GitMaintenance(zdb_core::maintenance::run(&repo.path, tasks_opt))
         }
         ActorCommand::Sync { remote, branch } => {
             ActorReply::SyncResult(run_sync(repo, index, &remote, &branch))
@@ -1015,7 +1038,7 @@ fn unique_id(repo_path: &std::path::Path) -> zdb_core::types::ZettelId {
 }
 
 /// Run compaction + stale node detection.
-fn run_maintenance(
+fn handle_compact(
     repo: &GitRepo,
     index: &Index,
     _repo_path: &std::path::Path,

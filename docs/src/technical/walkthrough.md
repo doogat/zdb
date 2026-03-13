@@ -1661,7 +1661,7 @@ The `MaintenanceConfig` struct uses `#[serde(default)]` so existing config files
 - **Compaction** — `maybe_auto_run()` is called at the end of `compact()`, after git gc
 - **Sync** — `maybe_auto_run()` is called at the end of `SyncManager::sync()`, before the final timing log
 - **CLI** — `zdb maintenance run [--task <t>]` for explicit runs; `zdb maintenance auto on|off|status` to toggle
-- **Server** — `gitMaintenance(task: String)` GraphQL mutation via the actor
+- **Server** — `maintenance(task: String)` GraphQL mutation via the actor
 - **FFI** — `ZettelDriver::run_maintenance()` returns success bool
 
 ### Platform Behavior

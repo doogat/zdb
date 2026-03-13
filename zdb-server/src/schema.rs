@@ -1189,7 +1189,7 @@ pub fn build_schema(
                         .get("backupPath")
                         .and_then(|v| v.string().ok())
                         .map(|s| s.to_string());
-                    let report = a.run_maintenance(force, no_backup, backup_path).await.map_err(to_server_error)?;
+                    let report = a.compact(force, no_backup, backup_path).await.map_err(to_server_error)?;
                     let mut obj = IndexMap::new();
                     obj.insert(
                         Name::new("filesRemoved"),
@@ -1236,6 +1236,68 @@ pub fn build_schema(
             .argument(InputValue::new("force", TypeRef::named(TypeRef::BOOLEAN)))
             .argument(InputValue::new("noBackup", TypeRef::named(TypeRef::BOOLEAN)))
             .argument(InputValue::new("backupPath", TypeRef::named(TypeRef::STRING))),
+        );
+    }
+
+    // -- GitMaintenanceResult output type --
+    let git_maintenance_result_type = Object::new("GitMaintenanceResult")
+        .field(simple_field("success", TypeRef::named_nn(TypeRef::BOOLEAN)))
+        .field(simple_field(
+            "durationMs",
+            TypeRef::named_nn(TypeRef::INT),
+        ))
+        .field(simple_field(
+            "fallbackUsed",
+            TypeRef::named_nn(TypeRef::BOOLEAN),
+        ))
+        .field(Field::new(
+            "tasksRun",
+            TypeRef::named_nn_list_nn(TypeRef::STRING),
+            |ctx| {
+                FieldFuture::new(async move {
+                    let obj = ctx.parent_value.try_downcast_ref::<GqlValue>()?;
+                    Ok(obj_field(obj, "tasksRun"))
+                })
+            },
+        ));
+
+    // maintenance mutation
+    {
+        mutation = mutation.field(
+            Field::new(
+                "maintenance",
+                TypeRef::named_nn("GitMaintenanceResult"),
+                |ctx| {
+                    FieldFuture::new(async move {
+                        let a = ctx.data::<ActorHandle>()?;
+                        let task = ctx
+                            .args
+                            .get("task")
+                            .and_then(|v| v.string().ok())
+                            .map(|s| s.to_string());
+                        let report =
+                            a.run_maintenance(task).await.map_err(to_server_error)?;
+                        let tasks_run: Vec<GqlValue> = report
+                            .tasks_run
+                            .iter()
+                            .map(|t| GqlValue::from(t.as_str()))
+                            .collect();
+                        let mut obj = IndexMap::new();
+                        obj.insert(Name::new("success"), GqlValue::from(report.success));
+                        obj.insert(
+                            Name::new("durationMs"),
+                            GqlValue::from(report.duration_ms as i64),
+                        );
+                        obj.insert(
+                            Name::new("fallbackUsed"),
+                            GqlValue::from(report.fallback_used),
+                        );
+                        obj.insert(Name::new("tasksRun"), GqlValue::List(tasks_run));
+                        Ok(Some(FieldValue::owned_any(GqlValue::Object(obj))))
+                    })
+                },
+            )
+            .argument(InputValue::new("task", TypeRef::named(TypeRef::STRING))),
         );
     }
 
@@ -1456,6 +1518,7 @@ pub fn build_schema(
     .register(change_event_type)
     .register(sync_result_type)
     .register(compact_result_type)
+    .register(git_maintenance_result_type)
     // Shared filter/sort types
     .register(crate::filter::string_filter())
     .register(crate::filter::int_filter())

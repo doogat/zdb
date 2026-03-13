@@ -182,6 +182,22 @@ echo "$BKPATH_OUT" | grep -q "$CUSTOM_BACKUP"
 [ -f "$CUSTOM_BACKUP" ]
 pass "compact --backup-path"
 
+# 16c. maintenance
+$ZDB maintenance run | grep -q "maintenance:"
+pass "maintenance run"
+
+MAINT_STATUS=$($ZDB maintenance auto status)
+echo "$MAINT_STATUS" | grep -q "off"
+pass "maintenance auto status (default off)"
+
+$ZDB maintenance auto on | grep -q "enabled"
+$ZDB maintenance auto status | grep -q "on"
+pass "maintenance auto on"
+
+$ZDB maintenance auto off | grep -q "disabled"
+$ZDB maintenance auto status | grep -q "off"
+pass "maintenance auto off"
+
 if [ "$SMOKE_PROFILE" = "quick" ]; then
   pass "quick profile complete"
   exit 0
@@ -349,6 +365,11 @@ echo "$RESULT" | grep -q '"gcSuccess"'
 echo "$RESULT" | grep -q '"backupPath"'
 [ -f "$GQL_BACKUP" ]
 pass "serve: compact(backupPath) mutation"
+
+# maintenance mutation
+RESULT=$(gql '{"query":"mutation { maintenance { success durationMs fallbackUsed tasksRun } }"}')
+echo "$RESULT" | grep -q '"success"'
+pass "serve: maintenance mutation"
 
 # sync mutation — no remote configured for this repo, expect error not panic
 RESULT=$(gql '{"query":"mutation { sync { direction commitsTransferred conflictsResolved resurrected } }"}')
