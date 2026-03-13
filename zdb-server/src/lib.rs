@@ -46,8 +46,13 @@ pub async fn run(
 
     // Actor
     let event_bus = EventBus::new();
-    let actor = ActorHandle::spawn(repo_path, event_bus)
+    let actor = ActorHandle::spawn(repo_path.clone(), event_bus)
         .map_err(|e| std::io::Error::other(e.to_string()))?;
+
+    // Read pool for concurrent read-only queries
+    let read_pool = read_pool::ReadPool::new(repo_path, cfg.read_pool_size)
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    eprintln!("read pool: {} slots", cfg.read_pool_size);
 
     // Fetch type schemas for dynamic schema generation
     let type_schemas = actor.get_type_schemas().await.unwrap_or_default();
@@ -113,12 +118,14 @@ pub async fn run(
     let pg_actor = rest_actor.clone();
     let pg_token = token.clone();
     let pg_reloader = reloader.clone();
+    let pg_read_pool = read_pool.clone();
 
     // Merge routers — shared extensions available to all routes
     let app = auth_routes
         .merge(ws_routes)
         .layer(Extension(AuthToken(token)))
         .layer(Extension(rest_actor))
+        .layer(Extension(read_pool))
         .layer(Extension(shared_schema))
         .layer(axum::middleware::map_response(|mut res: axum::response::Response| async {
             res.headers_mut().insert(
@@ -134,7 +141,7 @@ pub async fn run(
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-    let pg = pgwire::start(pg_actor, pg_token, pg_reloader, &cfg.bind, cfg.pg_port);
+    let pg = pgwire::start(pg_actor, pg_read_pool, pg_token, pg_reloader, &cfg.bind, cfg.pg_port);
 
     tokio::select! {
         r = axum::serve(listener, app) => r?,

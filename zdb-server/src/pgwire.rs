@@ -185,6 +185,7 @@ impl PgWireHandlerFactory for ZdbPgHandlers {
 
 pub async fn start(
     actor: ActorHandle,
+    _read_pool: crate::read_pool::ReadPool,
     token: String,
     reloader: Arc<SchemaReloader>,
     bind: &str,

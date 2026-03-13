@@ -9,6 +9,7 @@ pub struct ServerConfig {
     pub token_file: PathBuf,
     pub maintenance_enabled: bool,
     pub maintenance_interval_secs: u64,
+    pub read_pool_size: usize,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -29,6 +30,7 @@ struct ServerSection {
     pg_port: Option<u16>,
     bind: Option<String>,
     token_file: Option<String>,
+    read_pool_size: Option<usize>,
 }
 
 impl ServerConfig {
@@ -70,6 +72,12 @@ impl ServerConfig {
             .unwrap_or(3600)
             .max(60);
 
+        let read_pool_size = file_cfg
+            .server
+            .as_ref()
+            .and_then(|s| s.read_pool_size)
+            .unwrap_or_else(crate::read_pool::ReadPool::default_pool_size);
+
         Self {
             port,
             pg_port,
@@ -77,6 +85,7 @@ impl ServerConfig {
             token_file,
             maintenance_enabled,
             maintenance_interval_secs,
+            read_pool_size,
         }
     }
 
