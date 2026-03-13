@@ -752,13 +752,13 @@ fn handle_command_shared(
     }
 }
 
-fn get_zettel(repo: &GitRepo, index: &Index, id: &str) -> ActorResult<ParsedZettel> {
+pub(crate) fn get_zettel(repo: &GitRepo, index: &Index, id: &str) -> ActorResult<ParsedZettel> {
     let path = index.resolve_path(id)?;
     let content = repo.read_file(&path)?;
     parser::parse(&content, &path)
 }
 
-fn list_zettels(
+pub(crate) fn list_zettels(
     repo: &GitRepo,
     index: &Index,
     zettel_type: Option<String>,
@@ -833,7 +833,7 @@ fn build_filtered_sql(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn filtered_list(
+pub(crate) fn filtered_list(
     repo: &GitRepo,
     index: &Index,
     table_name: &str,
@@ -972,7 +972,7 @@ fn delete_zettel(repo: &GitRepo, index: &Index, id: &str) -> ActorResult<()> {
     Ok(())
 }
 
-fn get_type_schemas(repo: &GitRepo, index: &Index) -> ActorResult<Vec<TableSchema>> {
+pub(crate) fn get_type_schemas(repo: &GitRepo, index: &Index) -> ActorResult<Vec<TableSchema>> {
     // Find all _typedef zettels
     let rows = index.query_raw("SELECT path FROM zettels WHERE type = '_typedef'")?;
 
@@ -994,7 +994,7 @@ fn get_type_schemas(repo: &GitRepo, index: &Index) -> ActorResult<Vec<TableSchem
     Ok(schemas)
 }
 
-fn count_zettels(
+pub(crate) fn count_zettels(
     index: &Index,
     zettel_type: Option<String>,
     tag: Option<String>,

@@ -7,6 +7,7 @@ pub mod filter;
 pub mod maintenance;
 pub mod nosql_api;
 pub mod pgwire;
+pub mod read_pool;
 pub mod reload;
 pub mod rest;
 pub mod schema;
