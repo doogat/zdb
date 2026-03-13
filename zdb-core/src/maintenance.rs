@@ -25,30 +25,30 @@ pub fn run(repo_path: &Path, tasks: Option<&[&str]>) -> Result<MaintenanceReport
     let has_maintenance = probe_git_maintenance();
 
     let (output, fallback_used, tasks_run) = if has_maintenance {
-        let mut args = vec!["maintenance", "run"];
-        let task_args: Vec<String>;
+        let mut args = vec!["maintenance".to_string(), "run".to_string()];
+        let task_names: Vec<String>;
         if let Some(task_list) = tasks {
-            task_args = task_list.iter().map(|t| format!("--task={t}")).collect();
-            for arg in &task_args {
-                args.push(arg);
+            for t in task_list {
+                args.push(format!("--task={t}"));
             }
+            task_names = task_list.iter().map(|t| t.to_string()).collect();
         } else {
-            args.push("--auto");
+            args.push("--auto".to_string());
+            task_names = vec!["auto".to_string()];
         }
-        let label: Vec<String> = args[2..].iter().map(|s| s.to_string()).collect();
         let out = std::process::Command::new("git")
             .args(&args)
             .current_dir(repo_path)
             .output()
             .map_err(ZettelError::Io)?;
-        (out, false, label)
+        (out, false, task_names)
     } else {
         let out = std::process::Command::new("git")
             .args(["gc", "--auto"])
             .current_dir(repo_path)
             .output()
             .map_err(ZettelError::Io)?;
-        (out, true, vec!["gc --auto".to_string()])
+        (out, true, vec!["gc-auto".to_string()])
     };
 
     let success = output.status.success();
