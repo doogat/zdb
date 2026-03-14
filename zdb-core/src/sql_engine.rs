@@ -576,10 +576,7 @@ impl<'a> SqlEngine<'a> {
             self.insert_materialized_row(&schema, &id.0, &col_values)?;
 
             if let Some(ref mut buf) = self.txn {
-                buf.writes.push(PendingWrite {
-                    path,
-                    content,
-                });
+                buf.writes.push(PendingWrite { path, content });
             } else {
                 files.push((path, content));
             }
@@ -589,8 +586,10 @@ impl<'a> SqlEngine<'a> {
 
         // Commit all files in a single git commit (when not in transaction)
         if self.txn.is_none() && !files.is_empty() {
-            let file_refs: Vec<(&str, &str)> =
-                files.iter().map(|(p, c)| (p.as_str(), c.as_str())).collect();
+            let file_refs: Vec<(&str, &str)> = files
+                .iter()
+                .map(|(p, c)| (p.as_str(), c.as_str()))
+                .collect();
             self.repo.commit_files(
                 &file_refs,
                 &format!("insert {} row(s) into {table_name}", created_ids.len()),
@@ -1843,7 +1842,10 @@ mod tests {
         // All IDs are distinct 14-digit timestamps
         for id in &ids {
             assert_eq!(id.len(), 14, "ID should be 14 digits: {id}");
-            assert!(id.chars().all(|c| c.is_ascii_digit()), "ID should be numeric: {id}");
+            assert!(
+                id.chars().all(|c| c.is_ascii_digit()),
+                "ID should be numeric: {id}"
+            );
         }
         let unique: std::collections::HashSet<&&str> = ids.iter().collect();
         assert_eq!(unique.len(), 3, "all IDs should be unique");
@@ -1872,9 +1874,7 @@ mod tests {
         let (_dir, repo, index) = setup();
         let mut engine = SqlEngine::new(&index, &repo);
 
-        engine
-            .execute("CREATE TABLE things (label TEXT)")
-            .unwrap();
+        engine.execute("CREATE TABLE things (label TEXT)").unwrap();
 
         let head_before = repo.head_oid().unwrap();
 
@@ -3012,11 +3012,7 @@ mod tests {
     #[test]
     fn delete_from_hyphenated_table() {
         let (_dir, repo, index) = setup();
-        engine_exec_ok(
-            &repo,
-            &index,
-            "CREATE TABLE \"my-items\" (name TEXT)",
-        );
+        engine_exec_ok(&repo, &index, "CREATE TABLE \"my-items\" (name TEXT)");
         let id = engine_exec_id(
             &repo,
             &index,
@@ -3035,11 +3031,7 @@ mod tests {
     #[test]
     fn references_to_hyphenated_table() {
         let (_dir, repo, index) = setup();
-        engine_exec_ok(
-            &repo,
-            &index,
-            "CREATE TABLE \"my-people\" (name TEXT)",
-        );
+        engine_exec_ok(&repo, &index, "CREATE TABLE \"my-people\" (name TEXT)");
         engine_exec_ok(
             &repo,
             &index,

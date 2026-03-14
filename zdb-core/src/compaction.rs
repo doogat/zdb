@@ -278,7 +278,11 @@ pub fn run_gc(repo_path: &Path) -> Result<bool> {
 
 /// Full compaction pipeline: threshold check → backup → shared head → cleanup → crdt doc compact → gc.
 #[cfg_attr(feature = "profiling", tracing::instrument(skip_all))]
-pub fn compact(repo: &GitRepo, sync_mgr: &SyncManager, opts: &CompactOptions) -> Result<CompactionReport> {
+pub fn compact(
+    repo: &GitRepo,
+    sync_mgr: &SyncManager,
+    opts: &CompactOptions,
+) -> Result<CompactionReport> {
     // Threshold check: skip if under threshold (unless forced)
     if !opts.force {
         let config = repo.load_config()?;
@@ -533,7 +537,15 @@ mod tests {
         let mgr = SyncManager::open(&repo).unwrap();
 
         // No CRDT files → under threshold → should skip but still report actual stats
-        let report = compact(&repo, &mgr, &CompactOptions { skip_backup: true, ..Default::default() }).unwrap();
+        let report = compact(
+            &repo,
+            &mgr,
+            &CompactOptions {
+                skip_backup: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert_eq!(report.files_removed, 0);
         assert_eq!(report.crdt_docs_compacted, 0);
         assert!(report.gc_success);
@@ -551,7 +563,16 @@ mod tests {
         crate::sync_manager::register_node(&repo, "Test").unwrap();
         let mgr = SyncManager::open(&repo).unwrap();
 
-        let report = compact(&repo, &mgr, &CompactOptions { force: true, skip_backup: true, ..Default::default() }).unwrap();
+        let report = compact(
+            &repo,
+            &mgr,
+            &CompactOptions {
+                force: true,
+                skip_backup: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(report.gc_success);
         // Repo bytes should be measured (git dir exists)
         assert!(report.repo_bytes_before > 0 || report.repo_bytes_after > 0);
@@ -563,9 +584,20 @@ mod tests {
         crate::sync_manager::register_node(&repo, "Test").unwrap();
         let mgr = SyncManager::open(&repo).unwrap();
 
-        let report = compact(&repo, &mgr, &CompactOptions { force: true, skip_backup: false, ..Default::default() }).unwrap();
+        let report = compact(
+            &repo,
+            &mgr,
+            &CompactOptions {
+                force: true,
+                skip_backup: false,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(report.gc_success);
-        let bp = report.backup_path.expect("backup_path should be Some when skip_backup is false");
+        let bp = report
+            .backup_path
+            .expect("backup_path should be Some when skip_backup is false");
         assert!(bp.exists(), "backup file should exist at {}", bp.display());
         assert!(bp.to_string_lossy().contains("pre-compact-"));
     }
@@ -597,7 +629,16 @@ mod tests {
         crate::sync_manager::register_node(&repo, "Test").unwrap();
         let mgr = SyncManager::open(&repo).unwrap();
 
-        let report = compact(&repo, &mgr, &CompactOptions { force: true, skip_backup: true, ..Default::default() }).unwrap();
+        let report = compact(
+            &repo,
+            &mgr,
+            &CompactOptions {
+                force: true,
+                skip_backup: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         assert!(report.gc_success);
         assert!(report.crdt_temp_bytes_before > 0);
         assert!(report.crdt_temp_files_before >= 2);
@@ -716,7 +757,11 @@ mod tests {
         crate::sync_manager::register_node(&repo, "Test").unwrap();
         let mgr = SyncManager::open(&repo).unwrap();
 
-        let opts = CompactOptions { force: true, skip_backup: true, ..Default::default() };
+        let opts = CompactOptions {
+            force: true,
+            skip_backup: true,
+            ..Default::default()
+        };
         let report = compact(&repo, &mgr, &opts).unwrap();
         assert!(report.backup_path.is_none());
     }
@@ -765,7 +810,10 @@ mod tests {
         let mgr = SyncManager::open(&repo).unwrap();
 
         // Under threshold, backup should not run
-        let opts = CompactOptions { skip_backup: false, ..Default::default() };
+        let opts = CompactOptions {
+            skip_backup: false,
+            ..Default::default()
+        };
         let report = compact(&repo, &mgr, &opts).unwrap();
         assert!(report.backup_path.is_none());
     }

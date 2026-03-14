@@ -289,11 +289,11 @@ fn arb_yaml_special_string() -> impl Strategy<Value = String> {
 /// Unicode chars safe for YAML values (no leading `:`, `---`, or `#` at start).
 fn arb_unicode_safe_string() -> impl Strategy<Value = String> {
     let safe_chars = vec![
-        'á', 'é', 'í', 'ó', 'ú', 'ü', 'ñ', 'ç', 'ø', 'å', 'ß', 'œ', 'æ', 'ğ', 'ş', 'č', 'ř',
-        'ž', 'ł', 'ń', 'Γ', 'δ', 'λ', 'Ω', 'π', 'Д', 'Ж', 'й', 'я', 'ё', 'א', 'ב', 'ג', 'ד',
-        'ה', 'ו', 'ז', 'ا', 'ب', 'ت', 'ث', 'ح', 'خ', 'د', 'क', 'ख', 'ग', 'न', 'म', 'य', 'あ',
-        'い', 'う', 'え', 'お', 'カ', 'キ', 'ク', 'ケ', 'コ', '你', '好', '世', '界', '漢', '字',
-        '한', '글', '서', '울',
+        'á', 'é', 'í', 'ó', 'ú', 'ü', 'ñ', 'ç', 'ø', 'å', 'ß', 'œ', 'æ', 'ğ', 'ş', 'č', 'ř', 'ž',
+        'ł', 'ń', 'Γ', 'δ', 'λ', 'Ω', 'π', 'Д', 'Ж', 'й', 'я', 'ё', 'א', 'ב', 'ג', 'ד', 'ה', 'ו',
+        'ז', 'ا', 'ب', 'ت', 'ث', 'ح', 'خ', 'د', 'क', 'ख', 'ग', 'न', 'म', 'य', 'あ', 'い', 'う',
+        'え', 'お', 'カ', 'キ', 'ク', 'ケ', 'コ', '你', '好', '世', '界', '漢', '字', '한', '글',
+        '서', '울',
     ];
 
     prop::collection::vec(
@@ -314,8 +314,7 @@ fn arb_unicode_safe_string() -> impl Strategy<Value = String> {
 
 /// Single string of 10K+ chars (no newlines).
 fn arb_long_line() -> impl Strategy<Value = String> {
-    prop::collection::vec("[a-zA-Z0-9 ]{100,200}", 50..=120)
-        .prop_map(|parts| parts.join(" "))
+    prop::collection::vec("[a-zA-Z0-9 ]{100,200}", 50..=120).prop_map(|parts| parts.join(" "))
 }
 
 /// Vec of 100+ tags.
@@ -624,12 +623,23 @@ impl ZettelSource for MockStore {
 }
 
 impl ZettelStore for MockStore {
-    fn commit_file(&self, path: &str, content: &str, _msg: &str) -> zdb_core::error::Result<CommitHash> {
-        self.files.borrow_mut().insert(path.to_string(), content.to_string());
+    fn commit_file(
+        &self,
+        path: &str,
+        content: &str,
+        _msg: &str,
+    ) -> zdb_core::error::Result<CommitHash> {
+        self.files
+            .borrow_mut()
+            .insert(path.to_string(), content.to_string());
         Ok(CommitHash("mock".into()))
     }
 
-    fn commit_files(&self, files: &[(&str, &str)], _msg: &str) -> zdb_core::error::Result<CommitHash> {
+    fn commit_files(
+        &self,
+        files: &[(&str, &str)],
+        _msg: &str,
+    ) -> zdb_core::error::Result<CommitHash> {
         let mut map = self.files.borrow_mut();
         for (path, content) in files {
             map.insert(path.to_string(), content.to_string());
@@ -1603,26 +1613,17 @@ fn arb_fts5_query() -> impl Strategy<Value = String> {
 
 /// Generate long query strings (1K+ characters).
 fn arb_long_query() -> impl Strategy<Value = String> {
-    prop::collection::vec("[a-zA-Z0-9 *\"()]{1,20}", 60..=120)
-        .prop_map(|parts| parts.join(" "))
+    prop::collection::vec("[a-zA-Z0-9 *\"()]{1,20}", 60..=120).prop_map(|parts| parts.join(" "))
 }
 
 /// Generate a vec of (key, Value) pairs where the same key maps to different
 /// Value types across items — used to test type widening.
 fn arb_mixed_type_extras() -> impl Strategy<Value = Vec<Vec<(String, Value)>>> {
-    let key = prop_oneof![
-        Just("xMixed".to_string()),
-        Just("xField".to_string()),
-    ];
-    let values = prop::collection::vec(
-        (key.clone(), arb_value_leaf()),
-        3..=6,
-    );
+    let key = prop_oneof![Just("xMixed".to_string()), Just("xField".to_string()),];
+    let values = prop::collection::vec((key.clone(), arb_value_leaf()), 3..=6);
     // Return a vec of single-entry extra maps, each with the same key but
     // potentially different Value types.
-    values.prop_map(|pairs| {
-        pairs.into_iter().map(|(k, v)| vec![(k, v)]).collect()
-    })
+    values.prop_map(|pairs| pairs.into_iter().map(|(k, v)| vec![(k, v)]).collect())
 }
 
 /// Create a seeded index with 3 hardcoded zettels for FTS5 fuzzing.

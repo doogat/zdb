@@ -116,15 +116,13 @@ fn maintenance_config_roundtrip() {
 
     // Enable
     let toml = "[maintenance]\nauto_enabled = true\n";
-    repo.commit_file(".zetteldb.toml", toml, "enable")
-        .unwrap();
+    repo.commit_file(".zetteldb.toml", toml, "enable").unwrap();
     let config = repo.load_config().unwrap();
     assert!(config.maintenance.auto_enabled);
 
     // Disable
     let toml = "[maintenance]\nauto_enabled = false\n";
-    repo.commit_file(".zetteldb.toml", toml, "disable")
-        .unwrap();
+    repo.commit_file(".zetteldb.toml", toml, "disable").unwrap();
     let config = repo.load_config().unwrap();
     assert!(!config.maintenance.auto_enabled);
 }

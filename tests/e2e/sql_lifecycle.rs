@@ -600,7 +600,10 @@ fn multi_table_schema_prd_scenario() {
         .assert()
         .success();
     repo.zdb()
-        .args(["query", "CREATE TABLE section (name TEXT, workspace TEXT REFERENCES workspace(id))"])
+        .args([
+            "query",
+            "CREATE TABLE section (name TEXT, workspace TEXT REFERENCES workspace(id))",
+        ])
         .assert()
         .success();
     repo.zdb()
@@ -611,7 +614,10 @@ fn multi_table_schema_prd_scenario() {
     // Insert workspace
     let ws_out = repo
         .zdb()
-        .args(["query", "INSERT INTO workspace (description) VALUES ('My Board')"])
+        .args([
+            "query",
+            "INSERT INTO workspace (description) VALUES ('My Board')",
+        ])
         .output()
         .unwrap();
     let ws_id = String::from_utf8_lossy(&ws_out.stdout).trim().to_string();
@@ -636,7 +642,10 @@ fn multi_table_schema_prd_scenario() {
     // Insert link
     let link_out = repo
         .zdb()
-        .args(["query", "INSERT INTO link (url, title) VALUES ('https://example.com', 'Example')"])
+        .args([
+            "query",
+            "INSERT INTO link (url, title) VALUES ('https://example.com', 'Example')",
+        ])
         .output()
         .unwrap();
     let link_id = String::from_utf8_lossy(&link_out.stdout).trim().to_string();
@@ -732,11 +741,7 @@ fn multi_table_schema_prd_scenario() {
         .stdout(predicate::str::contains("4"));
 
     // Verify on-disk: workspace zettel has the FK backlink
-    let sec_content = repo
-        .zdb()
-        .args(["read", &sec_id])
-        .output()
-        .unwrap();
+    let sec_content = repo.zdb().args(["read", &sec_id]).output().unwrap();
     let sec_str = String::from_utf8_lossy(&sec_content.stdout);
     assert!(
         sec_str.contains(&ws_id),

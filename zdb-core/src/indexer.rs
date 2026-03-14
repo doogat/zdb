@@ -519,8 +519,10 @@ impl Index {
 
     /// Drop and recreate a materialized SQLite table from a schema.
     fn drop_and_create_materialized_table(&self, schema: &crate::types::TableSchema) -> Result<()> {
-        self.conn
-            .execute(&format!("DROP TABLE IF EXISTS \"{}\"", schema.table_name), [])?;
+        self.conn.execute(
+            &format!("DROP TABLE IF EXISTS \"{}\"", schema.table_name),
+            [],
+        )?;
 
         let mut col_defs = vec!["id TEXT PRIMARY KEY".to_string()];
         for col in &schema.columns {
@@ -992,9 +994,10 @@ impl Index {
         let mut stmt = self.conn.prepare(&sql)?;
 
         let rows = match pagination {
-            Some((limit, offset)) => {
-                stmt.query_map(params![query, limit as i64, offset as i64], Self::map_search_row)?
-            }
+            Some((limit, offset)) => stmt.query_map(
+                params![query, limit as i64, offset as i64],
+                Self::map_search_row,
+            )?,
             None => stmt.query_map(params![query], Self::map_search_row)?,
         };
 

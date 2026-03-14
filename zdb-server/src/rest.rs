@@ -175,7 +175,10 @@ async fn list_zettels(
         let limit = params.per_page.unwrap_or(50) as usize;
         let page = params.page.unwrap_or(1).max(1) as usize;
         let offset = (page - 1) * limit;
-        let result = read_pool.search(q, limit, offset).await.map_err(rest_error)?;
+        let result = read_pool
+            .search(q, limit, offset)
+            .await
+            .map_err(rest_error)?;
         let hits: Vec<SearchHit> = result
             .hits
             .into_iter()

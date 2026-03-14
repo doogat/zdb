@@ -50,7 +50,9 @@ fn zdb_bin() -> PathBuf {
     } else {
         "release"
     };
-    target.join(profile).join(format!("zdb{}", std::env::consts::EXE_SUFFIX))
+    target
+        .join(profile)
+        .join(format!("zdb{}", std::env::consts::EXE_SUFFIX))
 }
 
 static PORT_COUNTER: AtomicU16 = AtomicU16::new(18200);
@@ -151,7 +153,11 @@ fn seed_repo_n(dir: &Path, count: usize) {
         .arg(dir)
         .output()
         .expect("zdb init failed");
-    assert!(out.status.success(), "zdb init: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "zdb init: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 
     // Seed zettels by writing files + git commit
     for i in 0..count {
@@ -223,10 +229,7 @@ fn build_client(token: &str) -> reqwest::Client {
     reqwest::Client::builder()
         .default_headers({
             let mut h = reqwest::header::HeaderMap::new();
-            h.insert(
-                "Authorization",
-                format!("Bearer {token}").parse().unwrap(),
-            );
+            h.insert("Authorization", format!("Bearer {token}").parse().unwrap());
             h
         })
         .timeout(Duration::from_secs(10))
@@ -240,13 +243,7 @@ async fn graphql_request(
     query: &str,
 ) -> reqwest::Result<serde_json::Value> {
     let body = serde_json::json!({ "query": query });
-    client
-        .post(url)
-        .json(&body)
-        .send()
-        .await?
-        .json()
-        .await
+    client.post(url).json(&body).send().await?.json().await
 }
 
 /// Send `n` concurrent copies of `query` and return all results.
@@ -277,7 +274,8 @@ async fn concurrent_reads(
 // ---------------------------------------------------------------------------
 
 const Q_LIST: &str = "{ zettels(limit: 20) { id title } }";
-const Q_SEARCH: &str = r#"{ search(query: "architecture", limit: 10) { items { id title } totalCount } }"#;
+const Q_SEARCH: &str =
+    r#"{ search(query: "architecture", limit: 10) { items { id title } totalCount } }"#;
 
 fn q_get(i: usize) -> String {
     format!(
@@ -308,13 +306,15 @@ fn bench_single_reads(c: &mut Criterion) {
 
     group.bench_function("get_zettel", |b| {
         b.iter(|| {
-            rt.block_on(graphql_request(&client, &url, &q_get(0))).unwrap();
+            rt.block_on(graphql_request(&client, &url, &q_get(0)))
+                .unwrap();
         });
     });
 
     group.bench_function("search", |b| {
         b.iter(|| {
-            rt.block_on(graphql_request(&client, &url, Q_SEARCH)).unwrap();
+            rt.block_on(graphql_request(&client, &url, Q_SEARCH))
+                .unwrap();
         });
     });
 
@@ -377,17 +377,11 @@ fn bench_concurrent_search(c: &mut Criterion) {
 // REST / NoSQL / pgwire helpers
 // ---------------------------------------------------------------------------
 
-async fn rest_request(
-    client: &reqwest::Client,
-    url: &str,
-) -> reqwest::Result<serde_json::Value> {
+async fn rest_request(client: &reqwest::Client, url: &str) -> reqwest::Result<serde_json::Value> {
     client.get(url).send().await?.json().await
 }
 
-async fn pgwire_query_reuse(
-    client: &tokio_postgres::Client,
-    sql: &str,
-) {
+async fn pgwire_query_reuse(client: &tokio_postgres::Client, sql: &str) {
     client.simple_query(sql).await.unwrap();
 }
 
@@ -492,7 +486,10 @@ fn bench_mixed_load(c: &mut Criterion) {
 
     stop.store(true, Ordering::Relaxed);
     rt.block_on(write_handle).unwrap();
-    eprintln!("mixed_load: background writes completed = {}", write_count.load(Ordering::Relaxed));
+    eprintln!(
+        "mixed_load: background writes completed = {}",
+        write_count.load(Ordering::Relaxed)
+    );
 
     group.finish();
 }
@@ -523,7 +520,9 @@ fn bench_protocol_comparison(c: &mut Criterion) {
             .connect(tokio_postgres::NoTls)
             .await
             .unwrap();
-        tokio::spawn(async move { conn.await.ok(); });
+        tokio::spawn(async move {
+            conn.await.ok();
+        });
         client
     });
 
@@ -534,7 +533,8 @@ fn bench_protocol_comparison(c: &mut Criterion) {
     let gql_get = q_get(0);
     group.bench_function("graphql", |b| {
         b.iter(|| {
-            rt.block_on(graphql_request(&client, &graphql_url, &gql_get)).unwrap();
+            rt.block_on(graphql_request(&client, &graphql_url, &gql_get))
+                .unwrap();
         });
     });
 

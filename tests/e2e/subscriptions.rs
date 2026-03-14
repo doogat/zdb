@@ -127,7 +127,10 @@ fn ws_payload_auth_invalid_token() {
     match msg {
         Ok(Message::Text(text)) => {
             let val: serde_json::Value = serde_json::from_str(&text).unwrap();
-            assert_ne!(val["type"], "connection_ack", "should not ack invalid token");
+            assert_ne!(
+                val["type"], "connection_ack",
+                "should not ack invalid token"
+            );
         }
         Ok(Message::Close(_)) => {} // acceptable: server closed connection
         Err(_) => {}                // acceptable: connection dropped
@@ -155,7 +158,10 @@ fn ws_no_auth_no_payload_rejected() {
     match msg {
         Ok(Message::Text(text)) => {
             let val: serde_json::Value = serde_json::from_str(&text).unwrap();
-            assert_ne!(val["type"], "connection_ack", "should not ack empty payload");
+            assert_ne!(
+                val["type"], "connection_ack",
+                "should not ack empty payload"
+            );
         }
         Ok(Message::Close(_)) => {} // acceptable: server closed connection
         Err(_) => {}                // acceptable: connection dropped

@@ -144,7 +144,11 @@ fn bench_compact(c: &mut Criterion) {
             },
             |(_dir, repo)| {
                 let mgr = SyncManager::open(&repo).unwrap();
-                let opts = zdb_core::types::CompactOptions { force: true, skip_backup: true, ..Default::default() };
+                let opts = zdb_core::types::CompactOptions {
+                    force: true,
+                    skip_backup: true,
+                    ..Default::default()
+                };
                 compaction::compact(&repo, &mgr, &opts).unwrap();
             },
             BatchSize::PerIteration,

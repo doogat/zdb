@@ -242,7 +242,7 @@ mod tests {
         check_write_threshold(&repo); // count=1
         check_write_threshold(&repo); // count=2
         check_write_threshold(&repo); // count=3 — triggers + resets
-        // After trigger, counter resets; next call should not trigger.
+                                      // After trigger, counter resets; next call should not trigger.
         check_write_threshold(&repo); // count=1
     }
 }

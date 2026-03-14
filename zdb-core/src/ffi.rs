@@ -223,8 +223,7 @@ impl ZettelDriver {
         let path = Path::new(&repo_path);
         let repo = GitRepo::open(path).map_err(ZdbError::from)?;
         let db_dir = path.join(".zdb");
-        std::fs::create_dir_all(&db_dir)
-            .map_err(|e| ZdbError::from(ZettelError::Io(e)))?;
+        std::fs::create_dir_all(&db_dir).map_err(|e| ZdbError::from(ZettelError::Io(e)))?;
         let db_path = db_dir.join("index.db");
         let index = Index::open(&db_path).map_err(ZdbError::from)?;
         Ok(Self {
@@ -547,8 +546,7 @@ mod tests {
 
     fn fresh_driver() -> (TempDir, ZettelDriver) {
         let tmp = TempDir::new().unwrap();
-        let driver =
-            ZettelDriver::create_repo(tmp.path().to_str().unwrap().to_string()).unwrap();
+        let driver = ZettelDriver::create_repo(tmp.path().to_str().unwrap().to_string()).unwrap();
         (tmp, driver)
     }
 
@@ -598,7 +596,10 @@ mod tests {
             .execute_sql("INSERT INTO task (priority, done) VALUES ('high', 'no')".into())
             .unwrap();
         // INSERT returns SqlResult::Ok(created_ids) — message contains the new zettel ID
-        assert!(!result.message.is_empty(), "INSERT should return created ID");
+        assert!(
+            !result.message.is_empty(),
+            "INSERT should return created ID"
+        );
 
         // Verify the inserted row is queryable via SqlEngine
         let rows = driver
@@ -648,9 +649,7 @@ mod tests {
             .unwrap();
         assert_eq!(result.affected_rows, 1);
 
-        let select = driver
-            .execute_sql("SELECT body FROM note".into())
-            .unwrap();
+        let select = driver.execute_sql("SELECT body FROM note".into()).unwrap();
         assert_eq!(select.rows[0][0], "modified");
     }
 
@@ -666,9 +665,7 @@ mod tests {
             .unwrap();
 
         // Get the ID to delete by querying
-        let before = driver
-            .execute_sql("SELECT id FROM widget".into())
-            .unwrap();
+        let before = driver.execute_sql("SELECT id FROM widget".into()).unwrap();
         assert_eq!(before.rows.len(), 1);
         let id = &before.rows[0][0];
 
@@ -677,9 +674,7 @@ mod tests {
             .unwrap();
         assert_eq!(result.affected_rows, 1);
 
-        let after = driver
-            .execute_sql("SELECT id FROM widget".into())
-            .unwrap();
+        let after = driver.execute_sql("SELECT id FROM widget".into()).unwrap();
         assert_eq!(after.rows.len(), 0);
     }
 
@@ -695,8 +690,7 @@ mod tests {
     fn execute_sql_dml_on_nonexistent_type_returns_error() {
         let (_tmp, driver) = fresh_driver();
         driver.reindex().unwrap();
-        let result = driver
-            .execute_sql("INSERT INTO nonexistent (x) VALUES ('y')".into());
+        let result = driver.execute_sql("INSERT INTO nonexistent (x) VALUES ('y')".into());
         assert!(result.is_err());
     }
 
@@ -716,9 +710,7 @@ mod tests {
             .unwrap();
         driver.commit_transaction().unwrap();
 
-        let result = driver
-            .execute_sql("SELECT val FROM txtest".into())
-            .unwrap();
+        let result = driver.execute_sql("SELECT val FROM txtest".into()).unwrap();
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][0], "in-txn");
     }
@@ -737,9 +729,7 @@ mod tests {
             .unwrap();
         driver.rollback_transaction().unwrap();
 
-        let result = driver
-            .execute_sql("SELECT val FROM rbtest".into())
-            .unwrap();
+        let result = driver.execute_sql("SELECT val FROM rbtest".into()).unwrap();
         assert_eq!(result.rows.len(), 0, "rolled back insert should not appear");
     }
 
@@ -829,8 +819,7 @@ mod tests {
         driver.reindex().unwrap();
 
         let tmp_direct = TempDir::new().unwrap();
-        let direct_repo =
-            crate::git_ops::GitRepo::init(tmp_direct.path()).unwrap();
+        let direct_repo = crate::git_ops::GitRepo::init(tmp_direct.path()).unwrap();
         let db_path = tmp_direct.path().join(".zdb/index.db");
         std::fs::create_dir_all(tmp_direct.path().join(".zdb")).unwrap();
         let direct_index = crate::indexer::Index::open(&db_path).unwrap();
@@ -841,15 +830,15 @@ mod tests {
             .execute_sql("CREATE TABLE workspace (description TEXT)".into())
             .unwrap();
         let mut engine = crate::sql_engine::SqlEngine::new(&direct_index, &direct_repo);
-        let direct_ddl = engine.execute("CREATE TABLE workspace (description TEXT)").unwrap();
+        let direct_ddl = engine
+            .execute("CREATE TABLE workspace (description TEXT)")
+            .unwrap();
         let direct_ddl: SqlResultRecord = direct_ddl.into();
         assert_eq!(ffi_ddl.message.is_empty(), direct_ddl.message.is_empty());
 
         // Same INSERT on both paths
         let ffi_ins = driver
-            .execute_sql(
-                "INSERT INTO workspace (description) VALUES ('shared model')".into(),
-            )
+            .execute_sql("INSERT INTO workspace (description) VALUES ('shared model')".into())
             .unwrap();
         let mut engine = crate::sql_engine::SqlEngine::new(&direct_index, &direct_repo);
         let direct_ins = engine
@@ -865,9 +854,7 @@ mod tests {
             .execute_sql("SELECT description FROM workspace".into())
             .unwrap();
         let mut engine = crate::sql_engine::SqlEngine::new(&direct_index, &direct_repo);
-        let direct_sel = engine
-            .execute("SELECT description FROM workspace")
-            .unwrap();
+        let direct_sel = engine.execute("SELECT description FROM workspace").unwrap();
         let direct_sel: SqlResultRecord = direct_sel.into();
         assert_eq!(ffi_sel.columns, direct_sel.columns);
         assert_eq!(ffi_sel.rows.len(), direct_sel.rows.len());
@@ -894,10 +881,7 @@ mod tests {
 
         // Create initial content (before remote's sync point)
         driver
-            .create_zettel(
-                "---\ntitle: first\n---\nBody1".into(),
-                "add first".into(),
-            )
+            .create_zettel("---\ntitle: first\n---\nBody1".into(), "add first".into())
             .unwrap();
 
         // Capture head as remote's sync point
@@ -924,19 +908,13 @@ mod tests {
 
         // Add new content after remote's sync point
         driver
-            .create_zettel(
-                "---\ntitle: second\n---\nBody2".into(),
-                "add second".into(),
-            )
+            .create_zettel("---\ntitle: second\n---\nBody2".into(), "add second".into())
             .unwrap();
 
         // Export delta bundle targeting node2
         let output = _tmp.path().join("delta.bundle.tar");
         let path = driver
-            .export_delta_bundle(
-                node2_uuid.to_string(),
-                output.to_str().unwrap().to_string(),
-            )
+            .export_delta_bundle(node2_uuid.to_string(), output.to_str().unwrap().to_string())
             .unwrap();
         assert!(std::path::Path::new(&path).exists());
     }
@@ -964,10 +942,7 @@ mod tests {
 
         // Create initial content
         driver
-            .create_zettel(
-                "---\ntitle: first\n---\nBody1".into(),
-                "add first".into(),
-            )
+            .create_zettel("---\ntitle: first\n---\nBody1".into(), "add first".into())
             .unwrap();
 
         // Capture head as remote's sync point

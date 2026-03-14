@@ -575,7 +575,10 @@ fn compact_no_backup_flag() {
         .args(["compact", "--force", "--no-backup"])
         .output()
         .expect("compact failed");
-    assert!(compact_out.status.success(), "compact --no-backup should succeed");
+    assert!(
+        compact_out.status.success(),
+        "compact --no-backup should succeed"
+    );
     let stdout = String::from_utf8_lossy(&compact_out.stdout);
     assert!(
         !stdout.contains("backup:"),
@@ -613,7 +616,10 @@ fn compact_backup_path_flag() {
         ])
         .output()
         .expect("compact failed");
-    assert!(compact_out.status.success(), "compact --backup-path should succeed");
+    assert!(
+        compact_out.status.success(),
+        "compact --backup-path should succeed"
+    );
     let stdout = String::from_utf8_lossy(&compact_out.stdout);
     assert!(
         stdout.contains("backup:"),

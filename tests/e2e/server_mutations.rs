@@ -6,8 +6,8 @@ fn compact_mutation_returns_result() {
     let repo = ZdbTestRepo::init();
     let server = ServerGuard::start(&repo);
 
-    let result =
-        server.graphql(r#"mutation { compact { filesRemoved crdtDocsCompacted gcSuccess backupPath } }"#);
+    let result = server
+        .graphql(r#"mutation { compact { filesRemoved crdtDocsCompacted gcSuccess backupPath } }"#);
     assert!(result.get("errors").is_none(), "compact failed: {result}");
     let compact = &result["data"]["compact"];
     assert!(compact["filesRemoved"].is_i64());
@@ -38,9 +38,7 @@ fn compact_with_node_produces_backup() {
         .success();
     let server = ServerGuard::start(&repo);
 
-    let result = server.graphql(
-        r#"mutation { compact(force: true) { gcSuccess backupPath } }"#,
-    );
+    let result = server.graphql(r#"mutation { compact(force: true) { gcSuccess backupPath } }"#);
     assert!(
         result.get("errors").is_none(),
         "compact with node failed: {result}"
@@ -61,9 +59,8 @@ fn compact_no_backup_mutation() {
         .success();
     let server = ServerGuard::start(&repo);
 
-    let result = server.graphql(
-        r#"mutation { compact(force: true, noBackup: true) { gcSuccess backupPath } }"#,
-    );
+    let result = server
+        .graphql(r#"mutation { compact(force: true, noBackup: true) { gcSuccess backupPath } }"#);
     assert!(
         result.get("errors").is_none(),
         "compact(noBackup: true) failed: {result}"

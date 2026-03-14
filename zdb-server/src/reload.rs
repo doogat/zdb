@@ -96,15 +96,19 @@ impl SchemaReloader {
                 }
             };
 
-            let new_schema =
-                match schema::build_schema(actor.clone(), read_pool.clone(), type_schemas, Some(Arc::clone(&this))) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        log::error!("schema reload: build failed: {e}");
-                        this.done.notify_waiters();
-                        continue;
-                    }
-                };
+            let new_schema = match schema::build_schema(
+                actor.clone(),
+                read_pool.clone(),
+                type_schemas,
+                Some(Arc::clone(&this)),
+            ) {
+                Ok(s) => s,
+                Err(e) => {
+                    log::error!("schema reload: build failed: {e}");
+                    this.done.notify_waiters();
+                    continue;
+                }
+            };
             this.shared.store(Arc::new(new_schema));
             this.version.fetch_add(1, Ordering::Relaxed);
             log::info!(

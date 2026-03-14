@@ -11,9 +11,7 @@ use zdb_core::error::ZettelError;
 use zdb_core::git_ops::GitRepo;
 use zdb_core::indexer::Index;
 use zdb_core::sql_engine::{SqlEngine, SqlResult};
-use zdb_core::types::{
-    AttachmentInfo, PaginatedSearchResult, ParsedZettel, TableSchema, ZettelId,
-};
+use zdb_core::types::{PaginatedSearchResult, ParsedZettel, TableSchema};
 
 use crate::actor;
 
@@ -72,7 +70,8 @@ impl ReadPool {
     // --- Index + GitRepo reads ---
 
     pub async fn get_zettel(&self, id: String) -> Result<ParsedZettel> {
-        self.with_index_repo(move |index, repo| actor::get_zettel(repo, index, &id)).await
+        self.with_index_repo(move |index, repo| actor::get_zettel(repo, index, &id))
+            .await
     }
 
     pub async fn list_zettels(
@@ -90,20 +89,8 @@ impl ReadPool {
     }
 
     pub async fn filtered_list(&self, q: FilteredListQuery) -> Result<Vec<ParsedZettel>> {
-        self.with_index_repo(move |index, repo| {
-            actor::filtered_list(
-                repo,
-                index,
-                &q.table_name,
-                &q.where_sql,
-                &q.params,
-                q.order_sql.as_deref(),
-                q.tag.as_deref(),
-                q.limit,
-                q.offset,
-            )
-        })
-        .await
+        self.with_index_repo(move |index, repo| actor::filtered_list(repo, index, &q))
+            .await
     }
 
     pub async fn get_type_schemas(&self) -> Result<Vec<TableSchema>> {
@@ -115,14 +102,6 @@ impl ReadPool {
         self.with_index_repo(move |index, repo| {
             let mut engine = SqlEngine::new(index, repo);
             engine.execute(&sql)
-        })
-        .await
-    }
-
-    pub async fn list_attachments(&self, zettel_id: String) -> Result<Vec<AttachmentInfo>> {
-        self.with_index_repo(move |_index, repo| {
-            let id = ZettelId(zettel_id);
-            zdb_core::attachments::list_attachments(repo, &id)
         })
         .await
     }
@@ -251,7 +230,10 @@ mod tests {
     #[test]
     fn default_pool_size_is_bounded() {
         let size = ReadPool::default_pool_size();
-        assert!(size >= 1 && size <= 4, "pool size {size} out of range 1..=4");
+        assert!(
+            size >= 1 && size <= 4,
+            "pool size {size} out of range 1..=4"
+        );
     }
 
     fn setup_repo() -> (tempfile::TempDir, PathBuf) {
@@ -339,7 +321,10 @@ mod tests {
     async fn backlinks_empty() {
         let (_dir, path) = setup_repo();
         let pool = ReadPool::new(path, 2).unwrap();
-        let links = pool.get_backlinks("20260101000000".to_string()).await.unwrap();
+        let links = pool
+            .get_backlinks("20260101000000".to_string())
+            .await
+            .unwrap();
         assert!(links.is_empty());
     }
 
@@ -351,10 +336,10 @@ mod tests {
         let repo = GitRepo::open(&path).unwrap();
         let id = "20260314120000";
         let rel_path = format!("zettelkasten/{id}.md");
-        let content = format!(
-            "---\ntitle: ReadAfterWrite\ntype: note\ncreated: {id}\n---\nBody text.\n"
-        );
-        repo.commit_file(&rel_path, &content, "add test zettel").unwrap();
+        let content =
+            format!("---\ntitle: ReadAfterWrite\ntype: note\ncreated: {id}\n---\nBody text.\n");
+        repo.commit_file(&rel_path, &content, "add test zettel")
+            .unwrap();
         let db_path = path.join(".zdb/index.db");
         let index = Index::open(&db_path).unwrap();
         let parsed = zdb_core::parser::parse(&content, &rel_path).unwrap();

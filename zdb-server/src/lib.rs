@@ -61,7 +61,12 @@ pub async fn run(
     // Build GraphQL schema with hot-reload support (two-phase init)
     let rest_actor = actor.clone();
     let (reloader, shared_schema) = reload::SchemaReloader::new(actor.clone(), read_pool.clone());
-    let gql_schema = match schema::build_schema(actor, read_pool.clone(), type_schemas, Some(reloader.clone())) {
+    let gql_schema = match schema::build_schema(
+        actor,
+        read_pool.clone(),
+        type_schemas,
+        Some(reloader.clone()),
+    ) {
         Ok(s) => s,
         Err(e) => {
             log::error!("failed to build initial GraphQL schema: {e}");
@@ -127,13 +132,15 @@ pub async fn run(
         .layer(Extension(rest_actor))
         .layer(Extension(read_pool))
         .layer(Extension(shared_schema))
-        .layer(axum::middleware::map_response(|mut res: axum::response::Response| async {
-            res.headers_mut().insert(
-                HeaderName::from_static("x-experimental"),
-                "true".parse().unwrap(),
-            );
-            res
-        }));
+        .layer(axum::middleware::map_response(
+            |mut res: axum::response::Response| async {
+                res.headers_mut().insert(
+                    HeaderName::from_static("x-experimental"),
+                    "true".parse().unwrap(),
+                );
+                res
+            },
+        ));
 
     let addr = format!("{}:{}", cfg.bind, cfg.port);
     eprintln!("listening on {addr}");
@@ -141,7 +148,14 @@ pub async fn run(
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 
-    let pg = pgwire::start(pg_actor, pg_read_pool, pg_token, pg_reloader, &cfg.bind, cfg.pg_port);
+    let pg = pgwire::start(
+        pg_actor,
+        pg_read_pool,
+        pg_token,
+        pg_reloader,
+        &cfg.bind,
+        cfg.pg_port,
+    );
 
     tokio::select! {
         r = axum::serve(listener, app) => r?,

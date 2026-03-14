@@ -613,7 +613,10 @@ pub fn build_schema(
                         .get("offset")
                         .and_then(|v| v.i64().ok())
                         .unwrap_or(0) as usize;
-                    let result = pool.search(q, limit, offset).await.map_err(to_server_error)?;
+                    let result = pool
+                        .search(q, limit, offset)
+                        .await
+                        .map_err(to_server_error)?;
                     let mut obj = IndexMap::new();
                     obj.insert(
                         Name::new("hits"),
@@ -1124,10 +1127,7 @@ pub fn build_schema(
             "repoBytesAfter",
             TypeRef::named_nn(TypeRef::STRING),
         ))
-        .field(simple_field(
-            "backupPath",
-            TypeRef::named(TypeRef::STRING),
-        ));
+        .field(simple_field("backupPath", TypeRef::named(TypeRef::STRING)));
 
     // sync mutation
     {
@@ -1194,7 +1194,10 @@ pub fn build_schema(
                         .get("backupPath")
                         .and_then(|v| v.string().ok())
                         .map(|s| s.to_string());
-                    let report = a.compact(force, no_backup, backup_path).await.map_err(to_server_error)?;
+                    let report = a
+                        .compact(force, no_backup, backup_path)
+                        .await
+                        .map_err(to_server_error)?;
                     let mut obj = IndexMap::new();
                     obj.insert(
                         Name::new("filesRemoved"),
@@ -1239,18 +1242,21 @@ pub fn build_schema(
                 })
             })
             .argument(InputValue::new("force", TypeRef::named(TypeRef::BOOLEAN)))
-            .argument(InputValue::new("noBackup", TypeRef::named(TypeRef::BOOLEAN)))
-            .argument(InputValue::new("backupPath", TypeRef::named(TypeRef::STRING))),
+            .argument(InputValue::new(
+                "noBackup",
+                TypeRef::named(TypeRef::BOOLEAN),
+            ))
+            .argument(InputValue::new(
+                "backupPath",
+                TypeRef::named(TypeRef::STRING),
+            )),
         );
     }
 
     // -- GitMaintenanceResult output type --
     let git_maintenance_result_type = Object::new("GitMaintenanceResult")
         .field(simple_field("success", TypeRef::named_nn(TypeRef::BOOLEAN)))
-        .field(simple_field(
-            "durationMs",
-            TypeRef::named_nn(TypeRef::INT),
-        ))
+        .field(simple_field("durationMs", TypeRef::named_nn(TypeRef::INT)))
         .field(simple_field(
             "fallbackUsed",
             TypeRef::named_nn(TypeRef::BOOLEAN),
@@ -1280,8 +1286,7 @@ pub fn build_schema(
                             .get("task")
                             .and_then(|v| v.string().ok())
                             .map(|s| s.to_string());
-                        let report =
-                            a.run_maintenance(task).await.map_err(to_server_error)?;
+                        let report = a.run_maintenance(task).await.map_err(to_server_error)?;
                         let tasks_run: Vec<GqlValue> = report
                             .tasks_run
                             .iter()

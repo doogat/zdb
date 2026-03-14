@@ -150,7 +150,11 @@ impl<'a> SyncManager<'a> {
         // Fetch
         let phase_start = std::time::Instant::now();
         self.repo.fetch(remote, branch)?;
-        tracing::info!(phase = "fetch", elapsed_ms = phase_start.elapsed().as_millis(), "sync_phase");
+        tracing::info!(
+            phase = "fetch",
+            elapsed_ms = phase_start.elapsed().as_millis(),
+            "sync_phase"
+        );
 
         // Merge
         let phase_start = std::time::Instant::now();
@@ -241,17 +245,29 @@ impl<'a> SyncManager<'a> {
             }
         }
 
-        tracing::info!(phase = "merge", elapsed_ms = phase_start.elapsed().as_millis(), "sync_phase");
+        tracing::info!(
+            phase = "merge",
+            elapsed_ms = phase_start.elapsed().as_millis(),
+            "sync_phase"
+        );
 
         // Update sync state (before push so node registry travels with content)
         let phase_start = std::time::Instant::now();
         self.update_sync_state()?;
-        tracing::info!(phase = "update_sync_state", elapsed_ms = phase_start.elapsed().as_millis(), "sync_phase");
+        tracing::info!(
+            phase = "update_sync_state",
+            elapsed_ms = phase_start.elapsed().as_millis(),
+            "sync_phase"
+        );
 
         // Push (single push carries both merge result and node state)
         let phase_start = std::time::Instant::now();
         self.repo.push(remote, branch)?;
-        tracing::info!(phase = "push", elapsed_ms = phase_start.elapsed().as_millis(), "sync_phase");
+        tracing::info!(
+            phase = "push",
+            elapsed_ms = phase_start.elapsed().as_millis(),
+            "sync_phase"
+        );
 
         // Write commit-graph once (covers all commits made during sync)
         self.repo.set_skip_commit_graph(false);
@@ -260,7 +276,11 @@ impl<'a> SyncManager<'a> {
         // Reindex
         let phase_start = std::time::Instant::now();
         index.rebuild_if_stale(self.repo)?;
-        tracing::info!(phase = "reindex", elapsed_ms = phase_start.elapsed().as_millis(), "sync_phase");
+        tracing::info!(
+            phase = "reindex",
+            elapsed_ms = phase_start.elapsed().as_millis(),
+            "sync_phase"
+        );
 
         crate::maintenance::maybe_auto_run(self.repo);
 

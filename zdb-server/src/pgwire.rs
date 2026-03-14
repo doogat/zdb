@@ -264,7 +264,9 @@ mod tests {
     #[test]
     fn is_select_only_plain_select() {
         assert!(is_select_only("SELECT * FROM books"));
-        assert!(is_select_only("select id, title from books where year > 2020"));
+        assert!(is_select_only(
+            "select id, title from books where year > 2020"
+        ));
     }
 
     #[test]

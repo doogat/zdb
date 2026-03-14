@@ -712,7 +712,12 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
             }
         },
 
-        Command::Compact { force, dry_run, no_backup, backup_path } => {
+        Command::Compact {
+            force,
+            dry_run,
+            no_backup,
+            backup_path,
+        } => {
             let repo = GitRepo::open(&cli.repo)?;
             let mgr = SyncManager::open(&repo)?;
             if dry_run {
@@ -735,9 +740,9 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
                 if no_backup {
                     outln!("backup: skipped")?;
                 } else {
-                    let bp = backup_path.clone().unwrap_or_else(|| {
-                        zdb_core::compaction::default_backup_path(&repo)
-                    });
+                    let bp = backup_path
+                        .clone()
+                        .unwrap_or_else(|| zdb_core::compaction::default_backup_path(&repo));
                     outln!("backup would write: {}", bp.display())?;
                 }
                 outln!("(dry run — no changes made)")?;
@@ -987,10 +992,7 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
                         repo.commit_file(
                             ".zetteldb.toml",
                             &toml_str,
-                            &format!(
-                                "maintenance auto {}",
-                                if enabled { "on" } else { "off" }
-                            ),
+                            &format!("maintenance auto {}", if enabled { "on" } else { "off" }),
                         )?;
                         outln!(
                             "auto-maintenance {}",

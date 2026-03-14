@@ -62,15 +62,7 @@ pub enum ActorCommand {
         tag: Option<String>,
         backlinks_of: Option<String>,
     },
-    FilteredList {
-        table_name: String,
-        where_sql: String,
-        params: Vec<rusqlite::types::Value>,
-        order_sql: Option<String>,
-        tag: Option<String>,
-        limit: Option<i64>,
-        offset: Option<i64>,
-    },
+    FilteredList(crate::read_pool::FilteredListQuery),
     AggregateQuery {
         sql: String,
         params: Vec<rusqlite::types::Value>,
@@ -195,29 +187,11 @@ impl ActorHandle {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub async fn filtered_list(
         &self,
-        table_name: String,
-        where_sql: String,
-        params: Vec<rusqlite::types::Value>,
-        order_sql: Option<String>,
-        tag: Option<String>,
-        limit: Option<i64>,
-        offset: Option<i64>,
+        q: crate::read_pool::FilteredListQuery,
     ) -> ActorResult<Vec<ParsedZettel>> {
-        match self
-            .send(ActorCommand::FilteredList {
-                table_name,
-                where_sql,
-                params,
-                order_sql,
-                tag,
-                limit,
-                offset,
-            })
-            .await
-        {
+        match self.send(ActorCommand::FilteredList(q)).await {
             ActorReply::ZettelList(r) => r,
             _ => Err(ZettelError::Validation("unexpected reply".into())),
         }
@@ -391,8 +365,20 @@ impl ActorHandle {
         }
     }
 
-    pub async fn compact(&self, force: bool, no_backup: bool, backup_path: Option<String>) -> ActorResult<CompactionReport> {
-        match self.send(ActorCommand::Compact { force, no_backup, backup_path }).await {
+    pub async fn compact(
+        &self,
+        force: bool,
+        no_backup: bool,
+        backup_path: Option<String>,
+    ) -> ActorResult<CompactionReport> {
+        match self
+            .send(ActorCommand::Compact {
+                force,
+                no_backup,
+                backup_path,
+            })
+            .await
+        {
             ActorReply::Maintenance(r) => r,
             _ => Err(ZettelError::Validation("unexpected reply".into())),
         }
@@ -677,25 +663,7 @@ fn handle_command_shared(
             tag,
             backlinks_of,
         } => ActorReply::Count(count_zettels(index, zettel_type, tag, backlinks_of)),
-        ActorCommand::FilteredList {
-            table_name,
-            where_sql,
-            params,
-            order_sql,
-            tag,
-            limit,
-            offset,
-        } => ActorReply::ZettelList(filtered_list(
-            repo,
-            index,
-            &table_name,
-            &where_sql,
-            &params,
-            order_sql.as_deref(),
-            tag.as_deref(),
-            limit,
-            offset,
-        )),
+        ActorCommand::FilteredList(q) => ActorReply::ZettelList(filtered_list(repo, index, &q)),
         ActorCommand::AggregateQuery { sql, params } => ActorReply::AggregateRow(
             index
                 .query_raw_with_params(&sql, &params)
@@ -725,9 +693,18 @@ fn handle_command_shared(
             let id = zdb_core::types::ZettelId(zettel_id);
             ActorReply::AttachmentList(zdb_core::attachments::list_attachments(repo, &id))
         }
-        ActorCommand::Compact { force, no_backup, backup_path } => {
-            ActorReply::Maintenance(handle_compact(repo, index, repo_path, force, no_backup, backup_path))
-        }
+        ActorCommand::Compact {
+            force,
+            no_backup,
+            backup_path,
+        } => ActorReply::Maintenance(handle_compact(
+            repo,
+            index,
+            repo_path,
+            force,
+            no_backup,
+            backup_path,
+        )),
         ActorCommand::GitMaintenance { task } => {
             let tasks_vec: Vec<&str>;
             let tasks_opt = match &task {
@@ -832,24 +809,17 @@ fn build_filtered_sql(
     format!("SELECT z.id, z.path FROM zettels z{where_clause} ORDER BY z.id DESC{limit_clause}")
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn filtered_list(
     repo: &GitRepo,
     index: &Index,
-    table_name: &str,
-    where_sql: &str,
-    params: &[rusqlite::types::Value],
-    order_sql: Option<&str>,
-    tag: Option<&str>,
-    limit: Option<i64>,
-    offset: Option<i64>,
+    q: &crate::read_pool::FilteredListQuery,
 ) -> ActorResult<Vec<ParsedZettel>> {
     // Combine where_sql and tag filter
     let mut conditions = Vec::new();
-    if !where_sql.is_empty() {
-        conditions.push(where_sql.to_string());
+    if !q.where_sql.is_empty() {
+        conditions.push(q.where_sql.to_string());
     }
-    if let Some(t) = tag {
+    if let Some(t) = &q.tag {
         conditions.push(format!(
             "id IN (SELECT zettel_id FROM _zdb_tags WHERE tag = '{}')",
             t.replace('\'', "''")
@@ -861,18 +831,20 @@ pub(crate) fn filtered_list(
         format!(" WHERE {}", conditions.join(" AND "))
     };
 
-    let order = order_sql.unwrap_or("id DESC");
-    let limit_clause = match (limit, offset) {
+    let order = q.order_sql.as_deref().unwrap_or("id DESC");
+    let limit_clause = match (q.limit, q.offset) {
         (Some(l), Some(o)) => format!(" LIMIT {l} OFFSET {o}"),
         (Some(l), None) => format!(" LIMIT {l}"),
         (None, Some(o)) => format!(" LIMIT -1 OFFSET {o}"),
         (None, None) => String::new(),
     };
 
-    let sql =
-        format!("SELECT id FROM \"{table_name}\"{where_clause} ORDER BY {order}{limit_clause}");
+    let sql = format!(
+        "SELECT id FROM \"{}\"{where_clause} ORDER BY {order}{limit_clause}",
+        q.table_name
+    );
 
-    let rows = index.query_raw_with_params(&sql, params)?;
+    let rows = index.query_raw_with_params(&sql, &q.params)?;
 
     let mut zettels = Vec::new();
     for row in rows {
@@ -1077,7 +1049,10 @@ fn handle_compact(
         report.files_removed,
         report.crdt_docs_compacted,
         if report.gc_success { "ok" } else { "failed" },
-        report.backup_path.as_ref().map_or("skipped".to_string(), |p| p.display().to_string()),
+        report
+            .backup_path
+            .as_ref()
+            .map_or("skipped".to_string(), |p| p.display().to_string()),
     );
 
     // Rebuild index after compaction
