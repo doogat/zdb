@@ -3012,11 +3012,9 @@ sed -n '/let broken = index.broken_backlinks/,/^                }/p' zdb-cli/src
 
 ## 20. CI Test Workflow and Cross-Platform Path Tests
 
-The GitHub Actions test setup is now explicitly tiered. The pull-request workflow keeps the cross-platform matrix on the bounded path: build only `zdb-cli`, run `cargo test-ci`, and execute the `quick` smoke profile against the prebuilt binary. Linux then carries the heavier `property_tests` and `sync_test` coverage once. A separate manually triggered `Full Test` workflow restores the old breadth when you want the whole workspace (`cargo test-full`) and the full smoke script across Linux, macOS, and Windows.
+CI is split into three tiers: PR, nightly/full-validation, and release.
 
-```bash
-sed -n '36,56p' .github/workflows/test.yml
-```
+**PR workflow** (`.github/workflows/test.yml`) — Linux-only, targets ~5 min wall clock. Runs `cargo clippy`, `cargo test-ci` (unit/bin tests), `SMOKE_PROFILE=quick`, `sync_test`, and a curated e2e subset covering GraphQL CRUD, PgWire, WebSocket subscriptions, sync/CRDT conflict resolution, and multi-device resync.
 
 ```yaml
       - name: Clippy
@@ -3028,16 +3026,24 @@ sed -n '36,56p' .github/workflows/test.yml
       - name: Fast cargo test tier
         run: cargo test-ci
 
-      - name: Quick smoke test (Unix)
-        if: runner.os != 'Windows'
+      - name: Quick smoke test
         env:
           SMOKE_PROFILE: quick
           ZDB_BIN: ${{ github.workspace }}/target/debug/zdb
         run: ./tests/smoke.sh
 
-      - name: Quick smoke test (Windows)
-        if: runner.os == 'Windows'
+      - name: Sync integration tests
+        run: cargo test -p zdb-core --test sync_test
+
+      - name: E2E - GraphQL CRUD
+        run: cargo test -p zdb-e2e --test e2e serve::crud_lifecycle -- --exact
 ```
+
+**Full validation** (`.github/workflows/full-validation.yml`) — reusable workflow called by nightly and release. Runs `linux-clippy`, `linux-core` (sync_test + property_tests), `linux-thresholds` (query/growth/sync thresholds in `--release`), `linux-smoke` (full smoke), `linux-e2e` (full e2e suite), `macos-full`, and `windows-full`. On success, `mark-validated` posts a `full-validation/passed` commit status on the SHA.
+
+**Nightly** (`.github/workflows/nightly.yml`) — scheduled driver with a guard job that checks for an existing `full-validation/passed` commit status on the current SHA. Skips heavy jobs when the SHA is already validated. Supports `force` input to re-run regardless.
+
+**Release** (`.github/workflows/release.yml`) — tag-push trigger. Dereferences the tag to a commit SHA, checks for `full-validation/passed`. If found, skips tests and proceeds to build/package. If not, calls full-validation first.
 
 ```bash
 sed -n '1,22p' tests/smoke.sh
@@ -3069,7 +3075,7 @@ ZDB="${ZDB_BIN:-$(cargo metadata --format-version=1 --no-deps | sed -n 's/.*"tar
 
 The important detail is the absolute `ZDB_BIN`. `tests/smoke.sh` changes into a temporary directory before invoking the CLI, so a relative path like `target/debug/zdb` would work only from the repository root and then break as soon as the smoke script moves into its sandbox. Passing the workspace-absolute path preserves the single-build optimization and keeps the smoke scripts portable across Linux, macOS, and Windows.
 
-The new split adds three runtime guardrails. First, the root workspace default excludes `zdb-e2e` and `zdb-uniffi-bindgen` from plain `cargo test`, so pre-commit runs no longer drag the external harness into every loop. Second, pull-request CI no longer repeats the heavy core integration tests on every OS; the matrix stays on unit/bin coverage (`--lib --bins`) plus `SMOKE_PROFILE=quick`, and a single Linux integration job runs `property_tests` (with explicit `PROPTEST_CASES=50`), `sync_test`, and the three threshold test files. Most threshold tests are `#[ignore]` or `cfg_attr(debug_assertions, ignore)` in debug builds, but `sync_thresholds` runs unconditionally (~34s for 5K-zettel setup + sync); the total integration job stays under two minutes. Third, the manual `Full Test` workflow keeps the exhaustive path one click away when you need the old breadth. The temp-repo helpers disable `commit.gpgsign` in their local `.git/config` — `bundle.rs` uses the `git2` config API while the e2e harness shells out to `git config` — which prevents shell-based `git merge` / `git commit` steps from inheriting a developer's global GPG-signing policy and breaking otherwise-isolated tests. On Windows, the PowerShell smoke helper normalizes native command output into a single string before regex assertions, and the backlink delete/status checks must go through that helper rather than raw `2>&1`, which avoids the `-notmatch`/array behavior that can falsely fail multiline CLI output.
+The workspace default excludes `zdb-e2e` and `zdb-uniffi-bindgen` from plain `cargo test`, so pre-commit runs no longer drag the external harness into every loop. PR CI runs only on Linux: `test-ci` (unit/bin coverage via `--lib --bins`), `SMOKE_PROFILE=quick`, `sync_test`, and five curated e2e tests. Property tests and threshold tests run only in full-validation (nightly/release). All threshold tests use `#[cfg_attr(debug_assertions, ignore)]` so they skip in debug builds and only execute in the `linux-thresholds` release-mode job. The temp-repo helpers disable `commit.gpgsign` in their local `.git/config` — `bundle.rs` uses the `git2` config API while the e2e harness shells out to `git config` — which prevents shell-based `git merge` / `git commit` steps from inheriting a developer's global GPG-signing policy and breaking otherwise-isolated tests. On Windows, the PowerShell smoke helper normalizes native command output into a single string before regex assertions, and the backlink delete/status checks must go through that helper rather than raw `2>&1`, which avoids the `-notmatch`/array behavior that can falsely fail multiline CLI output.
 
 ```bash
 sed -n '892,909p' zdb-core/src/git_ops.rs
@@ -3148,7 +3154,7 @@ name = "large_scale"
 
 ### Threshold Tests
 
-Alongside Criterion benchmarks, three test files enforce NFR targets with hard assertions. All threshold tests are `#[ignore]` in CI (they need `--release` or very large datasets), but the CI integration job still compiles them to catch breakage:
+Alongside Criterion benchmarks, three test files enforce NFR targets with hard assertions. All threshold tests use `#[cfg_attr(debug_assertions, ignore)]` so they skip in debug builds and run only in the `linux-thresholds` job under `--release`:
 
 ```bash
 grep -E '^(#\[test\]|#\[ignore|fn [a-z])' zdb-core/tests/query_thresholds.rs
@@ -3179,6 +3185,10 @@ grep -E '^(#\[test\]|#\[ignore|fn [a-z])' zdb-core/tests/sync_thresholds.rs
 fn zettel_content(i: usize) -> String {
 fn zettel_path(i: usize) -> String {
 #[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "sync thresholds require --release; debug runs are too slow"
+)]
 fn nfr03_sync_under_2s_at_5k() {
 ```
 
