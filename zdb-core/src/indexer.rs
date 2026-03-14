@@ -2319,10 +2319,11 @@ Widget
         let db_path = dir.path().join("index.db");
         let index = Index::open(&db_path).unwrap();
 
-        let zettel = crate::types::ParsedZettel {
+        // Zettel A: its *path* is the collision target
+        let zettel_a = crate::types::ParsedZettel {
             meta: crate::types::ZettelMeta {
                 id: Some(crate::types::ZettelId("20240101120000".to_string())),
-                title: Some("Contact".to_string()),
+                title: Some("Contact A".to_string()),
                 date: None,
                 zettel_type: Some("contact".to_string()),
                 tags: vec![],
@@ -2334,15 +2335,37 @@ Widget
             wikilinks: vec![],
             path: "zettelkasten/contact/20240101120000.md".to_string(),
         };
-        index.index_zettel(&zettel).unwrap();
 
-        // Path-qualified target resolves via path lookup (step 1)
+        // Zettel B: its *ID* equals A's full path — contrived but tests precedence
+        let zettel_b = crate::types::ParsedZettel {
+            meta: crate::types::ZettelMeta {
+                id: Some(crate::types::ZettelId(
+                    "zettelkasten/contact/20240101120000.md".to_string(),
+                )),
+                title: Some("Zettel B".to_string()),
+                date: None,
+                zettel_type: None,
+                tags: vec![],
+                extra: std::collections::BTreeMap::new(),
+            },
+            body: String::new(),
+            reference_section: String::new(),
+            inline_fields: vec![],
+            wikilinks: vec![],
+            path: "zettelkasten/20240202120000.md".to_string(),
+        };
+
+        index.index_zettel(&zettel_a).unwrap();
+        index.index_zettel(&zettel_b).unwrap();
+
+        // Target matches A's path AND B's ID — path lookup must win
         let result = index
             .resolve_wikilink("zettelkasten/contact/20240101120000.md")
             .unwrap();
         assert_eq!(
             result,
-            Some("zettelkasten/contact/20240101120000.md".to_string())
+            Some("zettelkasten/contact/20240101120000.md".to_string()),
+            "path lookup should take precedence over ID lookup"
         );
 
         // Bare ID still resolves via ID fallback (step 2)
