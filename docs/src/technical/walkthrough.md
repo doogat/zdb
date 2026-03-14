@@ -1532,7 +1532,7 @@ The sync flow (with per-phase timing instrumentation):
 2. **Fetch** from remote
 3. **Merge** — git's 3-way merge classifies the result
 4. **Handle conflicts**:
-   - **Delete-vs-edit**: edit wins, add `resurrected: true` to frontmatter
+   - **Delete-vs-edit**: edit wins, add `resurrected: true` to frontmatter, emit per-file `tracing::warn!` with `zettel_path` and `deleted_by` (local/remote)
    - **Normal conflicts**: run cascade resolve (CRDT → validate → LWW fallback)
    - **Commit merge** with both parents + HLC trailer
 5. **Update sync state** — `known_heads = [HEAD]`, `last_sync = now`, commit `.nodes/{uuid}.toml`
@@ -3004,7 +3004,7 @@ The key ordering is: query backlinks → delete from git → remove from index �
 
 ### Status Integration
 
-`zdb status` also reports broken backlinks using the dedicated `broken_backlinks()` method on the indexer:
+`zdb status` reports resurrected zettels (from delete-vs-edit conflicts) via `Index::resurrected_zettels()`, which queries `_zdb_fields` for `resurrected = 'true'`. It also reports broken backlinks using `broken_backlinks()`:
 
 ```bash
 sed -n '/let broken = index.broken_backlinks/,/^                }/p' zdb-cli/src/main.rs
