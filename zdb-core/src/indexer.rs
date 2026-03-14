@@ -2779,6 +2779,49 @@ Widget
     }
 
     #[test]
+    fn resurrected_zettels_query() {
+        let idx = in_memory_index();
+
+        // Zettel with resurrected: true
+        let mut z1 = sample_zettel();
+        z1.meta.extra.insert(
+            "resurrected".into(),
+            crate::types::Value::String("true".into()),
+        );
+        idx.index_zettel(&z1).unwrap();
+
+        // Normal zettel without resurrected
+        let z2 = ParsedZettel {
+            meta: ZettelMeta {
+                id: Some(ZettelId("20260302120000".into())),
+                title: Some("Normal".into()),
+                date: None,
+                zettel_type: None,
+                tags: vec![],
+                extra: Default::default(),
+            },
+            body: String::new(),
+            reference_section: String::new(),
+            inline_fields: vec![],
+            wikilinks: vec![],
+            path: "zettelkasten/20260302120000.md".into(),
+        };
+        idx.index_zettel(&z2).unwrap();
+
+        let results = idx.resurrected_zettels().unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, z1.meta.id.as_ref().unwrap().0);
+    }
+
+    #[test]
+    fn resurrected_zettels_empty_when_none() {
+        let idx = in_memory_index();
+        let z = sample_zettel();
+        idx.index_zettel(&z).unwrap();
+        assert!(idx.resurrected_zettels().unwrap().is_empty());
+    }
+
+    #[test]
     fn frontmatter_extras_indexed_as_fields() {
         let idx = in_memory_index();
         let mut z = sample_zettel();

@@ -58,6 +58,12 @@ Follow SOLID and Clean Architecture principles as adapted for Rust. These are ma
 - `technical/solid.md` - SOLID principles translated to Rust idioms (traits over inheritance, small focused traits, dependency inversion via generics)
 - `technical/clean-architecture.md` - Layer boundaries, dependency direction, I/O at the edges, no panics in library code
 
+## Setup
+
+```
+git config core.hooksPath dev/hooks
+```
+
 ## Conventions
 
 - All modules return `error::Result<T>`
