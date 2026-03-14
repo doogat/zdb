@@ -192,6 +192,16 @@ impl<'a> SyncManager<'a> {
                     } else {
                         &conflict.ours
                     };
+                    let deleted_by = if conflict.ours.is_empty() {
+                        "local"
+                    } else {
+                        "remote"
+                    };
+                    tracing::warn!(
+                        zettel_path = %conflict.path,
+                        deleted_by,
+                        "delete-vs-edit conflict resolved: zettel resurrected"
+                    );
                     let content = add_resurrected_marker(surviving);
                     resolved.push(crate::types::ResolvedFile {
                         path: conflict.path.clone(),

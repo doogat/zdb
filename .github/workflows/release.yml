@@ -33,15 +33,31 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           SHA="${{ steps.resolve.outputs.sha }}"
+
+          # Check tag commit itself
           STATUSES=$(gh api repos/${{ github.repository }}/commits/$SHA/statuses \
             --jq '[.[] | select(.context == "full-validation/passed" and .state == "success")] | length')
           if [ "$STATUSES" -gt 0 ]; then
             echo "validated=true" >> "$GITHUB_OUTPUT"
             echo "### SHA already validated — skipping tests" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "validated=false" >> "$GITHUB_OUTPUT"
-            echo "### SHA not yet validated — running full validation" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
+
+          # If only Cargo.toml/Cargo.lock changed, check parent
+          CHANGED=$(git diff --name-only "${SHA}^" "$SHA" | grep -v -E '^(Cargo\.(toml|lock)|.*/Cargo\.toml)$' || true)
+          if [ -z "$CHANGED" ]; then
+            PARENT=$(git rev-parse "${SHA}^")
+            PARENT_STATUSES=$(gh api repos/${{ github.repository }}/commits/$PARENT/statuses \
+              --jq '[.[] | select(.context == "full-validation/passed" and .state == "success")] | length')
+            if [ "$PARENT_STATUSES" -gt 0 ]; then
+              echo "validated=true" >> "$GITHUB_OUTPUT"
+              echo "### Parent validated + version-bump-only — skipping tests" >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+            fi
+          fi
+
+          echo "validated=false" >> "$GITHUB_OUTPUT"
+          echo "### SHA not yet validated — running full validation" >> "$GITHUB_STEP_SUMMARY"
 
   run-validation:
     needs: validate
