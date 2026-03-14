@@ -38,6 +38,7 @@ struct Inner {
 
 impl ReadPool {
     pub fn new(repo_path: PathBuf, pool_size: usize) -> Result<Self> {
+        let pool_size = pool_size.max(1);
         let db_path = repo_path.join(".zdb/index.db");
         let redb_path = repo_path.join(".zdb/nosql.redb");
 
