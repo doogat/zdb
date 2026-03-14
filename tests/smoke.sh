@@ -386,6 +386,15 @@ else
   pass "ws: payload auth (skipped, no websocat — see e2e tests)"
 fi
 
+# 38. read-under-write: concurrent read + write
+WRITE_RESULT=$(gql '{"query":"mutation { createZettel(input: { title: \"ReadPoolWrite\" }) { id } }"}') &
+WRITE_PID=$!
+READ_RESULT=$(gql '{"query":"{ zettels { id title } }"}')
+echo "$READ_RESULT" | grep -q '"zettels"'
+wait "$WRITE_PID"
+echo "$WRITE_RESULT" | grep -q '"id"'
+pass "serve: read-under-write (concurrent read + write)"
+
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
 pass "serve: clean shutdown"

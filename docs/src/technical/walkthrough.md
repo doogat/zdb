@@ -2021,6 +2021,38 @@ impl ActorHandle {
 
 Mutations (create, update, delete) emit events through an `EventBus` for WebSocket subscribers. When the `nosql` feature is active, the actor also dual-writes to `RedbIndex` after each mutation for O(1) key-value access.
 
+#### ReadPool — Concurrent Read Path
+
+Read operations bypass the actor entirely and execute through `ReadPool` (`zdb-server/src/read_pool.rs`). Each read acquires a semaphore permit, then runs in `tokio::task::spawn_blocking` with freshly-opened `Index` and `GitRepo` handles:
+
+```rust
+async fn with_index_repo<F, T>(&self, f: F) -> Result<T>
+where
+    F: FnOnce(&Index, &GitRepo) -> Result<T> + Send + 'static,
+    T: Send + 'static,
+{
+    let permit = self.acquire().await?;
+    let inner = self.inner.clone();
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        let index = Index::open(&inner.db_path)?;
+        let repo = GitRepo::open(&inner.repo_path)?;
+        f(&index, &repo)
+    })
+    .await
+    .map_err(|e| ZettelError::Validation(format!("read task panicked: {e}")))?
+}
+```
+
+Key design decisions:
+- `git2::Repository` is `!Send + !Sync` — fresh handles must be opened inside the blocking closure
+- `OwnedSemaphorePermit` (via `acquire_owned`) is moved into the closure for correct cancellation semantics
+- Three dispatch helpers: `with_index` (index-only), `with_index_repo` (index + git), `with_redb` (NoSQL)
+- SQLite WAL mode allows concurrent readers without blocking the writer actor
+- Default pool size: `min(available_parallelism, 4)`, configurable via `config.toml [server.read_pool_size]`
+
+The `sql` query field and pgwire `do_query` use `sqlparser` to classify queries: pure `SELECT` statements (single-statement, no INSERT...SELECT or CREATE TABLE AS SELECT) route through `ReadPool.execute_select()`, everything else goes to the actor.
+
 #### Sync & Compact Commands
 
 Two operational commands extend the actor beyond CRUD. `Sync` triggers a full sync cycle, and `RunMaintenance` runs compaction — both return structured reports to the GraphQL layer.
@@ -2059,6 +2091,7 @@ pub mod filter;
 pub mod maintenance;
 pub mod nosql_api;
 pub mod pgwire;
+pub mod read_pool;
 pub mod reload;
 pub mod rest;
 pub mod schema;
@@ -2093,9 +2126,13 @@ pub async fn run(
 
     // Actor
     let event_bus = EventBus::new();
-    let actor = ActorHandle::spawn(repo_path, event_bus).map_err(|e| {
+    let actor = ActorHandle::spawn(repo_path.clone(), event_bus).map_err(|e| {
         std::io::Error::other(e.to_string())
     })?;
+
+    // Read pool for concurrent read-only queries
+    let read_pool = read_pool::ReadPool::new(repo_path, cfg.read_pool_size)
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
 
     // Fetch type schemas for dynamic schema generation
     let type_schemas = actor.get_type_schemas().await.unwrap_or_default();
@@ -2103,8 +2140,8 @@ pub async fn run(
 
     // Build GraphQL schema with hot-reload support (two-phase init)
     let rest_actor = actor.clone();
-    let (reloader, shared_schema) = reload::SchemaReloader::new(actor.clone());
-    let gql_schema = match schema::build_schema(actor, type_schemas, Some(reloader.clone())) {
+    let (reloader, shared_schema) = reload::SchemaReloader::new(actor.clone(), read_pool.clone());
+    let gql_schema = match schema::build_schema(actor, read_pool.clone(), type_schemas, Some(reloader.clone())) {
         Ok(s) => s,
         Err(e) => {
             log::error!("failed to build initial GraphQL schema: {e}");
@@ -2116,7 +2153,8 @@ pub async fn run(
     // Auth-gated routes
     let mut auth_routes = Router::new()
         .route("/graphql", axum::routing::post(graphql_handler))
-        .nest("/rest", rest::router());
+        .nest("/rest", rest::router())
+        .nest("/nosql", nosql_api::router());
 
     if playground {
         // ... playground route on /graphql GET ...
@@ -2130,12 +2168,14 @@ pub async fn run(
     let pg_actor = rest_actor.clone();
     let pg_token = token.clone();
     let pg_reloader = reloader.clone();
+    let pg_read_pool = read_pool.clone();
 
     // Merge routers — shared extensions available to all routes
     let app = auth_routes
         .merge(ws_routes)
         .layer(Extension(AuthToken(token)))
         .layer(Extension(rest_actor))
+        .layer(Extension(read_pool))
         .layer(Extension(shared_schema));
 
     let addr = format!("{}:{}", cfg.bind, cfg.port);
@@ -2146,6 +2186,7 @@ pub async fn run(
 
     let pg = pgwire::start(
         pg_actor,
+        pg_read_pool,
         pg_token,
         pg_reloader,
         &cfg.bind,
@@ -2173,12 +2214,13 @@ Startup sequence:
 1. Load config from `~/.config/zetteldb/`
 2. Generate or load bearer auth token
 3. Spawn the actor thread with an EventBus (actor opens `RedbIndex` and rebuilds it at startup)
-4. Fetch `_typedef` schemas and build a dynamic GraphQL schema (`build_schema() -> Result<Schema, String>` — aborts startup on failure)
-5. Set up `SchemaReloader` backed by `arc_swap::ArcSwap` for hot-reload when types change
-6. Spawn background maintenance task if `maintenance_enabled` (default: on, interval: 1h)
-7. Mount routes: `/graphql` (POST), `/ws` (WebSocket), `/rest/*` (REST API), `/nosql/*` (NoSQL key-value)
-8. Start pgwire on a separate port (default 2892)
-9. `tokio::select!` runs both HTTP and pgwire concurrently
+4. Create `ReadPool` (semaphore-gated, `spawn_blocking` dispatch with fresh Index + GitRepo per request)
+5. Fetch `_typedef` schemas and build a dynamic GraphQL schema (`build_schema() -> Result<Schema, String>` — aborts startup on failure)
+6. Set up `SchemaReloader` backed by `arc_swap::ArcSwap` for hot-reload when types change
+7. Spawn background maintenance task if `maintenance_enabled` (default: on, interval: 1h)
+8. Mount routes: `/graphql` (POST), `/ws` (WebSocket), `/rest/*` (REST API), `/nosql/*` (NoSQL key-value)
+9. Start pgwire on a separate port (default 2892), with both `ActorHandle` (writes) and `ReadPool` (SELECTs)
+10. `tokio::select!` runs both HTTP and pgwire concurrently
 
 The GraphQL schema is **dynamic** — built at runtime from `_typedef` zettels. If a user creates a `project` type with fields `status` and `deadline`, the GraphQL schema gains a `project` query type with those fields. The `SchemaReloader` uses `ArcSwap` so the schema can be atomically replaced without restarting the server.
 

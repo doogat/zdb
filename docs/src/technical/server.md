@@ -12,19 +12,26 @@ Client → HTTP (axum) → Bearer auth middleware → GraphQL POST /graphql
                                                → NoSQL /nosql/*
                      → WebSocket /ws (auth in handler: header or connection_init payload)
        → TCP (pgwire) → MD5 password auth ─────→ SQL simple query protocol
-                                                       ↓
-                                              ActorHandle (mpsc channel)
-                                                       ↓
-                                              Actor thread (std::thread)
-                                              owns GitRepo + Index + RedbIndex + SqlEngine
-                                              emits → EventBus (broadcast channel)
-                                                       ↓
-                                              Subscription streams (per-client filter)
+
+                         ┌─────────────────────────────┐
+       Reads ───────────→│  ReadPool (semaphore-gated)  │
+       (queries,         │  spawn_blocking per request  │
+        SELECTs,         │  fresh Index + GitRepo each  │
+        GETs)            └─────────────────────────────┘
+                         ┌─────────────────────────────┐
+       Writes ──────────→│  ActorHandle (mpsc channel)  │
+       (mutations,       │  Actor thread (std::thread)  │
+        INSERTs,         │  owns GitRepo + Index +      │
+        DDL)             │  RedbIndex + SqlEngine        │
+                         │  emits → EventBus            │
+                         └─────────────────────────────┘
 ```
 
-A single actor thread owns all core resources (`GitRepo`, `Index`), satisfying the single-writer concurrency model. Both reads and writes serialize through the actor. Reads are fast (SQLite WAL mode); serialization avoids lock complexity for MVP.
+Read and write operations follow different paths. **Reads** (GraphQL queries, REST GETs, NoSQL lookups, pgwire SELECTs) go through the `ReadPool`, which dispatches each request to a `tokio::task::spawn_blocking` closure with its own freshly-opened `Index` and `GitRepo` handles. A semaphore caps concurrency (default: `min(available_parallelism, 4)`). SQLite WAL mode allows concurrent readers without blocking writes.
 
-The actor bridges sync and async worlds: it runs on `std::thread::spawn` with `blocking_recv()`, while the HTTP layer is fully async (tokio + axum). Communication uses `tokio::sync::mpsc` for commands and `oneshot` channels for replies.
+**Writes** (mutations, INSERTs, DDL) still serialize through the single-writer actor to maintain consistency. The actor bridges sync and async worlds: it runs on `std::thread::spawn` with `blocking_recv()`, while the HTTP layer is fully async (tokio + axum). Communication uses `tokio::sync::mpsc` for commands and `oneshot` channels for replies.
+
+The `sql` query field uses `sqlparser` to classify queries: pure `SELECT` statements route through `ReadPool`, everything else goes to the actor.
 
 ## Shared Application Contract
 
@@ -54,6 +61,7 @@ port = 2891
 pg_port = 2892
 bind = "127.0.0.1"
 token_file = "/path/to/custom/token"  # optional
+read_pool_size = 4                    # default: min(available_parallelism, 4)
 ```
 
 CLI flags (`--port`, `--pg-port`, `--bind`) override config file values.
@@ -394,14 +402,15 @@ In addition to GraphQL, the server exposes a REST API at `/rest/*`. Both interfa
 
 ```
 zdb-server/src/
-├── lib.rs       # pub async fn run() entrypoint
-├── actor.rs     # RepoActor: thread-safe GitRepo+Index bridge, emits events
-├── schema.rs    # Dynamic GraphQL schema builder (query, mutation, subscription)
-├── filter.rs    # Filter/sort/aggregate: input types, SQL builders, Connection wrapper
-├── events.rs    # ZettelEvent, EventKind, EventBus (broadcast channel)
-├── ws.rs        # WebSocket upgrade handler for graphql-ws subscriptions
-├── pgwire.rs    # PostgreSQL wire protocol (simple query, MD5 auth)
-├── reload.rs    # Hot schema reload orchestration (ArcSwap + Notify)
+├── lib.rs           # pub async fn run() entrypoint
+├── actor.rs         # RepoActor: thread-safe GitRepo+Index bridge, emits events
+├── read_pool.rs     # Semaphore-gated concurrent read dispatch (spawn_blocking)
+├── schema.rs        # Dynamic GraphQL schema builder (query, mutation, subscription)
+├── filter.rs        # Filter/sort/aggregate: input types, SQL builders, Connection wrapper
+├── events.rs        # ZettelEvent, EventKind, EventBus (broadcast channel)
+├── ws.rs            # WebSocket upgrade handler for graphql-ws subscriptions
+├── pgwire.rs        # PostgreSQL wire protocol (simple query, MD5 auth, SELECT routing)
+├── reload.rs        # Hot schema reload orchestration (ArcSwap + Notify)
 ├── rest.rs          # REST API handlers (/rest/zettels CRUD)
 ├── nosql_api.rs     # NoSQL REST handlers (/nosql/ key-value queries)
 ├── maintenance.rs   # Background maintenance loop (compaction + stale detection)

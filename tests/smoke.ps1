@@ -464,6 +464,19 @@ pass "serve: sync mutation (no remote)"
 # Full coverage provided by e2e tests (ws_payload_auth_subscribe_receive etc.)
 pass "ws: payload auth (skipped in ps1 — see e2e tests)"
 
+# 38. read-under-write: concurrent read + write
+$writeJob = Start-Job -ScriptBlock {
+    param($url, $token)
+    $headers = @{ "Authorization" = "Bearer $token"; "Content-Type" = "application/json" }
+    Invoke-RestMethod -Uri $url -Method Post -Headers $headers -Body '{"query":"mutation { createZettel(input: { title: \"ReadPoolWrite\" }) { id } }"}'
+} -ArgumentList $GQL_URL, $TOKEN
+$readResult = gql '{"query":"{ zettels { id title } }"}'
+if ($readResult -notmatch "zettels") { throw "read-under-write: read failed" }
+$writeResult = Receive-Job -Job $writeJob -Wait | ConvertTo-Json
+if ($writeResult -notmatch "id") { throw "read-under-write: write failed" }
+Remove-Job $writeJob
+pass "serve: read-under-write (concurrent read + write)"
+
 Stop-Process -Id $serverProc.Id -Force -ErrorAction SilentlyContinue
 Start-Sleep -Milliseconds 500
 pass "serve: clean shutdown"

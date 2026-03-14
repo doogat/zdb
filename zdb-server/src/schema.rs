@@ -13,6 +13,7 @@ use std::sync::Arc;
 use crate::actor::ActorHandle;
 use crate::error::to_server_error;
 use crate::events::EventKind;
+use crate::read_pool::ReadPool;
 use crate::reload::SchemaReloader;
 
 // -- Helper: convert ParsedZettel to GqlValue (FieldValue) for the base Zettel type --
@@ -315,6 +316,7 @@ fn extract_body_section(body: &str, heading: &str) -> Option<String> {
 
 pub fn build_schema(
     actor: ActorHandle,
+    read_pool: ReadPool,
     type_schemas: Vec<TableSchema>,
     reloader: Option<Arc<SchemaReloader>>,
 ) -> Result<Schema, String> {
@@ -539,19 +541,17 @@ pub fn build_schema(
 
     // zettel(id)
     {
-        let a = actor.clone();
         query = query.field(
             Field::new("zettel", TypeRef::named("Zettel"), |ctx| {
                 FieldFuture::new(async move {
-                    let a = ctx.data::<ActorHandle>()?;
+                    let pool = ctx.data::<ReadPool>()?;
                     let id = ctx.args.try_get("id")?.string()?.to_string();
-                    let z = a.get_zettel(id).await.map_err(to_server_error)?;
+                    let z = pool.get_zettel(id).await.map_err(to_server_error)?;
                     Ok(Some(FieldValue::owned_any(zettel_to_value(&z))))
                 })
             })
             .argument(InputValue::new("id", TypeRef::named_nn(TypeRef::ID))),
         );
-        let _ = a; // just used for type checking
     }
 
     // zettels(type, tag, backlinksOf, limit, offset)
@@ -559,7 +559,7 @@ pub fn build_schema(
         query = query.field(
             Field::new("zettels", TypeRef::named_nn_list_nn("Zettel"), |ctx| {
                 FieldFuture::new(async move {
-                    let a = ctx.data::<ActorHandle>()?;
+                    let pool = ctx.data::<ReadPool>()?;
                     let zettel_type = ctx
                         .args
                         .get("type")
@@ -577,7 +577,7 @@ pub fn build_schema(
                         .map(|s| s.to_string());
                     let limit = ctx.args.get("limit").and_then(|v| v.i64().ok());
                     let offset = ctx.args.get("offset").and_then(|v| v.i64().ok());
-                    let zettels = a
+                    let zettels = pool
                         .list_zettels(zettel_type, tag, backlinks_of, limit, offset)
                         .await
                         .map_err(to_server_error)?;
@@ -601,7 +601,7 @@ pub fn build_schema(
         query = query.field(
             Field::new("search", TypeRef::named_nn("SearchConnection"), |ctx| {
                 FieldFuture::new(async move {
-                    let a = ctx.data::<ActorHandle>()?;
+                    let pool = ctx.data::<ReadPool>()?;
                     let q = ctx.args.try_get("query")?.string()?.to_string();
                     let limit = ctx
                         .args
@@ -613,7 +613,7 @@ pub fn build_schema(
                         .get("offset")
                         .and_then(|v| v.i64().ok())
                         .unwrap_or(0) as usize;
-                    let result = a.search(q, limit, offset).await.map_err(to_server_error)?;
+                    let result = pool.search(q, limit, offset).await.map_err(to_server_error)?;
                     let mut obj = IndexMap::new();
                     obj.insert(
                         Name::new("hits"),
@@ -639,8 +639,8 @@ pub fn build_schema(
             TypeRef::named_nn_list_nn("TypeDef"),
             |ctx| {
                 FieldFuture::new(async move {
-                    let a = ctx.data::<ActorHandle>()?;
-                    let schemas = a.get_type_schemas().await.map_err(to_server_error)?;
+                    let pool = ctx.data::<ReadPool>()?;
+                    let schemas = pool.get_type_schemas().await.map_err(to_server_error)?;
                     Ok(Some(FieldValue::list(
                         schemas
                             .iter()
@@ -651,14 +651,19 @@ pub fn build_schema(
         ));
     }
 
-    // sql(query)
+    // sql(query) — SELECT via ReadPool, non-SELECT via actor
     {
         query = query.field(
             Field::new("sql", TypeRef::named_nn("SqlResult"), |ctx| {
                 FieldFuture::new(async move {
-                    let a = ctx.data::<ActorHandle>()?;
                     let q = ctx.args.try_get("query")?.string()?.to_string();
-                    let result = a.execute_sql(q).await.map_err(to_server_error)?;
+                    let result = if crate::pgwire::is_select_only(&q) {
+                        let pool = ctx.data::<ReadPool>()?;
+                        pool.execute_select(q).await.map_err(to_server_error)?
+                    } else {
+                        let a = ctx.data::<ActorHandle>()?;
+                        a.execute_sql(q).await.map_err(to_server_error)?
+                    };
                     Ok(Some(FieldValue::owned_any(sql_result_to_value(&result))))
                 })
             })
@@ -731,7 +736,7 @@ pub fn build_schema(
                         let _type_name = type_name_clone.clone();
                         let table_name = table_name.clone();
                         FieldFuture::new(async move {
-                            let a = ctx.data::<ActorHandle>()?;
+                            let pool = ctx.data::<ReadPool>()?;
                             let tag = ctx
                                 .args
                                 .get("tag")
@@ -758,7 +763,7 @@ pub fn build_schema(
                             };
 
                             // Fetch items (always use filtered_list — supports where + tag + orderBy)
-                            let zettels = a
+                            let zettels = pool
                                 .filtered_list(
                                     table_name.clone(),
                                     wc.sql.clone(),
@@ -789,7 +794,7 @@ pub fn build_schema(
                             };
                             let count_sql =
                                 format!("SELECT COUNT(*) FROM \"{table_name}\"{count_where}");
-                            let count_row = a
+                            let count_row = pool
                                 .aggregate_query(count_sql, wc.params)
                                 .await
                                 .map_err(to_server_error)?;
@@ -834,7 +839,7 @@ pub fn build_schema(
                         let schema_clone = schema_clone2.clone();
                         let table_name = table_name2.clone();
                         FieldFuture::new(async move {
-                            let a = ctx.data::<ActorHandle>()?;
+                            let pool = ctx.data::<ReadPool>()?;
                             let wc = ctx
                                 .args
                                 .get("where")
@@ -844,7 +849,7 @@ pub fn build_schema(
 
                             let (sql, names) =
                                 crate::filter::build_aggregate_sql(&table_name, &schema_clone, &wc);
-                            let row = a
+                            let row = pool
                                 .aggregate_query(sql, wc.params)
                                 .await
                                 .map_err(to_server_error)?;
@@ -1529,7 +1534,8 @@ pub fn build_schema(
     .register(query)
     .register(mutation)
     .register(subscription)
-    .data(actor);
+    .data(actor)
+    .data(read_pool);
 
     for typed_obj in dynamic_types {
         builder = builder.register(typed_obj);

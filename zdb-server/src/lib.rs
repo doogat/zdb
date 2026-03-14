@@ -60,8 +60,8 @@ pub async fn run(
 
     // Build GraphQL schema with hot-reload support (two-phase init)
     let rest_actor = actor.clone();
-    let (reloader, shared_schema) = reload::SchemaReloader::new(actor.clone());
-    let gql_schema = match schema::build_schema(actor, type_schemas, Some(reloader.clone())) {
+    let (reloader, shared_schema) = reload::SchemaReloader::new(actor.clone(), read_pool.clone());
+    let gql_schema = match schema::build_schema(actor, read_pool.clone(), type_schemas, Some(reloader.clone())) {
         Ok(s) => s,
         Err(e) => {
             log::error!("failed to build initial GraphQL schema: {e}");

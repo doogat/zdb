@@ -3,6 +3,7 @@ mod common;
 mod delete_backlinks;
 mod multi_device;
 mod pgwire;
+mod read_pool;
 mod rename;
 mod search_links;
 mod serve;

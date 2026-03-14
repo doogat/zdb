@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::actor::ActorHandle;
+use crate::read_pool::ReadPool;
 use zdb_core::error::ZettelError;
 use zdb_core::types::{ParsedZettel, Value as ZdbValue};
 
@@ -166,7 +167,7 @@ pub fn router() -> Router {
 // ── Handlers ─────────────────────────────────────────────────────
 
 async fn list_zettels(
-    Extension(actor): Extension<ActorHandle>,
+    Extension(read_pool): Extension<ReadPool>,
     Query(params): Query<ListParams>,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ErrorBody>)> {
     // Full-text search shortcut
@@ -174,7 +175,7 @@ async fn list_zettels(
         let limit = params.per_page.unwrap_or(50) as usize;
         let page = params.page.unwrap_or(1).max(1) as usize;
         let offset = (page - 1) * limit;
-        let result = actor.search(q, limit, offset).await.map_err(rest_error)?;
+        let result = read_pool.search(q, limit, offset).await.map_err(rest_error)?;
         let hits: Vec<SearchHit> = result
             .hits
             .into_iter()
@@ -198,7 +199,7 @@ async fn list_zettels(
     let per_page = params.per_page.unwrap_or(50).clamp(1, 200);
     let offset = (page - 1) * per_page;
 
-    let total = actor
+    let total = read_pool
         .count_zettels(
             params.zettel_type.clone(),
             params.tag.clone(),
@@ -213,7 +214,7 @@ async fn list_zettels(
         (total + per_page - 1) / per_page
     };
 
-    let zettels = actor
+    let zettels = read_pool
         .list_zettels(
             params.zettel_type,
             params.tag,
@@ -241,10 +242,10 @@ async fn list_zettels(
 }
 
 async fn get_zettel(
-    Extension(actor): Extension<ActorHandle>,
+    Extension(read_pool): Extension<ReadPool>,
     Path(id): Path<String>,
 ) -> Result<Json<SingleResponse>, (StatusCode, Json<ErrorBody>)> {
-    let z = actor.get_zettel(id).await.map_err(rest_error)?;
+    let z = read_pool.get_zettel(id).await.map_err(rest_error)?;
     Ok(Json(SingleResponse {
         data: zettel_to_json(&z),
     }))

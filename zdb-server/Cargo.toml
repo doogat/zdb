@@ -21,6 +21,7 @@ indexmap = "2"
 log = "0.4"
 rand = "0.8"
 rusqlite = { version = "0.32", features = ["bundled"] }
+sqlparser = "0.55"
 uuid = { version = "1", features = ["v4"] }
 toml = "0.8"
 

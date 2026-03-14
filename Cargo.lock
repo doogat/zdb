@@ -4790,6 +4790,7 @@ dependencies = [
  "rusqlite",
  "serde",
  "serde_json",
+ "sqlparser",
  "tempfile",
  "tokio",
  "tokio-postgres",

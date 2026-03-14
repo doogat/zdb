@@ -18,10 +18,27 @@ use pgwire::error::{PgWireError, PgWireResult};
 use pgwire::messages::PgWireBackendMessage;
 use pgwire::tokio::process_socket;
 
+use sqlparser::ast::Statement;
+use sqlparser::dialect::GenericDialect;
+use sqlparser::parser::Parser;
+
 use zdb_core::sql_engine::SqlResult;
 
 use crate::actor::ActorHandle;
+use crate::read_pool::ReadPool;
 use crate::reload::SchemaReloader;
+
+/// True when `sql` is a single pure SELECT statement.
+///
+/// Conservative: multi-statement batches, INSERT...SELECT,
+/// CREATE TABLE AS SELECT, and EXPLAIN all return false.
+pub(crate) fn is_select_only(sql: &str) -> bool {
+    let dialect = GenericDialect {};
+    match Parser::parse_sql(&dialect, sql) {
+        Ok(stmts) if stmts.len() == 1 => matches!(stmts[0], Statement::Query(_)),
+        _ => false,
+    }
+}
 
 // -- Auth --
 
@@ -45,6 +62,7 @@ impl AuthSource for ZdbAuthSource {
 
 struct ZdbBackend {
     actor: ActorHandle,
+    read_pool: ReadPool,
     reloader: Arc<SchemaReloader>,
 }
 
@@ -60,21 +78,31 @@ impl SimpleQueryHandler for ZdbBackend {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        let result = self
-            .actor
-            .execute_sql(query.to_string())
-            .await
-            .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+        let result = if is_select_only(query) {
+            self.read_pool
+                .execute_select(query.to_string())
+                .await
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?
+        } else {
+            let res = self
+                .actor
+                .execute_sql(query.to_string())
+                .await
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
-        // Trigger schema reload for DDL
+            // Trigger schema reload for DDL
+            let upper = query.to_uppercase();
+            if upper.contains("CREATE TABLE")
+                || upper.contains("DROP TABLE")
+                || upper.contains("ALTER TABLE")
+            {
+                self.reloader.trigger_reload_and_wait().await;
+            }
+
+            res
+        };
+
         let upper = query.to_uppercase();
-        if upper.contains("CREATE TABLE")
-            || upper.contains("DROP TABLE")
-            || upper.contains("ALTER TABLE")
-        {
-            self.reloader.trigger_reload_and_wait().await;
-        }
-
         let response = match result {
             SqlResult::Rows { columns, rows } => {
                 let schema = Arc::new(
@@ -185,7 +213,7 @@ impl PgWireHandlerFactory for ZdbPgHandlers {
 
 pub async fn start(
     actor: ActorHandle,
-    _read_pool: crate::read_pool::ReadPool,
+    read_pool: ReadPool,
     token: String,
     reloader: Arc<SchemaReloader>,
     bind: &str,
@@ -200,7 +228,11 @@ pub async fn start(
         Arc::new(params),
     ));
 
-    let query = Arc::new(ZdbBackend { actor, reloader });
+    let query = Arc::new(ZdbBackend {
+        actor,
+        read_pool,
+        reloader,
+    });
     let handlers = Arc::new(ZdbPgHandlers { auth, query });
 
     let addr = format!("{bind}:{port}");
@@ -228,6 +260,45 @@ mod tests {
         assert_eq!(command_tag_for_query("DELETE FROM books"), "DELETE");
         assert_eq!(command_tag_for_query("INSERT INTO"), "INSERT");
         assert_eq!(command_tag_for_query("SOMETHING ELSE"), "OK");
+    }
+
+    #[test]
+    fn is_select_only_plain_select() {
+        assert!(is_select_only("SELECT * FROM books"));
+        assert!(is_select_only("select id, title from books where year > 2020"));
+    }
+
+    #[test]
+    fn is_select_only_cte() {
+        assert!(is_select_only(
+            "WITH recent AS (SELECT * FROM books WHERE year > 2020) SELECT * FROM recent"
+        ));
+    }
+
+    #[test]
+    fn is_select_only_rejects_insert_select() {
+        assert!(!is_select_only(
+            "INSERT INTO archive SELECT * FROM books WHERE year < 2000"
+        ));
+    }
+
+    #[test]
+    fn is_select_only_rejects_create_table_as_select() {
+        assert!(!is_select_only(
+            "CREATE TABLE archive AS SELECT * FROM books"
+        ));
+    }
+
+    #[test]
+    fn is_select_only_rejects_ddl() {
+        assert!(!is_select_only("CREATE TABLE book (id TEXT, title TEXT)"));
+        assert!(!is_select_only("DROP TABLE book"));
+        assert!(!is_select_only("ALTER TABLE book ADD COLUMN year TEXT"));
+    }
+
+    #[test]
+    fn is_select_only_rejects_multi_statement() {
+        assert!(!is_select_only("SELECT 1; SELECT 2"));
     }
 
     #[test]

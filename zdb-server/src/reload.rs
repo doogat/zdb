@@ -7,6 +7,7 @@ use async_graphql::dynamic::{FieldFuture, Schema, TypeRef};
 use tokio::sync::Notify;
 
 use crate::actor::ActorHandle;
+use crate::read_pool::ReadPool;
 use crate::schema;
 
 /// Orchestrates hot schema reload after typedef mutations.
@@ -22,7 +23,7 @@ impl SchemaReloader {
     ///
     /// The returned `ArcSwap` is initially empty (placeholder schema).
     /// Call [`Self::store_initial`] after building the real schema.
-    pub fn new(actor: ActorHandle) -> (Arc<Self>, Arc<ArcSwap<Schema>>) {
+    pub fn new(actor: ActorHandle, read_pool: ReadPool) -> (Arc<Self>, Arc<ArcSwap<Schema>>) {
         // Placeholder schema — replaced by store_initial before serving requests
         let placeholder = Schema::build("Query", None, None)
             .register(async_graphql::dynamic::Object::new("Query").field(
@@ -46,7 +47,7 @@ impl SchemaReloader {
         // Spawn background reload loop
         let r = reloader.clone();
         tokio::spawn(async move {
-            Self::reload_loop(r, actor).await;
+            Self::reload_loop(r, actor, read_pool).await;
         });
 
         (reloader, shared)
@@ -79,7 +80,7 @@ impl SchemaReloader {
         self.version.load(Ordering::Relaxed)
     }
 
-    async fn reload_loop(this: Arc<Self>, actor: ActorHandle) {
+    async fn reload_loop(this: Arc<Self>, actor: ActorHandle, read_pool: ReadPool) {
         loop {
             this.trigger.notified().await;
 
@@ -96,7 +97,7 @@ impl SchemaReloader {
             };
 
             let new_schema =
-                match schema::build_schema(actor.clone(), type_schemas, Some(Arc::clone(&this))) {
+                match schema::build_schema(actor.clone(), read_pool.clone(), type_schemas, Some(Arc::clone(&this))) {
                     Ok(s) => s,
                     Err(e) => {
                         log::error!("schema reload: build failed: {e}");

@@ -41,10 +41,6 @@ impl ReadPool {
         let db_path = repo_path.join(".zdb/index.db");
         let redb_path = repo_path.join(".zdb/nosql.redb");
 
-        // Validate resources can be opened
-        let _ = GitRepo::open(&repo_path)?;
-        let _ = Index::open(&db_path)?;
-
         Ok(Self {
             inner: Arc::new(Inner {
                 repo_path,
@@ -243,5 +239,105 @@ impl ReadPool {
         })
         .await
         .map_err(|e| ZettelError::Validation(format!("read task panicked: {e}")))?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_pool_size_is_bounded() {
+        let size = ReadPool::default_pool_size();
+        assert!(size >= 1 && size <= 4, "pool size {size} out of range 1..=4");
+    }
+
+    fn setup_repo() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::TempDir::new().unwrap();
+        let repo = GitRepo::init(dir.path()).unwrap();
+        // Create index so ReadPool can validate
+        let db_path = dir.path().join(".zdb/index.db");
+        std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
+        let index = Index::open(&db_path).unwrap();
+        index.rebuild(&repo).unwrap();
+        let path = dir.path().to_path_buf();
+        (dir, path)
+    }
+
+    #[tokio::test]
+    async fn read_fails_on_invalid_path() {
+        let pool = ReadPool::new(PathBuf::from("/nonexistent/repo"), 2).unwrap();
+        let result = pool.search("anything".to_string(), 10, 0).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn get_zettel_not_found() {
+        let (_dir, path) = setup_repo();
+        let pool = ReadPool::new(path, 2).unwrap();
+        let result = pool.get_zettel("99999999999999".to_string()).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn search_empty_repo() {
+        let (_dir, path) = setup_repo();
+        let pool = ReadPool::new(path, 2).unwrap();
+        let result = pool.search("anything".to_string(), 10, 0).await.unwrap();
+        assert!(result.hits.is_empty());
+        assert_eq!(result.total_count, 0);
+    }
+
+    #[tokio::test]
+    async fn count_zettels_empty_repo() {
+        let (_dir, path) = setup_repo();
+        let pool = ReadPool::new(path, 2).unwrap();
+        let count = pool.count_zettels(None, None, None).await.unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn concurrent_reads_succeed() {
+        let (_dir, path) = setup_repo();
+        let pool = ReadPool::new(path, 4).unwrap();
+
+        // Fire 8 concurrent searches — all should succeed
+        let mut handles = Vec::new();
+        for i in 0..8 {
+            let p = pool.clone();
+            handles.push(tokio::spawn(async move {
+                p.search(format!("query{i}"), 10, 0).await
+            }));
+        }
+        for h in handles {
+            let result = h.await.unwrap();
+            assert!(result.is_ok());
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_select_works() {
+        let (_dir, path) = setup_repo();
+        let pool = ReadPool::new(path, 2).unwrap();
+        let result = pool
+            .execute_select("SELECT 1 AS n".to_string())
+            .await
+            .unwrap();
+        match result {
+            SqlResult::Rows { rows, columns } => {
+                assert_eq!(columns, vec!["n"]);
+                assert_eq!(rows.len(), 1);
+                assert_eq!(rows[0][0], "1");
+            }
+            _ => panic!("expected Rows result"),
+        }
+    }
+
+    #[tokio::test]
+    async fn backlinks_empty() {
+        let (_dir, path) = setup_repo();
+        let pool = ReadPool::new(path, 2).unwrap();
+        let links = pool.get_backlinks("20260101000000".to_string()).await.unwrap();
+        assert!(links.is_empty());
     }
 }
