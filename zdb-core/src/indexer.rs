@@ -1059,6 +1059,23 @@ impl Index {
         Ok(out)
     }
 
+    /// Return (id, title) pairs of zettels with `resurrected: true` frontmatter.
+    pub fn resurrected_zettels(&self) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT z.id, z.title FROM zettels z \
+             JOIN _zdb_fields f ON f.zettel_id = z.id \
+             WHERE f.key = 'resurrected' AND f.value = 'true'",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     /// Return (source_id, target_path) pairs where a link target has no matching zettel.
     pub fn broken_backlinks(&self) -> Result<Vec<(String, String)>> {
         let mut stmt = self.conn.prepare(
