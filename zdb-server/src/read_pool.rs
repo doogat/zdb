@@ -341,4 +341,28 @@ mod tests {
         let links = pool.get_backlinks("20260101000000".to_string()).await.unwrap();
         assert!(links.is_empty());
     }
+
+    #[tokio::test]
+    async fn read_after_write_visible() {
+        let (_dir, path) = setup_repo();
+
+        // Write a zettel via git + index (the actor/writer path)
+        let repo = GitRepo::open(&path).unwrap();
+        let id = "20260314120000";
+        let rel_path = format!("zettelkasten/{id}.md");
+        let content = format!(
+            "---\ntitle: ReadAfterWrite\ntype: note\ncreated: {id}\n---\nBody text.\n"
+        );
+        repo.commit_file(&rel_path, &content, "add test zettel").unwrap();
+        let db_path = path.join(".zdb/index.db");
+        let index = Index::open(&db_path).unwrap();
+        let parsed = zdb_core::parser::parse(&content, &rel_path).unwrap();
+        index.index_zettel(&parsed).unwrap();
+
+        // Read via ReadPool — should see the write immediately (WAL)
+        let pool = ReadPool::new(path, 2).unwrap();
+        let result = pool.get_zettel(id.to_string()).await.unwrap();
+        assert_eq!(result.meta.id.as_ref().map(|z| z.0.as_str()), Some(id));
+        assert_eq!(result.meta.title.as_deref(), Some("ReadAfterWrite"));
+    }
 }
