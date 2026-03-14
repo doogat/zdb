@@ -365,4 +365,41 @@ mod tests {
         assert_eq!(result.meta.id.as_ref().map(|z| z.0.as_str()), Some(id));
         assert_eq!(result.meta.title.as_deref(), Some("ReadAfterWrite"));
     }
+
+    #[tokio::test]
+    async fn pool_exhaustion_queues_reads() {
+        let (_dir, path) = setup_repo();
+        // Pool of 1 — second read must queue behind the first
+        let pool = ReadPool::new(path, 1).unwrap();
+
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let p1 = pool.clone();
+        // Occupy the single slot with a blocking search
+        let slow = tokio::spawn(async move {
+            p1.with_index(move |index| {
+                // Hold the permit until signaled
+                rx.blocking_recv().ok();
+                index.search("hold").map(|_| ())
+            })
+            .await
+        });
+
+        // Give the slow task time to acquire the permit
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // This read should queue (not error) and complete once the slot frees
+        let p2 = pool.clone();
+        let queued = tokio::spawn(async move { p2.search("queued".into(), 10, 0).await });
+
+        // Release the slow task
+        tx.send(()).unwrap();
+        slow.await.unwrap().unwrap();
+
+        // Queued read should now complete
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), queued)
+            .await
+            .expect("queued read timed out")
+            .unwrap();
+        assert!(result.is_ok());
+    }
 }
