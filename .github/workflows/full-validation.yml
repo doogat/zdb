@@ -1,0 +1,162 @@
+name: Full Validation
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+permissions:
+  statuses: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  linux-clippy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  linux-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+      - name: Configure git identity
+        run: |
+          git config --global user.email "ci@zetteldb.dev"
+          git config --global user.name "ZettelDB CI"
+      - name: Sync integration tests
+        run: cargo test -p zdb-core --test sync_test
+      - name: Property tests
+        env:
+          PROPTEST_CASES: 50
+        run: cargo test -p zdb-core --test property_tests
+
+  linux-thresholds:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+      - name: Configure git identity
+        run: |
+          git config --global user.email "ci@zetteldb.dev"
+          git config --global user.name "ZettelDB CI"
+      - name: Query thresholds
+        run: cargo test --release -p zdb-core --test query_thresholds nfr01_
+      - name: Growth thresholds
+        run: cargo test --release -p zdb-core --test growth_thresholds nfr02_
+      - name: Sync thresholds
+        run: cargo test --release -p zdb-core --test sync_thresholds nfr03_
+
+  linux-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+      - name: Configure git identity
+        run: |
+          git config --global user.email "ci@zetteldb.dev"
+          git config --global user.name "ZettelDB CI"
+      - name: Build CLI binary
+        run: cargo build -p zdb-cli --bin zdb
+      - name: Full smoke test
+        env:
+          ZDB_BIN: ${{ github.workspace }}/target/debug/zdb
+        run: ./tests/smoke.sh
+
+  linux-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
+      - name: Configure git identity
+        run: |
+          git config --global user.email "ci@zetteldb.dev"
+          git config --global user.name "ZettelDB CI"
+      - name: Build CLI binary
+        run: cargo build -p zdb-cli --bin zdb
+      - name: Full e2e tests
+        env:
+          ZDB_BIN: ${{ github.workspace }}/target/debug/zdb
+        run: cargo test -p zdb-e2e
+
+  macos-full:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Configure git identity
+        run: |
+          git config --global user.email "ci@zetteldb.dev"
+          git config --global user.name "ZettelDB CI"
+      - name: Build CLI binary
+        run: cargo build -p zdb-cli --bin zdb
+      - name: Full cargo test suite
+        env:
+          PROPTEST_CASES: 50
+        run: cargo test-full
+      - name: Full smoke test
+        env:
+          ZDB_BIN: ${{ github.workspace }}/target/debug/zdb
+        run: ./tests/smoke.sh
+
+  windows-full:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Configure git identity
+        run: |
+          git config --global user.email "ci@zetteldb.dev"
+          git config --global user.name "ZettelDB CI"
+      - name: Build CLI binary
+        run: cargo build -p zdb-cli --bin zdb
+      - name: Full cargo test suite
+        env:
+          PROPTEST_CASES: 50
+        run: cargo test-full
+      - name: Full smoke test
+        env:
+          ZDB_BIN: ${{ github.workspace }}\target\debug\zdb.exe
+        run: pwsh -File tests/smoke.ps1
+
+  mark-validated:
+    needs:
+      - linux-clippy
+      - linux-core
+      - linux-thresholds
+      - linux-smoke
+      - linux-e2e
+      - macos-full
+      - windows-full
+    runs-on: ubuntu-latest
+    steps:
+      - name: Post full-validation/passed commit status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/statuses/${{ github.sha }} \
+            -f state=success \
+            -f context=full-validation/passed \
+            -f description="All full-validation jobs passed"
