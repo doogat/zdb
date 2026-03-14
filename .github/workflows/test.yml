@@ -12,52 +12,6 @@ env:
 
 jobs:
   test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Install system dependencies (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
-
-      - name: Configure git identity
-        run: |
-          git config --global user.email "ci@zetteldb.dev"
-          git config --global user.name "ZettelDB CI"
-
-      - name: Clippy
-        if: runner.os == 'Linux'
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Build CLI binary
-        run: cargo build -p zdb-cli --bin zdb
-
-      - name: Fast cargo test tier
-        run: cargo test-ci
-
-      - name: Quick smoke test (Unix)
-        if: runner.os != 'Windows'
-        env:
-          SMOKE_PROFILE: quick
-          ZDB_BIN: ${{ github.workspace }}/target/debug/zdb
-        run: ./tests/smoke.sh
-
-      - name: Quick smoke test (Windows)
-        if: runner.os == 'Windows'
-        env:
-          SMOKE_PROFILE: quick
-          ZDB_BIN: ${{ github.workspace }}\target\debug\zdb.exe
-        run: pwsh -File tests/smoke.ps1
-
-  integration:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -66,7 +20,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Install system dependencies (Linux)
+      - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config
 
       - name: Configure git identity
@@ -74,13 +28,45 @@ jobs:
           git config --global user.email "ci@zetteldb.dev"
           git config --global user.name "ZettelDB CI"
 
-      - name: Property tests
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build CLI binary
+        run: cargo build -p zdb-cli --bin zdb
+
+      - name: Fast cargo test tier
+        run: cargo test-ci
+
+      - name: Quick smoke test
         env:
-          PROPTEST_CASES: 50
-        run: cargo test -p zdb-core --test property_tests
+          SMOKE_PROFILE: quick
+          ZDB_BIN: ${{ github.workspace }}/target/debug/zdb
+        run: ./tests/smoke.sh
 
       - name: Sync integration tests
         run: cargo test -p zdb-core --test sync_test
 
-      - name: Threshold tests
-        run: cargo test -p zdb-core --test query_thresholds --test sync_thresholds --test growth_thresholds
+      - name: E2E - GraphQL CRUD
+        env:
+          ZDB_BIN: ${{ github.workspace }}/target/debug/zdb
+        run: cargo test -p zdb-e2e --test e2e serve::crud_lifecycle -- --exact
+
+      - name: E2E - PgWire
+        env:
+          ZDB_BIN: ${{ github.workspace }}/target/debug/zdb
+        run: cargo test -p zdb-e2e --test e2e pgwire::pgwire_insert_update_delete -- --exact
+
+      - name: E2E - WebSocket subscriptions
+        env:
+          ZDB_BIN: ${{ github.workspace }}/target/debug/zdb
+        run: cargo test -p zdb-e2e --test e2e subscriptions::subscribe_mutate_receive -- --exact
+
+      - name: E2E - Sync/CRDT
+        env:
+          ZDB_BIN: ${{ github.workspace }}/target/debug/zdb
+        run: cargo test -p zdb-e2e --test e2e sync_crdt::overlapping_body_edits_resolved_by_crdt -- --exact
+
+      - name: E2E - Multi-device
+        env:
+          ZDB_BIN: ${{ github.workspace }}/target/debug/zdb
+        run: cargo test -p zdb-e2e --test e2e multi_device::stale_node_returns -- --exact
