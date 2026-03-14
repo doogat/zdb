@@ -1299,6 +1299,16 @@ Six tables:
 
 WAL mode is enabled for concurrent read/write. The `_zdb_meta` table tracks the HEAD commit hash for staleness detection.
 
+### Wikilink Resolution
+
+`resolve_wikilink(target)` resolves a wikilink target string to a zettel path using a three-step fallback chain:
+
+1. **Path lookup** — `SELECT ... FROM zettels WHERE path = target`. Handles path-qualified wikilinks like `zettelkasten/contact/20240619183742.md`.
+2. **ID lookup** — `resolve_path(target)` matches against `zettels.id`. Handles bare ID wikilinks like `20240619183742`.
+3. **Alias lookup** — `resolve_alias(target)` checks `_zdb_aliases` (case-insensitive). Handles human-readable aliases.
+
+Path-qualified links take precedence over ID-only links per the specification. All three steps are indexed lookups (unique column or indexed column), so resolution is O(1) regardless of repo size.
+
 ### Index Rebuild
 
 `rebuild()` drops all tables (internal and materialized), recreates the schema from `SCHEMA_DDL`, then re-indexes every zettel from git. No migration framework — the index is a disposable cache, so schema changes are handled by rebuilding from scratch.
@@ -2050,7 +2060,7 @@ Key design decisions:
 - Three dispatch helpers: `with_index` (index-only), `with_index_repo` (index + git), `with_redb` (NoSQL)
 - SQLite WAL mode allows concurrent readers without blocking the writer actor
 - Default pool size: `min(available_parallelism, 4)`, configurable via `config.toml [server.read_pool_size]`, clamped to minimum 1 to prevent deadlock
-- `FilteredListQuery` struct bundles the 7 parameters for `filtered_list()` calls (table, where, params, order, tag, limit, offset)
+- `FilteredListQuery` struct bundles the 7 parameters for `filtered_list()` calls (table, where, params, order, tag, limit, offset) — used by both `ReadPool` and `ActorHandle`/`ActorCommand`
 
 The `sql` query field and pgwire `do_query` use `sqlparser` to classify queries: pure `SELECT` statements (single-statement, no INSERT...SELECT or CREATE TABLE AS SELECT) route through `ReadPool.execute_select()`, everything else goes to the actor.
 

@@ -286,13 +286,9 @@ impl Index {
     }
 
     /// Resolve a wikilink target to a zettel path.
-    /// Resolution chain: ID lookup → path lookup → alias lookup.
+    /// Resolution chain: path lookup → ID lookup → alias lookup.
     pub fn resolve_wikilink(&self, target: &str) -> Result<Option<String>> {
-        // 1. Try as zettel ID
-        if let Ok(path) = self.resolve_path(target) {
-            return Ok(Some(path));
-        }
-        // 2. Try as direct path
+        // 1. Try as direct path (path-qualified wikilinks)
         let path_exists: bool = self
             .conn
             .query_row(
@@ -303,6 +299,10 @@ impl Index {
             .unwrap_or(false);
         if path_exists {
             return Ok(Some(target.to_string()));
+        }
+        // 2. Try as zettel ID
+        if let Ok(path) = self.resolve_path(target) {
+            return Ok(Some(path));
         }
         // 3. Try as alias
         if let Some(id) = self.resolve_alias(target)? {
@@ -2309,6 +2309,50 @@ Widget
         assert_eq!(result, Some("zettelkasten/20240101120000.md".to_string()));
 
         // No match
+        let result = index.resolve_wikilink("nonexistent").unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn resolve_wikilink_path_takes_precedence() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let db_path = dir.path().join("index.db");
+        let index = Index::open(&db_path).unwrap();
+
+        let zettel = crate::types::ParsedZettel {
+            meta: crate::types::ZettelMeta {
+                id: Some(crate::types::ZettelId("20240101120000".to_string())),
+                title: Some("Contact".to_string()),
+                date: None,
+                zettel_type: Some("contact".to_string()),
+                tags: vec![],
+                extra: std::collections::BTreeMap::new(),
+            },
+            body: String::new(),
+            reference_section: String::new(),
+            inline_fields: vec![],
+            wikilinks: vec![],
+            path: "zettelkasten/contact/20240101120000.md".to_string(),
+        };
+        index.index_zettel(&zettel).unwrap();
+
+        // Path-qualified target resolves via path lookup (step 1)
+        let result = index
+            .resolve_wikilink("zettelkasten/contact/20240101120000.md")
+            .unwrap();
+        assert_eq!(
+            result,
+            Some("zettelkasten/contact/20240101120000.md".to_string())
+        );
+
+        // Bare ID still resolves via ID fallback (step 2)
+        let result = index.resolve_wikilink("20240101120000").unwrap();
+        assert_eq!(
+            result,
+            Some("zettelkasten/contact/20240101120000.md".to_string())
+        );
+
+        // Nonexistent returns None
         let result = index.resolve_wikilink("nonexistent").unwrap();
         assert_eq!(result, None);
     }
