@@ -387,12 +387,13 @@ else
 fi
 
 # 38. read-under-write: concurrent read + write
-WRITE_RESULT=$(gql '{"query":"mutation { createZettel(input: { title: \"ReadPoolWrite\" }) { id } }"}') &
+WRITE_TMP="$TMPDIR/write_result.json"
+gql '{"query":"mutation { createZettel(input: { title: \"ReadPoolWrite\" }) { id } }"}' > "$WRITE_TMP" &
 WRITE_PID=$!
 READ_RESULT=$(gql '{"query":"{ zettels { id title } }"}')
 echo "$READ_RESULT" | grep -q '"zettels"'
 wait "$WRITE_PID"
-echo "$WRITE_RESULT" | grep -q '"id"'
+grep -q '"id"' "$WRITE_TMP"
 pass "serve: read-under-write (concurrent read + write)"
 
 kill "$SERVER_PID" 2>/dev/null || true
