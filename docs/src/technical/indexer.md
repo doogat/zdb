@@ -173,8 +173,8 @@ Aliases are populated from the frontmatter `aliases` list during `index_zettel()
 
 Three-step resolution chain:
 
-1. **ID lookup** — try `resolve_path(target)` (exact zettel ID match)
-2. **Path lookup** — check if `target` matches a `zettels.path` directly
+1. **Path lookup** — check if `target` matches a `zettels.path` directly
+2. **ID lookup** — try `resolve_path(target)` (exact zettel ID match)
 3. **Alias lookup** — try `resolve_alias(target)`, then `resolve_path()` on the result
 
 Returns `None` if no match found at any step.
