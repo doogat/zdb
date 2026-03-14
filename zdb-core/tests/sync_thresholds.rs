@@ -23,6 +23,10 @@ fn zettel_path(i: usize) -> String {
 /// Measured at ~120ms after incremental reindex, single push, deferred commit-graph.
 /// Run with: cargo test --release --test sync_thresholds
 #[test]
+#[cfg_attr(
+    debug_assertions,
+    ignore = "sync thresholds require --release; debug runs are too slow"
+)]
 fn nfr03_sync_under_2s_at_5k() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new("zdb_core=info"))
