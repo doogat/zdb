@@ -78,19 +78,20 @@ impl SimpleQueryHandler for ZdbBackend {
         C::Error: Debug,
         PgWireError: From<<C as Sink<PgWireBackendMessage>>::Error>,
     {
-        let result = if is_select_only(query) {
-            self.read_pool
+        let (result, upper) = if is_select_only(query) {
+            let r = self
+                .read_pool
                 .execute_select(query.to_string())
                 .await
-                .map_err(|e| PgWireError::ApiError(Box::new(e)))?
+                .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
+            (r, String::new())
         } else {
-            let res = self
+            let r = self
                 .actor
                 .execute_sql(query.to_string())
                 .await
                 .map_err(|e| PgWireError::ApiError(Box::new(e)))?;
 
-            // Trigger schema reload for DDL
             let upper = query.to_uppercase();
             if upper.contains("CREATE TABLE")
                 || upper.contains("DROP TABLE")
@@ -98,11 +99,9 @@ impl SimpleQueryHandler for ZdbBackend {
             {
                 self.reloader.trigger_reload_and_wait().await;
             }
-
-            res
+            (r, upper)
         };
 
-        let upper = query.to_uppercase();
         let response = match result {
             SqlResult::Rows { columns, rows } => {
                 let schema = Arc::new(
