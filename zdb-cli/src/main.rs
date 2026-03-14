@@ -654,24 +654,14 @@ fn run(cli: Cli) -> zdb_core::error::Result<()> {
                 outln!("stale nodes: {}", stale_nodes.join(", "))?;
             }
 
-            // Check for resurrected zettels
+            // Check for resurrected zettels and broken backlinks
             if db_path.exists() {
                 let index = Index::open(&db_path)?;
-                let resurrected = index
-                    .query_raw(
-                        "SELECT z.id, z.title FROM zettels z \
-                     JOIN _zdb_fields f ON f.zettel_id = z.id \
-                     WHERE f.key = 'resurrected' AND f.value = 'true'",
-                    )
-                    .unwrap_or_default();
+                let resurrected = index.resurrected_zettels().unwrap_or_default();
                 if !resurrected.is_empty() {
                     outln!("resurrected zettels:")?;
-                    for row in &resurrected {
-                        outln!(
-                            "  {} {}",
-                            row[0],
-                            row.get(1).map(|s| s.as_str()).unwrap_or("")
-                        )?;
+                    for (id, title) in &resurrected {
+                        outln!("  {id} {title}")?;
                     }
                 }
 
