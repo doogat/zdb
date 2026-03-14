@@ -302,6 +302,12 @@ mod tests {
     }
 
     #[test]
+    fn is_select_only_rejects_explain() {
+        assert!(!is_select_only("EXPLAIN SELECT * FROM books"));
+        assert!(!is_select_only("EXPLAIN ANALYZE SELECT * FROM books"));
+    }
+
+    #[test]
     fn normalize_ok_tag_maps_ddl_and_insert() {
         assert_eq!(
             normalize_ok_tag("CREATE TABLE book", "table book created"),
