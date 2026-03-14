@@ -2049,7 +2049,8 @@ Key design decisions:
 - `OwnedSemaphorePermit` (via `acquire_owned`) is moved into the closure for correct cancellation semantics
 - Three dispatch helpers: `with_index` (index-only), `with_index_repo` (index + git), `with_redb` (NoSQL)
 - SQLite WAL mode allows concurrent readers without blocking the writer actor
-- Default pool size: `min(available_parallelism, 4)`, configurable via `config.toml [server.read_pool_size]`
+- Default pool size: `min(available_parallelism, 4)`, configurable via `config.toml [server.read_pool_size]`, clamped to minimum 1 to prevent deadlock
+- `FilteredListQuery` struct bundles the 7 parameters for `filtered_list()` calls (table, where, params, order, tag, limit, offset)
 
 The `sql` query field and pgwire `do_query` use `sqlparser` to classify queries: pure `SELECT` statements (single-statement, no INSERT...SELECT or CREATE TABLE AS SELECT) route through `ReadPool.execute_select()`, everything else goes to the actor.
 
