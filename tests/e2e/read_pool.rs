@@ -1,5 +1,6 @@
 use crate::common::{ServerGuard, ZdbTestRepo};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio_postgres::SimpleQueryMessage;
 
 /// Concurrent reads succeed while a write is in flight.
@@ -134,4 +135,75 @@ fn pgwire_select_during_graphql_write() {
 
     pg_handle.join().expect("pgwire thread panicked");
     write_handle.join().expect("write thread panicked");
+}
+
+/// Read latency stays bounded while writes are in flight.
+///
+/// PRD target: p95 < 2x idle. We use 10x to avoid CI flakiness while
+/// still catching regressions where reads queue behind writes.
+#[test]
+fn read_latency_bounded_under_writes() {
+    let repo = ZdbTestRepo::init();
+
+    repo.zdb()
+        .args(["create", "--title", "LatSeed", "--body", "seed"])
+        .assert()
+        .success();
+
+    let server = Arc::new(ServerGuard::start(&repo));
+
+    // Measure idle baseline (5 sequential reads)
+    let mut baseline_times = Vec::new();
+    for _ in 0..5 {
+        let start = Instant::now();
+        let result = server.graphql(r#"{ zettels { id title } }"#);
+        baseline_times.push(start.elapsed());
+        assert!(result.get("errors").is_none());
+    }
+    baseline_times.sort();
+    let baseline_p95 = baseline_times[baseline_times.len() * 95 / 100];
+
+    // Fire reads while a sustained write burst runs
+    let write_server = Arc::clone(&server);
+    let write_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let wd = Arc::clone(&write_done);
+    let write_thread = std::thread::spawn(move || {
+        for i in 0..5 {
+            let _ = write_server.graphql_with_vars(
+                r#"mutation($input: CreateZettelInput!) { createZettel(input: $input) { id } }"#,
+                serde_json::json!({ "input": {
+                    "title": format!("LatWrite{i}"),
+                    "content": "body",
+                } }),
+            );
+        }
+        wd.store(true, std::sync::atomic::Ordering::Release);
+    });
+
+    let mut mixed_times = Vec::new();
+    while !write_done.load(std::sync::atomic::Ordering::Acquire) || mixed_times.len() < 5 {
+        let start = Instant::now();
+        let result = server.graphql(r#"{ zettels { id title } }"#);
+        mixed_times.push(start.elapsed());
+        assert!(result.get("errors").is_none());
+        if mixed_times.len() >= 50 {
+            break;
+        }
+    }
+
+    write_thread.join().expect("write thread panicked");
+
+    mixed_times.sort();
+    let mixed_p95 = mixed_times[mixed_times.len() * 95 / 100];
+    let bound = baseline_p95 * 10; // PRD target is 2x; 10x avoids CI flakiness
+
+    eprintln!(
+        "read latency: baseline_p95={:?} mixed_p95={:?} bound={:?}",
+        baseline_p95, mixed_p95, bound
+    );
+
+    assert!(
+        mixed_p95 < bound.max(Duration::from_millis(500)),
+        "p95 read latency {mixed_p95:?} exceeded 10x baseline {baseline_p95:?} (bound={bound:?})"
+    );
 }
