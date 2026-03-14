@@ -19,6 +19,17 @@ use crate::actor;
 
 type Result<T> = std::result::Result<T, ZettelError>;
 
+/// Query parameters for [`ReadPool::filtered_list`].
+pub struct FilteredListQuery {
+    pub table_name: String,
+    pub where_sql: String,
+    pub params: Vec<rusqlite::types::Value>,
+    pub order_sql: Option<String>,
+    pub tag: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
 /// Pool of read-only connections for concurrent query execution.
 ///
 /// Each read acquires a semaphore permit and runs on `spawn_blocking`
@@ -78,28 +89,18 @@ impl ReadPool {
         .await
     }
 
-    #[allow(clippy::too_many_arguments)]
-    pub async fn filtered_list(
-        &self,
-        table_name: String,
-        where_sql: String,
-        params: Vec<rusqlite::types::Value>,
-        order_sql: Option<String>,
-        tag: Option<String>,
-        limit: Option<i64>,
-        offset: Option<i64>,
-    ) -> Result<Vec<ParsedZettel>> {
+    pub async fn filtered_list(&self, q: FilteredListQuery) -> Result<Vec<ParsedZettel>> {
         self.with_index_repo(move |index, repo| {
             actor::filtered_list(
                 repo,
                 index,
-                &table_name,
-                &where_sql,
-                &params,
-                order_sql.as_deref(),
-                tag.as_deref(),
-                limit,
-                offset,
+                &q.table_name,
+                &q.where_sql,
+                &q.params,
+                q.order_sql.as_deref(),
+                q.tag.as_deref(),
+                q.limit,
+                q.offset,
             )
         })
         .await

@@ -764,15 +764,15 @@ pub fn build_schema(
 
                             // Fetch items (always use filtered_list — supports where + tag + orderBy)
                             let zettels = pool
-                                .filtered_list(
-                                    table_name.clone(),
-                                    wc.sql.clone(),
-                                    wc.params.clone(),
+                                .filtered_list(crate::read_pool::FilteredListQuery {
+                                    table_name: table_name.clone(),
+                                    where_sql: wc.sql.clone(),
+                                    params: wc.params.clone(),
                                     order_sql,
-                                    tag.clone(),
+                                    tag: tag.clone(),
                                     limit,
                                     offset,
-                                )
+                                })
                                 .await
                                 .map_err(to_server_error)?;
 
