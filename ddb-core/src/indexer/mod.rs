@@ -15,7 +15,8 @@ use rusqlite::{params, Connection};
 use crate::error::{DoogatError, Result};
 use crate::git_ops::write_lock;
 use crate::traits::DoogatSource;
-use crate::types::{ParsedDoogat, QueryValue};
+use crate::types::{ParsedDoogat, QueryValue, TableSchema};
+use filter::escape_sql_ident;
 
 impl From<rusqlite::Error> for DoogatError {
     fn from(e: rusqlite::Error) -> Self {
@@ -474,9 +475,32 @@ impl Index {
         })
     }
 
-    /// Remove junction table rows where `deleted_id` appears as a referenced
-    /// target.  Scans all typedef schemas for REFERENCES columns pointing to
-    /// `target_type` and deletes matching rows from their junction tables.
+    /// Remove auto-junction rows for a doogat about to be deleted, in BOTH
+    /// directions (H2 fix, PRD 00137 parity with the SQL `DELETE` path in
+    /// `sql_engine/dml.rs`):
+    ///
+    /// - **Reverse** — junction rows in OTHER typedef tables that pointed at
+    ///   `deleted_id` via `<col>_id` (e.g. deleting a `category` row removes
+    ///   `bookmark_category WHERE category_id = '<cat>'`).
+    /// - **Owner** — junction rows OWNED by the deleted row's own typedef
+    ///   (`target_type`), where `<target_type>_id = '<deleted_id>'` (e.g.
+    ///   deleting a `bookmark` row removes `bookmark_category WHERE
+    ///   bookmark_id = '<bm>'`).
+    ///
+    /// Error handling is asymmetric to match these semantics: a failure to
+    /// load `target_type`'s own schema (once we know a typedef row for it
+    /// exists) is fatal — we can't enumerate the REFERENCES columns the
+    /// owner direction needs, so silently skipping would drop owner-side
+    /// rows — while failures on unrelated typedefs during the reverse sweep
+    /// (via `load_all_typedefs`) are warn-and-skip. A `target_type` with no
+    /// typedef row at all has no possible REFERENCES columns and no
+    /// owner-side rows to clean, so that case is a silent no-op.
+    ///
+    /// The actual sweep is shared with `sql_engine/dml.rs`'s SQL `DELETE`
+    /// path via [`delete_junction_rows_for_cascade`]; only schema loading
+    /// differs between the two callers (this path loads from Git only, the
+    /// SQL path loads through `SqlEngine::load_schema`, which is
+    /// transaction-aware).
     pub fn cascade_junction_cleanup(
         &self,
         repo: &dyn DoogatSource,
@@ -484,19 +508,46 @@ impl Index {
         deleted_id: &str,
     ) -> Result<()> {
         let schemas = self.load_all_typedefs(repo);
-        for (table_name, schema) in &schemas {
-            for col in &schema.columns {
-                if col.references.as_deref() == Some(target_type) {
-                    let jt = format!("{table_name}_{}", col.name);
-                    let col_id = format!("{}_id", col.name);
-                    self.conn.execute(
-                        &format!("DELETE FROM \"{jt}\" WHERE \"{col_id}\" = ?1"),
-                        params![deleted_id],
-                    )?;
-                }
-            }
-        }
-        Ok(())
+        let owner_schema = match schemas.get(target_type) {
+            Some(schema) => Some(schema.clone()),
+            None => self.load_single_typedef_schema(repo, target_type)?,
+        };
+        delete_junction_rows_for_cascade(
+            &self.conn,
+            &schemas,
+            owner_schema.as_ref(),
+            target_type,
+            deleted_id,
+        )
+    }
+
+    /// Load one typedef's schema by type name, distinguishing "no typedef
+    /// row exists" (`Ok(None)`, not an error) from a genuine read/parse
+    /// failure (`Err`, fatal). Used by `cascade_junction_cleanup`'s owner
+    /// direction to retry `target_type`'s own schema when it didn't make it
+    /// into the warn-and-skip batch load.
+    fn load_single_typedef_schema(
+        &self,
+        repo: &dyn DoogatSource,
+        type_name: &str,
+    ) -> Result<Option<TableSchema>> {
+        use crate::sql_engine::schema_from_parsed;
+        use rusqlite::OptionalExtension;
+
+        let path: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT path FROM doogats WHERE type = '_typedef' AND title = ?1",
+                params![type_name],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(path) = path else {
+            return Ok(None);
+        };
+        let content = repo.read_file(&path)?;
+        let parsed = crate::parser::parse(&content, &path)?;
+        Ok(Some(schema_from_parsed(&parsed)?))
     }
 
     /// Check database integrity: runs PRAGMA integrity_check and verifies core tables exist.
@@ -778,6 +829,59 @@ fn flatten_value_into_fields(
             for (i, v) in list.iter().enumerate() {
                 let nested_key = format!("{prefix}[{i}]");
                 flatten_value_into_fields(conn, id, &nested_key, v)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Delete auto-junction rows for a doogat about to be deleted, given
+/// already-loaded typedef schemas. Shared by `Index::cascade_junction_cleanup`
+/// (service delete path) and `sql_engine::dml::SqlEngine::cascade_junction_cleanup`
+/// (SQL `DELETE` path) so the two-direction sweep exists in exactly one
+/// place; each caller keeps its own schema-loading strategy (Git-only vs.
+/// transaction-aware) and error handling, since those differ deliberately.
+///
+/// - **Reverse**: for every `(table_name, schema)` in `schemas`, a column
+///   referencing `target_type` has its junction row deleted.
+/// - **Owner**: if `owner_schema` is `Some` (the caller resolved
+///   `target_type`'s own schema), the junction rows it owns are deleted too.
+pub(crate) fn delete_junction_rows_for_cascade(
+    conn: &Connection,
+    schemas: &std::collections::HashMap<String, TableSchema>,
+    owner_schema: Option<&TableSchema>,
+    target_type: &str,
+    deleted_id: &str,
+) -> Result<()> {
+    for (table_name, schema) in schemas {
+        for col in &schema.columns {
+            if col.references.as_deref() == Some(target_type) {
+                let jt = format!(
+                    "{}_{}",
+                    escape_sql_ident(table_name),
+                    escape_sql_ident(&col.name)
+                );
+                let col_id = format!("{}_id", escape_sql_ident(&col.name));
+                conn.execute(
+                    &format!("DELETE FROM \"{jt}\" WHERE \"{col_id}\" = ?1"),
+                    params![deleted_id],
+                )?;
+            }
+        }
+    }
+    if let Some(schema) = owner_schema {
+        for col in &schema.columns {
+            if col.references.is_some() {
+                let jt = format!(
+                    "{}_{}",
+                    escape_sql_ident(target_type),
+                    escape_sql_ident(&col.name)
+                );
+                let parent_id_col = format!("{}_id", escape_sql_ident(target_type));
+                conn.execute(
+                    &format!("DELETE FROM \"{jt}\" WHERE \"{parent_id_col}\" = ?1"),
+                    params![deleted_id],
+                )?;
             }
         }
     }

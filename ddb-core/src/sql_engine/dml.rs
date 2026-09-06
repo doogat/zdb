@@ -1246,17 +1246,13 @@ impl<'a> SqlEngine<'a> {
     ///    deleting a `bookmark` row removes `bookmark_category WHERE
     ///    bookmark_id = '<bm>'`).
     ///
-    /// Both branches share the outer `for table_name in &type_names` loop, but
-    /// they fire on different conditions and at different rates:
-    ///
-    /// - The **reverse** branch fires on every typedef whose schema has a
-    ///   column with `references == Some(target_type)` — generally a sparse
-    ///   set, scaling with how many other types reference this one.
-    /// - The **parent/owner** branch fires *exactly once per call*, on the
-    ///   single iteration where `table_name == target_type`. It then iterates
-    ///   that one schema's REFERENCES columns. Both branches can fire in the
-    ///   same call when the deleted row's typedef is simultaneously a parent
-    ///   and a child of other typedefs.
+    /// This method loads every typedef's schema via the transaction-aware
+    /// `load_schema` (so a buffered-but-uncommitted DDL edit in the same
+    /// transaction is honored) and hands the loaded schemas to
+    /// `indexer::delete_junction_rows_for_cascade`, which runs the actual
+    /// sweep — shared with the service delete path's
+    /// `Index::cascade_junction_cleanup` (H2 fix) so the two-direction logic
+    /// exists in exactly one place.
     ///
     /// Error handling is asymmetric to match these semantics: a failure to
     /// load `target_type`'s own schema is fatal (we can't enumerate the
@@ -1280,9 +1276,13 @@ impl<'a> SqlEngine<'a> {
             .collect();
         drop(stmt);
 
+        let mut schemas: std::collections::HashMap<String, TableSchema> =
+            std::collections::HashMap::new();
         for table_name in &type_names {
-            let schema = match self.load_schema(table_name) {
-                Ok(s) => s,
+            match self.load_schema(table_name) {
+                Ok(schema) => {
+                    schemas.insert(table_name.clone(), schema);
+                }
                 Err(e) => {
                     // Asymmetric error handling by direction:
                     // - Parent/owner direction (`table_name == target_type`):
@@ -1301,34 +1301,17 @@ impl<'a> SqlEngine<'a> {
                         )));
                     }
                     tracing::warn!(type_name = %table_name, error = %e, "cascade junction: failed to load schema");
-                    continue;
-                }
-            };
-            for col in &schema.columns {
-                // Reverse direction: another typedef references the deleted
-                // target through this column.
-                if col.references.as_deref() == Some(target_type) {
-                    let jt = format!("{table_name}_{}", col.name);
-                    let col_id = format!("{}_id", col.name);
-                    self.index.sql_conn().execute(
-                        &format!("DELETE FROM \"{jt}\" WHERE \"{col_id}\" = ?1"),
-                        params![deleted_id],
-                    )?;
-                }
-                // Parent/owner direction (PRD 00137): the deleted row's own
-                // typedef has REFERENCES columns; remove the auto-junction
-                // rows it owns.
-                if table_name == target_type && col.references.is_some() {
-                    let jt = format!("{target_type}_{}", col.name);
-                    let parent_id_col = format!("{target_type}_id");
-                    self.index.sql_conn().execute(
-                        &format!("DELETE FROM \"{jt}\" WHERE \"{parent_id_col}\" = ?1"),
-                        params![deleted_id],
-                    )?;
                 }
             }
         }
-        Ok(())
+        let owner_schema = schemas.get(target_type).cloned();
+        crate::indexer::delete_junction_rows_for_cascade(
+            self.index.sql_conn(),
+            &schemas,
+            owner_schema.as_ref(),
+            target_type,
+            deleted_id,
+        )
     }
 
     /// Remove wikilinks to `deleted_id` from the reference sections of all

@@ -41,7 +41,6 @@ fn count_rows(svc: &mut DoogatService, sql: &str) -> String {
 }
 
 #[test]
-#[ignore = "fast-track FT-2: hazard H2 confirmed 2026-09-06 (service delete leaves owner-side junction rows); un-ignore with the fix, see dev/local/plans/fast-track-2026-09-06.md"]
 fn service_delete_of_reference_owner_removes_its_junction_rows() {
     let tmp = tempfile::TempDir::new().unwrap();
     let mut svc = DoogatService::init(tmp.path()).unwrap();

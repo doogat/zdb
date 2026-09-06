@@ -96,6 +96,15 @@ impl<G: GitBackend, I: IndexPort> DoogatService<G, I> {
                     |row| row.get(0),
                 )
                 .ok();
+            // Run the fallible (possibly fatal on a malformed owner typedef)
+            // junction cleanup BEFORE any index row is deleted, so an error
+            // here leaves the index untouched and still consistent with
+            // HEAD, instead of stranding it mid-delete.
+            if let Some(ref dtype) = doogat_type {
+                if !dtype.is_empty() && dtype != "_typedef" {
+                    self.index.cascade_junction_cleanup(&self.repo, dtype, id)?;
+                }
+            }
             self.index.remove_doogat(id)?;
             self.nosql_remove_doogat(id);
             if let Some(ref dtype) = doogat_type {
@@ -104,7 +113,6 @@ impl<G: GitBackend, I: IndexPort> DoogatService<G, I> {
                         &format!("DELETE FROM \"{}\" WHERE id = ?1", dtype),
                         params![id],
                     );
-                    self.index.cascade_junction_cleanup(&self.repo, dtype, id)?;
                 }
             }
         }
